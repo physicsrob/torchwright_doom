@@ -5,6 +5,9 @@ description = "DOOM rendering and game graph compilation, built on torchwright."
 requires-python = ">=3.10"
 dependencies = [
     "torchwright",
+    "numpy",
+    "pygame>=2.6.1",
+    "pillow",
 ]
 
 [dependency-groups]
