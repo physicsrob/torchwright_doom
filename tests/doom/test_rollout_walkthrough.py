@@ -54,7 +54,7 @@ def _walkthrough_config():
 class TestRolloutWalkthrough:
     """Token-stream + per-RENDER overflow checks at walkthrough resolution."""
 
-    @pytest.fixture(scope="class")
+    @pytest.fixture(scope="module")
     def scene(self):
         config = _walkthrough_config()
         # box_room_textured's default size is 256 (DOOM scale); the
@@ -68,7 +68,7 @@ class TestRolloutWalkthrough:
         subset = build_scene_subset(segs, textures)
         return config, textures, subset, segs
 
-    @pytest.fixture(scope="class")
+    @pytest.fixture(scope="module")
     def module(self, scene):
         config, textures, subset, segs = scene
         return compile_game(

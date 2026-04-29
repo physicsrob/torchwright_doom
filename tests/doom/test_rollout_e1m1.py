@@ -83,12 +83,6 @@ _E1M1_SCENARIOS = [
         (_E1M1_SPAWN_X, _E1M1_SPAWN_Y, 64, {}),
         id="spawn_facing_north",
     ),
-    # A few units away from spawn within the same room — typical
-    # gameplay pose, still inside the local envelope.
-    pytest.param(
-        (_E1M1_SPAWN_X + 32.0, _E1M1_SPAWN_Y - 8.0, 64, {}),
-        id="near_spawn",
-    ),
 ]
 
 

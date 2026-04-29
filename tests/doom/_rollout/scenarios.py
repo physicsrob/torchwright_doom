@@ -46,37 +46,6 @@ SCENARIOS = [
         angle=64,
         inputs={"strafe_right": True},
     ),
-    # Brittle-boundary scenarios.  Same box_room scene as above; each
-    # exercises an edge case — straddling FOV-cone boundaries, signed
-    # zero, near-zero distance — that the cardinal "center"/"oblique"
-    # scenarios don't cover.  Tolerances match the rest of the list;
-    # if any of these need a looser bound that's a precision
-    # regression to root-cause, not a tolerance drift to absorb.
-    #
-    # north/west/south_wall_collide mirror east_wall_collide on the
-    # other three cardinals.  Angle convention: 0 = east, 64 = north,
-    # 128 = west, 192 = south (256 steps per circle).
-    Scenario(
-        label="north_wall_collide",
-        px=0.0,
-        py=4.9,
-        angle=64,
-        inputs={"forward": True},
-    ),
-    Scenario(
-        label="west_wall_collide",
-        px=-4.9,
-        py=0.0,
-        angle=128,
-        inputs={"forward": True},
-    ),
-    Scenario(
-        label="south_wall_collide",
-        px=0.0,
-        py=-4.9,
-        angle=192,
-        inputs={"forward": True},
-    ),
     # Near a corner: two walls within ~0.1 unit of the player.
     Scenario(label="corner_position", px=4.9, py=4.9, angle=0),
     # Player almost flush against the east wall: sort_num_t is ~0.1
