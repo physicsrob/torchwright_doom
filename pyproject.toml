@@ -1,0 +1,34 @@
+[project]
+name = "torchwright_doom"
+version = "0.1.0"
+description = "DOOM rendering and game graph compilation, built on torchwright."
+requires-python = ">=3.10"
+dependencies = [
+    "torchwright",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu128", marker = "sys_platform == 'linux'" },
+]
+
+[tool.pytest.ini_options]
+
+[tool.coverage.run]
+source = ["torchwright_doom"]
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.mypy]
+ignore_missing_imports = true

@@ -1,0 +1,12 @@
+.idea
+__pycache__
+.venv
+*.egg-info
+.pytest_cache
+*.onnx
+*.gif
+*.png
+*.vocab.json
+.claude/worktrees/
+.python-version
+.codex
