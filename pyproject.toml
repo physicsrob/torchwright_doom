@@ -1,5 +1,5 @@
 [project]
-name = "torchwright_doom"
+name = "torchwright-doom"
 version = "0.1.0"
 description = "DOOM rendering and game graph compilation, built on torchwright."
 requires-python = ">=3.10"
