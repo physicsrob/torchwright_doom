@@ -3,8 +3,17 @@ name = "torchwright-doom"
 version = "0.1.0"
 description = "DOOM rendering and game graph compilation, built on torchwright."
 requires-python = ">=3.10"
+# torchwright is provided by the workspace (umbrella declares it as a
+# dep, installed editable) or by add_local_python_source on Modal —
+# intentionally NOT listed below. The deps below mirror torchwright's
+# runtime deps + our own so the venv has everything torchwright_doom
+# code transitively imports. Sync with torchwright/pyproject.toml
+# when its runtime deps change.
 dependencies = [
-    "torchwright",
+    "torch",
+    "onnx",
+    "ortools>=9.10",
+    "pydantic>=2.0",
     "numpy",
     "pygame>=2.6.1",
     "pillow",
