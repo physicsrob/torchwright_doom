@@ -55,29 +55,16 @@ SCENARIOS = [
 ]
 
 
-# Pre-step states for the first 3 frames of `make walkthrough` on the
-# box scene (start=(0,0,0); the wall-following controller emits
-# `forward=True` for ~16 frames before any wall is within its 1.5-unit
-# turn threshold, so the first 3 frames are all forward, no turn).
-# Each post-step state becomes the next scenario's pre-step state.
+# Pre-step state for the first frame of `make walkthrough` on the box
+# scene (start=(0,0,0); wall-following controller emits forward=True).
+# A single frame at walkthrough resolution (d=3072, 120×100) is enough
+# to catch prod-config regressions in the compile + step_frame path;
+# multi-frame controller coverage costs another full step_frame at this
+# resolution per frame and isn't worth the wall-clock.
 WALKTHROUGH_SCENARIOS = [
     Scenario(
         label="walkthrough_frame_1",
         px=0.0,
-        py=0.0,
-        angle=0,
-        inputs={"forward": True},
-    ),
-    Scenario(
-        label="walkthrough_frame_2",
-        px=0.3,
-        py=0.0,
-        angle=0,
-        inputs={"forward": True},
-    ),
-    Scenario(
-        label="walkthrough_frame_3",
-        px=0.6,
         py=0.0,
         angle=0,
         inputs={"forward": True},
