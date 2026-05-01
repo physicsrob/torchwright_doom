@@ -14,10 +14,14 @@ from torchwright_doom.doom.compile import compile_game, step_frame
 from torchwright_doom.doom.game import GameState
 from torchwright_doom.doom.input import PlayerInput
 from torchwright_doom.doom.map_subset import build_scene_subset
-from torchwright_doom.reference_renderer.render import render_frame
+from torchwright_doom.reference_renderer import (
+    R_RenderPlayerView,
+    RenderConfig,
+    Segment,
+    generate_trig_table,
+    mapdata_from_segments,
+)
 from torchwright_doom.reference_renderer.textures import default_texture_atlas
-from torchwright_doom.reference_renderer.trig import generate_trig_table
-from torchwright_doom.reference_renderer.types import RenderConfig, Segment
 
 _TRIG = generate_trig_table()
 
@@ -97,7 +101,10 @@ class TestFrameMatch:
         frame, _ = step_frame(
             module, state, PlayerInput(), subset, config, textures=textures
         )
-        ref = render_frame(0.0, 0.0, 0, segs, config, textures=textures)
+        ref_md, ref_textures = mapdata_from_segments(segs, textures)
+        ref = R_RenderPlayerView(
+            0.0, 0.0, config.player_eye_z, 0, ref_md, config, ref_textures
+        )
         compare_images(frame, ref).assert_matches(
             min_matched_fraction=0.96, max_err=float("inf")
         )

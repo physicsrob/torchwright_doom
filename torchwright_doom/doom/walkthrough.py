@@ -5,7 +5,7 @@ turn right 90 degrees, repeat.  By default the game logic and rendering
 run inside a compiled transformer.
 
 Usage:
-    python -m torchwright_doom.doom.walkthrough [output.gif] [--scene box|multi|e1m1] ...
+    python -m torchwright_doom.doom.walkthrough [output.gif] [--scene box|e1m1] ...
 """
 
 import argparse
@@ -18,10 +18,15 @@ from PIL import Image
 
 from torchwright_doom.doom.game import GameState, update_state
 from torchwright_doom.doom.input import PlayerInput
-from torchwright_doom.reference_renderer.render import intersect_ray_segment, render_frame
-from torchwright_doom.reference_renderer.scenes import box_room_textured
-from torchwright_doom.reference_renderer.trig import generate_trig_table
-from torchwright_doom.reference_renderer.types import RenderConfig, Segment
+from torchwright_doom.reference_renderer import (
+    R_RenderPlayerView,
+    RenderConfig,
+    Segment,
+    box_room_textured,
+    generate_trig_table,
+    intersect_ray_segment,
+    mapdata_from_segments,
+)
 
 # ---------------------------------------------------------------------------
 # Wall distance sensing
@@ -367,16 +372,21 @@ def main():
             return step_frame(module, state, inputs, subset, config, textures=textures)
 
     else:
+        # Build the MapData + name-keyed texture dict the new renderer
+        # wants, once.  Static across frames since segments don't change.
+        ref_mapdata, ref_textures = mapdata_from_segments(segments, textures)
 
         def frame_fn(state, inputs):
             new_state = update_state(state, inputs, segments, trig_table)
-            frame = render_frame(
+            bam = (new_state.angle << 24) & 0xFFFFFFFF
+            frame = R_RenderPlayerView(
                 new_state.x,
                 new_state.y,
-                new_state.angle,
-                segments,
+                config.player_eye_z,
+                bam,
+                ref_mapdata,
                 config,
-                textures=textures,
+                ref_textures,
             )
             return frame, new_state
 

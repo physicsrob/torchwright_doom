@@ -3,7 +3,6 @@
 Usage (via Makefile):
     make graph-stats
     make graph-stats ARGS="--chunk-size 25"
-    make graph-stats ARGS="--scene multi --chunk-size 100"
     make graph-stats ARGS="--d 4096 --d-head 128"
 
 Three levels of parameter accounting:
@@ -58,10 +57,7 @@ from torchwright.graph import (
 )
 from torchwright.graph.linear import Linear
 from torchwright.graph.relu import ReLU
-from torchwright_doom.reference_renderer.scenes import (
-    box_room_textured,
-    multi_room_textured,
-)
+from torchwright_doom.reference_renderer.scenes import box_room_textured
 from torchwright_doom.reference_renderer.trig import generate_trig_table
 from torchwright_doom.reference_renderer.types import RenderConfig
 
@@ -1014,7 +1010,7 @@ def _print_attn_qkv_breakdown(all_nodes: Set[Node], node_to_layer: dict):
 
 def main():
     parser = argparse.ArgumentParser(description="Print game graph stats by annotation")
-    parser.add_argument("--scene", default="box", choices=["box", "multi"])
+    parser.add_argument("--scene", default="box", choices=["box"])
     parser.add_argument("--width", type=int, default=120)
     parser.add_argument("--height", type=int, default=100)
     parser.add_argument("--chunk-size", type=int, default=20)
@@ -1082,18 +1078,13 @@ def main():
     )
     args = parser.parse_args()
 
-    if args.scene == "box":
-        segments, textures = box_room_textured(
-            wad_path="doom1.wad",
-            tex_size=args.tex_size,
-        )
-        max_coord = 10.0
-    else:
-        segments, textures = multi_room_textured(
-            wad_path="doom1.wad",
-            tex_size=args.tex_size,
-        )
-        max_coord = 15.0
+    # Only the box scene is wired up.  multi_room was lost in the move
+    # from torchwright; re-author it if a richer test scene is needed.
+    segments, textures = box_room_textured(
+        wad_path="doom1.wad",
+        tex_size=args.tex_size,
+    )
+    max_coord = 10.0
 
     max_walls = args.max_walls if args.max_walls else max(8, len(segments))
 

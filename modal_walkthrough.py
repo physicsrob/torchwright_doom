@@ -2,11 +2,11 @@
 
 Usage (via Makefile):
     make walkthrough
-    make walkthrough ARGS="--frames 20 --scene multi"
+    make walkthrough ARGS="--frames 20 --scene e1m1"
 
 Direct usage:
     modal run modal_walkthrough.py
-    modal run modal_walkthrough.py --frames 20 --scene multi
+    modal run modal_walkthrough.py --frames 20 --scene e1m1
 """
 
 import sys
@@ -162,7 +162,10 @@ def generate_reference(
 ) -> bytes:
     from torchwright_doom.doom.game import update_state
     from torchwright_doom.doom.walkthrough import generate_walkthrough, save_gif
-    from torchwright_doom.reference_renderer.render import render_frame
+    from torchwright_doom.reference_renderer import (
+        R_RenderPlayerView,
+        mapdata_from_segments,
+    )
 
     config = _config(width, height)
     subset, start_x, start_y, start_angle, _, still, eye_z = _scene_data(
@@ -171,6 +174,7 @@ def generate_reference(
     config.player_eye_z = eye_z
     segments = subset.segments
     textures = subset.textures
+    ref_mapdata, ref_textures = mapdata_from_segments(segments, textures)
 
     def frame_fn(state, inputs):
         new_state = update_state(
@@ -179,13 +183,15 @@ def generate_reference(
             segments,
             config.trig_table,
         )
-        frame = render_frame(
+        bam = (new_state.angle << 24) & 0xFFFFFFFF
+        frame = R_RenderPlayerView(
             new_state.x,
             new_state.y,
-            new_state.angle,
-            segments,
+            config.player_eye_z,
+            bam,
+            ref_mapdata,
             config,
-            textures=textures,
+            ref_textures,
         )
         return frame, new_state
 

@@ -36,7 +36,10 @@ from torchwright_doom.doom.wad import (
     sector_color,
     seg_list_to_segments,
 )
-from torchwright_doom.reference_renderer.render import render_frame
+from torchwright_doom.reference_renderer import (
+    R_RenderPlayerView,
+    mapdata_from_segments,
+)
 from torchwright_doom.reference_renderer.trig import generate_trig_table
 from torchwright_doom.reference_renderer.types import RenderConfig
 
@@ -634,19 +637,18 @@ def test_render_smoke_e1m1(wad: WADReader, e1m1: MapData) -> None:
     # Take every Nth vertex for broad coverage.
     sample = e1m1.vertices[:: max(1, len(e1m1.vertices) // 16)]
 
+    ref_md, ref_textures = mapdata_from_segments(segments, textures)
     saw_wall = False
     for v in sample:
         for dx, dy in offsets:
             px = v.x * factor + dx
             py = v.y * factor + dy
             for angle in (0, 64, 128, 192):
-                frame = render_frame(
-                    float(px),
-                    float(py),
-                    int(angle),
-                    segments,
-                    config,
-                    textures=textures,
+                bam = (int(angle) << 24) & 0xFFFFFFFF
+                frame = R_RenderPlayerView(
+                    float(px), float(py),
+                    config.player_eye_z, bam,
+                    ref_md, config, ref_textures,
                 )
                 assert frame.shape == (24, 32, 3)
                 assert frame.min() >= 0.0 - 1e-6
@@ -685,6 +687,11 @@ def test_render_deterministic(wad: WADReader, e1m1: MapData) -> None:
     px = e1m1.vertices[0].x * factor + 1.0
     py = e1m1.vertices[0].y * factor + 1.0
 
-    frame_a = render_frame(px, py, 0, segments, config, textures=textures)
-    frame_b = render_frame(px, py, 0, segments, config, textures=textures)
+    ref_md, ref_textures = mapdata_from_segments(segments, textures)
+    frame_a = R_RenderPlayerView(
+        px, py, config.player_eye_z, 0, ref_md, config, ref_textures
+    )
+    frame_b = R_RenderPlayerView(
+        px, py, config.player_eye_z, 0, ref_md, config, ref_textures
+    )
     assert np.array_equal(frame_a, frame_b)

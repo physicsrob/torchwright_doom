@@ -248,8 +248,8 @@ target opens the GIFs after rendering.
 
     # Pass arguments through ARGS=
     make walkthrough ARGS="--frames 5"
-    make walkthrough ARGS="--scene multi"
-    make walkthrough ARGS="--frames 20 --scene multi"
+    make walkthrough ARGS="--scene e1m1"
+    make walkthrough ARGS="--frames 20 --scene e1m1"
 
 Available flags: `--width`, `--height`, `--fps`, `--scale`, `--d`,
 `--d-head`, `--rows-per-patch`, `--tex-size`, `--frames`, `--scene`.

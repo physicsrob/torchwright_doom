@@ -25,11 +25,11 @@ import numpy as np
 from torchwright_doom.doom.game import GameState, update_state
 from torchwright_doom.doom.input import PlayerInput
 from torchwright_doom.doom.map_subset import MapSubset
-from torchwright_doom.reference_renderer.render import (
+from torchwright_doom.reference_renderer._legacy_oracle import (
     _ray_angle_for_column,
-    intersect_ray_segment,
     project_wall,
 )
+from torchwright_doom.reference_renderer.geometry import intersect_ray_segment
 from torchwright_doom.reference_renderer.types import RenderConfig, Segment
 
 

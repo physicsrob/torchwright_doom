@@ -3,12 +3,13 @@
 import argparse
 
 from torchwright_doom.reference_renderer import (
+    R_RenderPlayerView,
     RenderConfig,
+    box_room,
     generate_trig_table,
-    render_frame,
+    mapdata_from_segments,
+    save_png,
 )
-from torchwright_doom.reference_renderer.render import save_png
-from torchwright_doom.reference_renderer.scenes import box_room
 
 
 def main():
@@ -33,10 +34,12 @@ def main():
         trig_table=generate_trig_table(),
         ceiling_color=(0.2, 0.2, 0.2),
         floor_color=(0.4, 0.4, 0.4),
+        player_eye_z=41.0,
     )
 
-    segments = box_room()
-    frame = render_frame(0.0, 0.0, args.angle, segments, config)
+    md, textures = mapdata_from_segments(box_room())
+    bam = (args.angle << 24) & 0xFFFFFFFF
+    frame = R_RenderPlayerView(0.0, 0.0, config.player_eye_z, bam, md, config, textures)
     save_png(frame, args.output)
     print(f"Saved {args.output} ({args.width}x{args.height}, angle={args.angle})")
 

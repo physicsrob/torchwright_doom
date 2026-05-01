@@ -204,7 +204,9 @@ d_head:           128
 ### Test Scenes
 
 - **box_room**: 4-wall square room (10×10 units)
-- **multi_room**: 22-segment scene with two rooms, corridor, diagonal walls
+- **E1M1 player-1 spawn** (via `WADReader`): real DOOM map geometry
+  with full BSP, sectors, and textures; used by walkthrough rendering
+  and the rollout harness.
 
 ### Known Limitations
 
