@@ -306,7 +306,16 @@ def compute_reference(
     trig = config.trig_table
     segs = subset.segments
 
-    bsp_ranks = _ref_bsp_ranks(subset, px, py)
+    # ``subset.segments`` and ``subset.bsp_nodes`` are stored in
+    # mean-centred frame by ``load_map_subset``; ``(px, py)`` arrives
+    # in world frame.  Shift the player into subset frame so every
+    # arithmetic combination below uses one consistent frame.
+    # Velocity is a delta and unaffected by translation.
+    origin_x, origin_y = subset.scene_origin
+    px_s = px - origin_x
+    py_s = py - origin_y
+
+    bsp_ranks = _ref_bsp_ranks(subset, px_s, py_s)
     vx, vy = _player_velocity(angle, inputs, trig, move_speed, turn_speed)
 
     walls: List[WallRef] = []
@@ -314,12 +323,12 @@ def compute_reference(
     running_hx = 0
     running_hy = 0
     for i, seg in enumerate(segs):
-        local_hf, local_hx, local_hy = _ref_hits(seg, px, py, vx, vy)
+        local_hf, local_hx, local_hy = _ref_hits(seg, px_s, py_s, vx, vy)
         running_hf |= local_hf
         running_hx |= local_hx
         running_hy |= local_hy
 
-        is_rend = _central_ray_renderable(seg, px, py, angle, trig)
+        is_rend = _central_ray_renderable(seg, px_s, py_s, angle, trig)
 
         # vis_lo/vis_hi from project_wall (per-column ray test).  The
         # graph and the reference can disagree by ±2 columns at glancing
@@ -329,7 +338,7 @@ def compute_reference(
         # per-column gate, so the graph can compute vis_lo/vis_hi from
         # the wall plane intersection even when no actual screen column
         # hits the wall.
-        proj = project_wall(px, py, angle, seg, config)
+        proj = project_wall(px_s, py_s, angle, seg, config)
         is_projected = proj is not None
         if is_projected:
             vis_lo = float(proj.vis_lo)
@@ -352,9 +361,21 @@ def compute_reference(
         )
 
     # Resolved state via the same ``update_state`` the existing pipeline
-    # tests already use.
-    state = GameState(x=px, y=py, angle=angle, move_speed=move_speed, turn_speed=turn_speed)
-    new_state = update_state(state, inputs, segs, trig)
+    # tests already use.  Run it in subset (shifted) frame because the
+    # collision math reads ``segs`` directly; convert the result back to
+    # world frame for the Reference's ``resolved_x``/``resolved_y``
+    # (which the test docstring documents as world-frame).
+    state_s = GameState(
+        x=px_s, y=py_s, angle=angle, move_speed=move_speed, turn_speed=turn_speed
+    )
+    new_state_s = update_state(state_s, inputs, segs, trig)
+    new_state = GameState(
+        x=new_state_s.x + origin_x,
+        y=new_state_s.y + origin_y,
+        angle=new_state_s.angle,
+        move_speed=new_state_s.move_speed,
+        turn_speed=new_state_s.turn_speed,
+    )
 
     # Graph-expected sort order: iterate wall_counter from 0, pick
     # the renderable wall with that bsp_rank.  When a rank is missing
@@ -383,9 +404,11 @@ def compute_reference(
     # not the pre-step input.  Pre- and post-step differ by one
     # ``move_speed`` step under ``forward=True`` etc., which shifts
     # perp_distance enough to flip a chunk-loop boundary by ~2 rows.
-    render_px = float(new_state.x)
-    render_py = float(new_state.y)
-    render_angle = int(new_state.angle) % 256
+    # Render-time projection works against ``segs`` (shifted), so use
+    # the shifted post-step player position.
+    render_px = float(new_state_s.x)
+    render_py = float(new_state_s.y)
+    render_angle = int(new_state_s.angle) % 256
 
     render_count_per_sort_slot: List[int] = []
     render_tokens_per_sort_slot: List[List[RenderTokenExpectation]] = []

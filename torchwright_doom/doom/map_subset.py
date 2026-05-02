@@ -80,13 +80,23 @@ class MapSubset:
     fewer than ``max_bsp_nodes`` real nodes are present) are filled
     with zeros, so they contribute nothing to rank.
 
-    ``scene_origin`` is a per-scene host-side coord shift.  Segments
-    and BSP planes are stored in world coords; ``step_frame`` subtracts
-    ``scene_origin`` from wall geometry, BSP plane d-coefficients, and
-    the player position before feeding the graph, then adds it back to
-    ``RESOLVED_X/Y`` to reconstruct world coords.  The graph never sees
-    ``scene_origin``.  Default ``(0.0, 0.0)`` is a no-op shift suitable
-    for hand-authored scenes already centered near the origin.
+    ``scene_origin`` is the offset that converts world coords to
+    subset coords.  Segments and BSP planes in this struct are
+    stored **already shifted** — segment coords are world coords
+    minus ``scene_origin``, plane equations have ``d`` adjusted to
+    match.  ``step_frame`` therefore only shifts the *player*
+    position (which arrives in world frame from ``GameState``) by
+    subtracting ``scene_origin``, and adds it back to
+    ``RESOLVED_X/Y`` on the way out.  The graph never sees
+    ``scene_origin``.
+
+    :func:`load_map_subset` sets ``scene_origin`` to the mean of the
+    selected segments' vertex coordinates so the subset's geometry
+    sits near the origin, keeping coords within a reasonable
+    envelope even for E1M1-class maps.  :func:`build_scene_subset`
+    leaves ``scene_origin`` at ``(0.0, 0.0)`` because hand-authored
+    scenes are typically centered already; the default value is a
+    no-op shift in that case.
     """
 
     segments: List[Segment]
@@ -573,15 +583,20 @@ def load_map_subset(
     whose leaves cover the selected segs' subsectors.  Precomputes the
     per-seg coefficients needed by the transformer's BSP rank sort.
 
-    All output coords are in raw DOOM world units.  ``scene_origin``
-    is set to ``(px, py)`` so ``step_frame`` can subtract it from
-    every wall / player coord, then add it back when reading
-    ``RESOLVED_X/Y``.  The transformer expects coords in its
-    compile-time ``max_coord`` envelope; for E1M1-class maps where
-    walls live at thousands of units, transformer callers should
-    apply a host-side scale on top of this subset before feeding
-    ``step_frame``.  The reference renderer is scale-invariant and
-    consumes the raw subset directly.
+    Output coords are **mean-centred**: segments and BSP plane
+    equations are shifted so the mean of the selected segments'
+    vertex coordinates lies at the origin.  ``scene_origin`` is set
+    to that mean — it's the offset that converts world coords to
+    subset coords.  ``step_frame`` subtracts ``scene_origin`` from
+    incoming player coords (which are in world frame) before feeding
+    the graph, and adds it back when reading ``RESOLVED_X/Y``.
+
+    Mean-centring keeps subset coordinates within roughly the same
+    envelope as a hand-authored ``box_room`` (a few hundred units),
+    even for E1M1-class maps where walls live at thousands of units
+    in raw WAD frame.  The transformer's piecewise-linear ops, the
+    sandbox's FloatSlot ranges, and any caller doing arithmetic
+    against subset coords all benefit.
 
     Raises ``ValueError`` if the required BSP subtree exceeds
     ``max_bsp_nodes`` — callers should increase the cap or reduce
@@ -758,15 +773,65 @@ def load_map_subset(
         )
     segments = remapped
 
+    # --- 9. Mean-centre the subset's coordinate frame ---
+    # E1M1-class maps live at thousands of WAD units from the origin;
+    # the transformer's piecewise-linear ops, the sandbox's FloatSlot
+    # ranges, and any reasonable PWL precision all benefit from the
+    # subset's geometry sitting near the origin.  We compute the mean
+    # of the selected segments' vertex coordinates and shift segments,
+    # BSP plane equations, and ``scene_origin`` so the returned subset
+    # is already in mean-centred frame.  ``scene_origin`` records the
+    # mean — i.e. the offset that converts world coords to subset
+    # coords — so callers can still recover world-frame coords by
+    # adding it back (see ``step_frame``'s RESOLVED handling).
+    n_seg = len(segments)
+    sum_x = sum(s.ax + s.bx for s in segments)
+    sum_y = sum(s.ay + s.by for s in segments)
+    centroid_x = sum_x / (2.0 * n_seg)
+    centroid_y = sum_y / (2.0 * n_seg)
+
+    shifted_segments: List[Segment] = []
+    for s in segments:
+        shifted_segments.append(
+            Segment(
+                ax=s.ax - centroid_x,
+                ay=s.ay - centroid_y,
+                bx=s.bx - centroid_x,
+                by=s.by - centroid_y,
+                color=s.color,
+                texture_id=s.texture_id,
+                front_floor=s.front_floor,
+                front_ceiling=s.front_ceiling,
+                back_floor=s.back_floor,
+                back_ceiling=s.back_ceiling,
+                upper_texture_id=s.upper_texture_id,
+                lower_texture_id=s.lower_texture_id,
+            )
+        )
+
+    # Plane equation ``nx*x + ny*y + d = 0`` shifts as
+    #     d' = d + nx*ox + ny*oy
+    # so that ``nx*x' + ny*y' + d' = nx*x + ny*y + d`` when
+    # ``x' = x − ox``, ``y' = y − oy``.
+    shifted_bsp_nodes: List[BspNodeSubset] = []
+    for plane in bsp_nodes:
+        shifted_bsp_nodes.append(
+            BspNodeSubset(
+                nx=plane.nx,
+                ny=plane.ny,
+                d=plane.d + plane.nx * centroid_x + plane.ny * centroid_y,
+            )
+        )
+
     return MapSubset(
-        segments=segments,
+        segments=shifted_segments,
         textures=textures,
         tex_name_to_id=new_name_to_id,
-        bsp_nodes=bsp_nodes,
+        bsp_nodes=shifted_bsp_nodes,
         seg_bsp_coeffs=coeffs,
         seg_bsp_consts=consts,
         original_seg_indices=list(selected_orig),
-        scene_origin=(float(px), float(py)),
+        scene_origin=(centroid_x, centroid_y),
     )
 
 

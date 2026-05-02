@@ -353,18 +353,21 @@ def step_frame(
         textures = subset.textures
 
     # Host-side coord shift: subset.segments and subset.bsp_nodes are
-    # stored in world coords; we subtract scene_origin from wall
-    # geometry, BSP plane d, and player_x/y before feeding the graph.
-    # Reverse the shift after reading RESOLVED_X/Y.  (0, 0) is a no-op
-    # for hand-authored scenes already centred near the origin.
+    # already stored in shifted (mean-centred) frame by
+    # ``load_map_subset``.  ``state.x``/``state.y`` arrive in world
+    # frame from ``GameState``, so we subtract ``scene_origin`` to put
+    # the player in the same frame as the geometry, then add it back
+    # to RESOLVED_X/Y on the way out.  (0, 0) is a no-op for
+    # hand-authored scenes from ``build_scene_subset`` that are
+    # already centred near the origin.
     origin_x, origin_y = subset.scene_origin
 
     walls = [
         {
-            "ax": s.ax - origin_x,
-            "ay": s.ay - origin_y,
-            "bx": s.bx - origin_x,
-            "by": s.by - origin_y,
+            "ax": s.ax,
+            "ay": s.ay,
+            "bx": s.bx,
+            "by": s.by,
             "tex_id": float(s.texture_id),
         }
         for s in subset.segments
@@ -459,16 +462,13 @@ def step_frame(
         onehot = torch.zeros(max_bsp_nodes)
         onehot[i] = 1.0
         if i < len(subset.bsp_nodes):
+            # Plane equation is already in shifted frame
+            # (``load_map_subset`` shifts ``d`` to match the
+            # mean-centred segment coords).
             plane = subset.bsp_nodes[i]
-            # Shift the plane equation into the host-shifted frame.
-            # ``side_P`` classifies sign of ``nx*x + ny*y + d`` in
-            # world coords; after substituting ``x = x_shifted +
-            # origin_x``, ``y = y_shifted + origin_y`` the same
-            # classification reads ``nx*x_shifted + ny*y_shifted +
-            # (d + nx*origin_x + ny*origin_y)``.
             nx = plane.nx
             ny = plane.ny
-            d = plane.d + plane.nx * origin_x + plane.ny * origin_y
+            d = plane.d
         else:
             nx, ny, d = 0.0, 0.0, 0.0
         rows.append(

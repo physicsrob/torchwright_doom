@@ -235,15 +235,23 @@ def test_plane_sign_matches_doom_side_classification(raw_e1m1) -> None:
 def _rank_order(subset: MapSubset, px: float, py: float) -> List[int]:
     """Compute rank for each selected seg and return them in rank order.
 
+    ``(px, py)`` is in world coords; the subset's BSP planes are in
+    shifted (mean-centred) frame, so this helper subtracts
+    ``scene_origin`` before evaluating ``side_P``.
+
     Returns original seg indices, matching the filtered BSP traversal.
 
     Tie-break: within a rank tier (segs in the same subsector), order
     by original seg index, matching DOOM's in-subsector rendering order.
     """
-    # Compute side_P for each BSP node
+    origin_x, origin_y = subset.scene_origin
+    px_shifted = px - origin_x
+    py_shifted = py - origin_y
+    # Compute side_P for each BSP node (in shifted frame, matching
+    # subset.bsp_nodes' frame).
     side_P_vec = np.zeros(subset.seg_bsp_coeffs.shape[1], dtype=np.float64)
     for i, plane in enumerate(subset.bsp_nodes):
-        side_P_vec[i] = float(side_P(plane, px, py))
+        side_P_vec[i] = float(side_P(plane, px_shifted, py_shifted))
     # Rank = coeffs @ side_P + const
     ranks = subset.seg_bsp_coeffs @ side_P_vec + subset.seg_bsp_consts
     seg_idx_arr = np.array(subset.original_seg_indices)

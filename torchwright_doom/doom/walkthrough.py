@@ -339,13 +339,37 @@ def main():
             max_bsp_nodes=96,
             tex_size=args.tex_size,
         )
-        segments = subset.segments
+        # ``load_map_subset`` returns segments and BSP planes in
+        # mean-centred frame; ``subset.scene_origin`` records the
+        # offset.  The transformer pipeline (step_frame) consumes the
+        # shifted subset directly.  The reference-renderer pipeline
+        # below (``mapdata_from_segments`` + ``R_RenderPlayerView`` +
+        # ``update_state``) needs world-frame segments paired with
+        # world-frame player coords, so unshift them once here.
         textures = subset.textures
+        origin_x, origin_y = subset.scene_origin
+        segments = [
+            Segment(
+                ax=s.ax + origin_x,
+                ay=s.ay + origin_y,
+                bx=s.bx + origin_x,
+                by=s.by + origin_y,
+                color=s.color,
+                texture_id=s.texture_id,
+                front_floor=s.front_floor,
+                front_ceiling=s.front_ceiling,
+                back_floor=s.back_floor,
+                back_ceiling=s.back_ceiling,
+                upper_texture_id=s.upper_texture_id,
+                lower_texture_id=s.lower_texture_id,
+            )
+            for s in subset.segments
+        ]
         start_x, start_y = spawn_x, spawn_y
-        # max_coord matters only for the transformer pipeline, which
-        # E1M1's raw coord magnitudes (~1500) far exceed.  Transformer
-        # callers will need their own host-side scaling step on top of
-        # this subset.
+        # max_coord matters only for the transformer pipeline; with
+        # mean-centring it now sees coords in roughly the same envelope
+        # as a hand-authored ``box_room`` (a few hundred units), so the
+        # 4000-unit cap is generous headroom.
         max_coord = 4000.0
         still = True
         # Player eye sits 41 world units above the spawn sector's
