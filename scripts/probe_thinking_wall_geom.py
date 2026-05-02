@@ -46,7 +46,8 @@ from torchwright.graph import Attn
 from torchwright_doom.reference_renderer.textures import default_texture_atlas
 from torchwright_doom.reference_renderer.trig import generate_trig_table
 from torchwright_doom.reference_renderer.types import RenderConfig, Segment
-from torchwright_doom.doom.map_subset import build_scene_subset
+from torchwright_doom.doom.graph_inputs import build_graph_inputs
+from torchwright_doom.doom.subset import build_scene_map_data
 
 _TRIG = generate_trig_table()
 
@@ -88,7 +89,11 @@ def main():
     config = _config()
     textures = default_texture_atlas()
     segs = _box_room()
-    subset = build_scene_subset(segs, textures)
+    subset = build_graph_inputs(
+        build_scene_map_data(segs),
+        {f"TEX{i}": t for i, t in enumerate(textures)},
+        max_bsp_nodes=48,
+    )
     max_walls = 8
     max_bsp_nodes = 48
     chunk_size = 20
@@ -223,8 +228,8 @@ def main():
     for i in range(max_bsp_nodes):
         onehot = torch.zeros(max_bsp_nodes)
         onehot[i] = 1.0
-        if i < len(subset.bsp_nodes):
-            plane = subset.bsp_nodes[i]
+        if i < len(subset.bsp_planes):
+            plane = subset.bsp_planes[i]
             nx, ny, d_ = plane.nx, plane.ny, plane.d
         else:
             nx, ny, d_ = 0.0, 0.0, 0.0

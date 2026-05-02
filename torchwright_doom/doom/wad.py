@@ -190,7 +190,15 @@ class Thing:
 
 @dataclass
 class MapData:
-    """All geometry + BSP data parsed from a single map (e.g. E1M1)."""
+    """All geometry + BSP data parsed from a single map (e.g. E1M1).
+
+    ``scene_origin`` is the offset that converts world coords to this
+    MapData's frame.  WAD-loaded maps carry ``(0.0, 0.0)`` — geometry
+    is in raw WAD coords.  Mean-centred subsets (see
+    :func:`torchwright_doom.doom.subset.subset_map_data`) shift every
+    vertex / BSP-node origin by the centroid and store that centroid
+    here, so callers can recover world-frame coords by adding it back.
+    """
 
     name: str
     vertices: List[Vertex]
@@ -201,6 +209,7 @@ class MapData:
     subsectors: List[Subsector]
     nodes: List[BspNode]
     things: List[Thing] = field(default_factory=list)
+    scene_origin: Tuple[float, float] = (0.0, 0.0)
 
 
 # ---------------------------------------------------------------------------

@@ -1,9 +1,9 @@
 """E1M1 rollout fixture — exercise the host-side coord shift on a real map.
 
 E1M1's wall coordinates run to thousands of units from the WAD origin —
-well outside the graph's declared ``max_coord`` envelope.  ``MapSubset``
-carries a ``scene_origin`` (set to the player spawn by
-``load_map_subset``) and ``step_frame`` subtracts it from every wall /
+well outside the graph's declared ``max_coord`` envelope.  ``GraphInputs``
+carries a ``scene_origin`` (set to the centroid of kept vertex coords by
+:func:`subset_map_data`) and ``step_frame`` subtracts it from every wall /
 player coord before feeding the graph, then adds it back when reading
 ``RESOLVED_X``/``RESOLVED_Y``.  Without that shift the
 ``piecewise_linear_2d`` ops would clamp every coord to ±max_coord and
@@ -40,7 +40,11 @@ from tests.doom._rollout.reference import compute_reference
 from tests.doom._rollout.runner import Rollout, run_rollout
 from torchwright_doom.doom.compile import compile_game
 from torchwright_doom.doom.input import PlayerInput
-from torchwright_doom.doom.map_subset import load_map_subset
+from torchwright_doom.doom.graph_inputs import build_graph_inputs
+from torchwright_doom.doom.subset import (
+    load_wad_textures_for_subset,
+    subset_from_wad,
+)
 from torchwright_doom.reference_renderer.trig import generate_trig_table
 from torchwright_doom.reference_renderer.types import RenderConfig
 
@@ -92,13 +96,15 @@ class TestE1M1Subset:
     @pytest.fixture(scope="class")
     def scene(self):
         config = _e1m1_config()
-        subset = load_map_subset(
+        subset_md, _orig = subset_from_wad(
             wad_path="doom1.wad",
             map_name="E1M1",
             px=_E1M1_SPAWN_X,
             py=_E1M1_SPAWN_Y,
             max_walls=_MAX_WALLS,
         )
+        textures_dict = load_wad_textures_for_subset("doom1.wad", subset_md)
+        subset = build_graph_inputs(subset_md, textures_dict, max_bsp_nodes=64)
         return config, subset
 
     @pytest.fixture(scope="class")
@@ -132,7 +138,7 @@ class TestE1M1Subset:
             py=py,
             angle=angle,
             inputs=PlayerInput(**inputs),
-            subset=subset,
+            graph_inputs=subset,
             config=config,
             move_speed=_MOVE_SPEED,
             turn_speed=_TURN_SPEED,
@@ -147,7 +153,7 @@ class TestE1M1Subset:
             py=py,
             angle=angle,
             inputs=PlayerInput(**inputs),
-            subset=subset,
+            graph_inputs=subset,
             config=config,
             move_speed=_MOVE_SPEED,
             turn_speed=_TURN_SPEED,

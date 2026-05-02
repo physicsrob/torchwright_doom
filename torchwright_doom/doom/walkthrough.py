@@ -291,9 +291,17 @@ def main():
         floor_color=(0.4, 0.4, 0.4),
     )
 
-    from torchwright_doom.doom.map_subset import DOOM_PLAYER_EYE_HEIGHT
+    from torchwright_doom.doom.subset import (
+        DOOM_PLAYER_EYE_HEIGHT,
+        build_scene_map_data,
+        find_sector_at,
+        subset_from_wad,
+        load_wad_textures_for_subset,
+    )
+    from torchwright_doom.doom.graph_inputs import build_graph_inputs
 
-    subset = None
+    subset_md = None
+    textures_dict: dict = {}
     still = False
     if args.scene == "box":
         # box_room is a 256-unit one-sector DOOM-shaped room, floor=0,
@@ -302,11 +310,14 @@ def main():
             wad_path=args.wad,
             tex_size=args.tex_size,
         )
+        subset_md = build_scene_map_data(segments)
+        # Hand-authored scenes use synthetic "TEX{i}" texture names
+        # (see mapdata_from_segments); pair each name with its array.
+        textures_dict = {f"TEX{i}": t for i, t in enumerate(textures)}
         start_x, start_y, start_angle = 0.0, 0.0, 0
         max_coord = 200.0
         config.player_eye_z = DOOM_PLAYER_EYE_HEIGHT
     else:  # e1m1
-        from torchwright_doom.doom.map_subset import find_sector_at, load_map_subset
         from torchwright_doom.doom.wad import WADReader
 
         # Read the player-1 start (thing type 1) from the WAD's THINGS
@@ -325,60 +336,46 @@ def main():
             f"sector={spawn_sector_idx} floor_h={spawn_floor_h}"
         )
 
-        # The sector-aware reference renderer is scale-invariant, so
-        # we feed raw DOOM world coords directly.  max_walls=64 +
-        # max_bsp_nodes=96 captures the spawn alcove walls plus all
-        # four Hangar pillars (16 walls) plus the surrounding Hangar
-        # walls.  32 walls clipped the back two pillars at ~547 units.
-        subset = load_map_subset(
+        # max_walls=64 + max_bsp_nodes=96 captures the spawn alcove
+        # walls plus all four Hangar pillars (16 walls) plus the
+        # surrounding Hangar walls.  32 walls clipped the back two
+        # pillars at ~547 units.
+        subset_md, _orig = subset_from_wad(
             wad_path=args.wad,
             map_name="E1M1",
             px=spawn_x,
             py=spawn_y,
             max_walls=64,
             max_bsp_nodes=96,
-            tex_size=args.tex_size,
         )
-        # ``load_map_subset`` returns segments and BSP planes in
-        # mean-centred frame; ``subset.scene_origin`` records the
-        # offset.  The transformer pipeline (step_frame) consumes the
-        # shifted subset directly.  The reference-renderer pipeline
-        # below (``mapdata_from_segments`` + ``R_RenderPlayerView`` +
-        # ``update_state``) needs world-frame segments paired with
-        # world-frame player coords, so unshift them once here.
-        textures = subset.textures
-        origin_x, origin_y = subset.scene_origin
-        segments = [
-            Segment(
-                ax=s.ax + origin_x,
-                ay=s.ay + origin_y,
-                bx=s.bx + origin_x,
-                by=s.by + origin_y,
-                color=s.color,
-                texture_id=s.texture_id,
-                front_floor=s.front_floor,
-                front_ceiling=s.front_ceiling,
-                back_floor=s.back_floor,
-                back_ceiling=s.back_ceiling,
-                upper_texture_id=s.upper_texture_id,
-                lower_texture_id=s.lower_texture_id,
-            )
-            for s in subset.segments
-        ]
+        textures_dict = load_wad_textures_for_subset(
+            args.wad, subset_md, tex_size=args.tex_size,
+        )
         start_x, start_y = spawn_x, spawn_y
         # max_coord matters only for the transformer pipeline; with
-        # mean-centring it now sees coords in roughly the same envelope
-        # as a hand-authored ``box_room`` (a few hundred units), so the
-        # 4000-unit cap is generous headroom.
+        # mean-centring it sees coords in roughly the same envelope
+        # as a hand-authored ``box_room``, so the 4000-unit cap is
+        # generous headroom.
         max_coord = 4000.0
         still = True
         # Player eye sits 41 world units above the spawn sector's
-        # floor.  Same units as everything else (raw DOOM units).
+        # floor.
         config.player_eye_z = spawn_floor_h + DOOM_PLAYER_EYE_HEIGHT
+
+    # Build a graph_inputs once — segments & rank coefficients are
+    # frame-invariant for both render paths.
+    graph_inputs = build_graph_inputs(
+        subset_md,
+        textures_dict,
+        max_textures=32,
+        max_bsp_nodes=128,
+    )
+    segments = graph_inputs.segments
+    textures = graph_inputs.textures
+    origin_x, origin_y = graph_inputs.scene_origin
 
     if args.mode == "transformer":
         from torchwright_doom.doom.compile import compile_game, step_frame
-        from torchwright_doom.doom.map_subset import build_scene_subset
 
         print(f"Compiling game graph (walls-as-tokens, {len(segments)} walls)...")
         module = compile_game(
@@ -389,28 +386,48 @@ def main():
             d=args.d,
             chunk_size=args.chunk_size,
         )
-        if subset is None:
-            subset = build_scene_subset(segments, textures)
 
         def frame_fn(state, inputs):
-            return step_frame(module, state, inputs, subset, config, textures=textures)
+            return step_frame(
+                module, state, inputs, graph_inputs, config, textures=textures,
+            )
 
     else:
-        # Build the MapData + name-keyed texture dict the new renderer
-        # wants, once.  Static across frames since segments don't change.
-        ref_mapdata, ref_textures = mapdata_from_segments(segments, textures)
+        # Render directly from the subset MapData — the same geometry
+        # the transformer sees.  Texture dict is keyed by the names
+        # carried in the subset's sidedefs; ``mapdata_from_segments``-
+        # style "TEX{i}" naming isn't used here, so fall back to
+        # building a name dict from the texture atlas.
+        ref_textures = dict(textures_dict)
 
         def frame_fn(state, inputs):
-            new_state = update_state(state, inputs, segments, trig_table)
-            bam = (new_state.angle << 24) & 0xFFFFFFFF
+            # Player coords are in world frame; the subset MapData is
+            # mean-centred, so shift the player into subset frame for
+            # both collision (update_state reads segments) and render.
+            shifted_state = type(state)(
+                x=state.x - origin_x,
+                y=state.y - origin_y,
+                angle=state.angle,
+                move_speed=state.move_speed,
+                turn_speed=state.turn_speed,
+            )
+            new_shifted = update_state(shifted_state, inputs, segments, trig_table)
+            bam = (new_shifted.angle << 24) & 0xFFFFFFFF
             frame = R_RenderPlayerView(
-                new_state.x,
-                new_state.y,
+                new_shifted.x,
+                new_shifted.y,
                 config.player_eye_z,
                 bam,
-                ref_mapdata,
+                subset_md,
                 config,
                 ref_textures,
+            )
+            new_state = type(state)(
+                x=new_shifted.x + origin_x,
+                y=new_shifted.y + origin_y,
+                angle=new_shifted.angle,
+                move_speed=new_shifted.move_speed,
+                turn_speed=new_shifted.turn_speed,
             )
             return frame, new_state
 

@@ -44,7 +44,8 @@ from torchwright_doom.doom.game_graph import (
     TEX_E8_OFFSET,
     build_game_graph,
 )
-from torchwright_doom.doom.map_subset import build_scene_subset
+from torchwright_doom.doom.graph_inputs import build_graph_inputs
+from torchwright_doom.doom.subset import build_scene_map_data
 from torchwright.graph import Concatenate, Linear
 from torchwright.graph.attn import Attn
 from torchwright.graph.optimize import fuse_consecutive_linears
@@ -118,8 +119,8 @@ def _build_prefill(module, subset, *, px, py, angle):
     for i in range(max_bsp_nodes):
         onehot = torch.zeros(max_bsp_nodes)
         onehot[i] = 1.0
-        if i < len(subset.bsp_nodes):
-            plane = subset.bsp_nodes[i]
+        if i < len(subset.bsp_planes):
+            plane = subset.bsp_planes[i]
             nx, ny, d = plane.nx, plane.ny, plane.d
         else:
             nx, ny, d = 0.0, 0.0, 0.0
@@ -242,7 +243,11 @@ class TestRenderGraphPrecision:
         """Compile the DOOM graph once; share the module across tests."""
         config = _config()
         textures = default_texture_atlas()
-        subset = build_scene_subset(_segments(), textures)
+        subset = build_graph_inputs(
+            build_scene_map_data(_segments()),
+            {f"TEX{i}": t for i, t in enumerate(textures)},
+            max_bsp_nodes=48,
+        )
 
         graph_io, pos_encoding = build_game_graph(
             config,

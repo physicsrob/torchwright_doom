@@ -31,7 +31,8 @@ from torchwright_doom.doom.game_graph import (
     TEX_E8_OFFSET,
     build_game_graph,
 )
-from torchwright_doom.doom.map_subset import build_scene_subset
+from torchwright_doom.doom.graph_inputs import build_graph_inputs
+from torchwright_doom.doom.subset import build_scene_map_data
 from torchwright.graph.misc import Assert, Concatenate, InputNode, Placeholder
 from torchwright.graph.pos_encoding import PosEncoding
 from torchwright.graph.session import fresh_graph_session
@@ -95,7 +96,7 @@ def _build_input_values(
     """
     num_tex = len(textures)
     tex_w = textures[0].shape[0]
-    n_bsp = min(len(subset.bsp_nodes), MAX_BSP_NODES)
+    n_bsp = min(len(subset.bsp_planes), MAX_BSP_NODES)
     n_walls = len(subset.segments)
 
     n_tex_col = num_tex * tex_w
@@ -143,7 +144,7 @@ def _build_input_values(
         onehot[i] = 1.0
         _set("bsp_node_id_onehot", p, onehot)
         if i < n_bsp:
-            plane = subset.bsp_nodes[i]
+            plane = subset.bsp_planes[i]
             _set("bsp_plane_nx", p, plane.nx)
             _set("bsp_plane_ny", p, plane.ny)
             _set("bsp_plane_d", p, plane.d)
@@ -255,7 +256,11 @@ def doom_graph():
     config = _config()
     textures = default_texture_atlas()
     segs = _segments()
-    subset = build_scene_subset(segs, textures, max_bsp_nodes=MAX_BSP_NODES)
+    subset = build_graph_inputs(
+        build_scene_map_data(segs),
+        {f"TEX{i}": t for i, t in enumerate(textures)},
+        max_bsp_nodes=MAX_BSP_NODES,
+    )
 
     with fresh_graph_session():
         gio, pos_enc = build_game_graph(

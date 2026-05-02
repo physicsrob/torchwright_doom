@@ -290,7 +290,7 @@ def step_frame(
     module,
     state: GameState,
     inputs: PlayerInput,
-    subset,
+    graph_inputs,
     config: RenderConfig,
     textures: Optional[List[np.ndarray]] = None,
     trace: Optional[FrameTrace] = None,
@@ -303,10 +303,10 @@ def step_frame(
         module: Compiled module from :func:`compile_game`.
         state: Current game state (x, y, angle).
         inputs: Player inputs for this frame.
-        subset: :class:`~torchwright_doom.doom.map_subset.MapSubset` carrying
-            segments, BSP planes, and precomputed rank coefficients.
-            Build one with :func:`build_scene_subset` (hand-authored
-            scenes) or :func:`load_map_subset` (WAD maps).
+        graph_inputs: :class:`~torchwright_doom.doom.graph_inputs.GraphInputs`
+            carrying segments, BSP planes, and precomputed rank
+            coefficients.  Build one with :func:`build_graph_inputs`
+            from a renumbered :class:`MapData`.
         config: Render configuration.
         textures: List of texture arrays, each (tex_w, tex_h, 3).
             Defaults to the subset's textures.
@@ -350,17 +350,18 @@ def step_frame(
     render_pixels = bool(module.metadata.get("render_pixels", True))
 
     if textures is None:
-        textures = subset.textures
+        textures = graph_inputs.textures
 
-    # Host-side coord shift: subset.segments and subset.bsp_nodes are
-    # already stored in shifted (mean-centred) frame by
-    # ``load_map_subset``.  ``state.x``/``state.y`` arrive in world
-    # frame from ``GameState``, so we subtract ``scene_origin`` to put
-    # the player in the same frame as the geometry, then add it back
-    # to RESOLVED_X/Y on the way out.  (0, 0) is a no-op for
-    # hand-authored scenes from ``build_scene_subset`` that are
-    # already centred near the origin.
-    origin_x, origin_y = subset.scene_origin
+    # Host-side coord shift: graph_inputs.segments and
+    # graph_inputs.bsp_planes are already stored in shifted
+    # (mean-centred) frame by the subsetter.  ``state.x`` / ``state.y``
+    # arrive in world frame from ``GameState``, so we subtract
+    # ``scene_origin`` to put the player in the same frame as the
+    # geometry, then add it back to RESOLVED_X/Y on the way out.
+    # ``(0, 0)`` is a no-op for hand-authored scenes from
+    # ``build_scene_map_data`` that are already centred near the
+    # origin.
+    origin_x, origin_y = graph_inputs.scene_origin
 
     walls = [
         {
@@ -370,7 +371,7 @@ def step_frame(
             "by": s.by,
             "tex_id": float(s.texture_id),
         }
-        for s in subset.segments
+        for s in graph_inputs.segments
     ]
 
     N = len(walls)
@@ -461,11 +462,11 @@ def step_frame(
     for i in range(max_bsp_nodes):
         onehot = torch.zeros(max_bsp_nodes)
         onehot[i] = 1.0
-        if i < len(subset.bsp_nodes):
-            # Plane equation is already in shifted frame
-            # (``load_map_subset`` shifts ``d`` to match the
-            # mean-centred segment coords).
-            plane = subset.bsp_nodes[i]
+        if i < len(graph_inputs.bsp_planes):
+            # Plane equation is already in shifted frame (the
+            # subsetter shifts ``d`` to match the mean-centred segment
+            # coords).
+            plane = graph_inputs.bsp_planes[i]
             nx = plane.nx
             ny = plane.ny
             d = plane.d
@@ -497,13 +498,13 @@ def step_frame(
             ax, ay, bx, by, tex_id = w["ax"], w["ay"], w["bx"], w["by"], w["tex_id"]
         else:
             ax = ay = bx = by = tex_id = 0.0
-        if i < subset.seg_bsp_coeffs.shape[0]:
+        if i < graph_inputs.seg_bsp_coeffs.shape[0]:
             coeffs = torch.tensor(
-                subset.seg_bsp_coeffs[i, :max_bsp_nodes],
+                graph_inputs.seg_bsp_coeffs[i, :max_bsp_nodes],
                 dtype=torch.float32,
             )
             const = torch.tensor(
-                [float(subset.seg_bsp_consts[i])],
+                [float(graph_inputs.seg_bsp_consts[i])],
                 dtype=torch.float32,
             )
         else:

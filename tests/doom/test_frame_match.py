@@ -13,7 +13,8 @@ from tests._utils.image_compare import compare_images
 from torchwright_doom.doom.compile import compile_game, step_frame
 from torchwright_doom.doom.game import GameState
 from torchwright_doom.doom.input import PlayerInput
-from torchwright_doom.doom.map_subset import build_scene_subset
+from torchwright_doom.doom.graph_inputs import build_graph_inputs
+from torchwright_doom.doom.subset import build_scene_map_data
 from torchwright_doom.reference_renderer import (
     R_RenderPlayerView,
     RenderConfig,
@@ -65,7 +66,10 @@ class TestFrameMatch:
         config = _config()
         textures = default_texture_atlas()
         segs = _segments()
-        subset = build_scene_subset(segs, textures)
+        subset = build_graph_inputs(
+            build_scene_map_data(segs),
+            {f"TEX{i}": t for i, t in enumerate(textures)},
+        )
         return config, textures, subset, segs
 
     @pytest.fixture(scope="class")

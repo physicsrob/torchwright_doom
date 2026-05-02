@@ -33,7 +33,8 @@ from torchwright_doom.doom.game_graph import (
     TEX_E8_OFFSET,
     build_game_graph,
 )
-from torchwright_doom.doom.map_subset import build_scene_subset
+from torchwright_doom.doom.graph_inputs import build_graph_inputs
+from torchwright_doom.doom.subset import build_scene_map_data
 from torchwright.graph import Concatenate, Linear
 from torchwright.graph.attn import Attn
 from torchwright.graph.spherical_codes import index_to_vector
@@ -82,19 +83,19 @@ def _segments(half=5.0):
     ]
 
 
-def _build_prefill(module, subset, *, px, py, angle):
+def _build_prefill(module, gi, *, px, py, angle):
     max_bsp_nodes = int(module.metadata["max_bsp_nodes"])
     common = dict(
         player_x=torch.tensor([px]),
         player_y=torch.tensor([py]),
         player_angle=torch.tensor([float(angle)]),
     )
-    tex_w = subset.textures[0].shape[0]
+    tex_w = gi.textures[0].shape[0]
     rows = []
-    for tex_idx in range(len(subset.textures)):
+    for tex_idx in range(len(gi.textures)):
         tex_e8 = index_to_vector(tex_idx + TEX_E8_OFFSET)
         for col in range(tex_w):
-            pixel_data = subset.textures[tex_idx][col].flatten()
+            pixel_data = gi.textures[tex_idx][col].flatten()
             rows.append(
                 _build_inputs(
                     module,
@@ -109,8 +110,8 @@ def _build_prefill(module, subset, *, px, py, angle):
     for i in range(max_bsp_nodes):
         onehot = torch.zeros(max_bsp_nodes)
         onehot[i] = 1.0
-        if i < len(subset.bsp_nodes):
-            plane = subset.bsp_nodes[i]
+        if i < len(gi.bsp_planes):
+            plane = gi.bsp_planes[i]
             nx, ny, d = plane.nx, plane.ny, plane.d
         else:
             nx, ny, d = 0.0, 0.0, 0.0
@@ -125,12 +126,12 @@ def _build_prefill(module, subset, *, px, py, angle):
                 **common,
             )
         )
-    for i, seg in enumerate(subset.segments):
+    for i, seg in enumerate(gi.segments):
         coeffs = torch.tensor(
-            subset.seg_bsp_coeffs[i, :max_bsp_nodes],
+            gi.seg_bsp_coeffs[i, :max_bsp_nodes],
             dtype=torch.float32,
         )
-        const = torch.tensor([float(subset.seg_bsp_consts[i])], dtype=torch.float32)
+        const = torch.tensor([float(gi.seg_bsp_consts[i])], dtype=torch.float32)
         rows.append(
             _build_inputs(
                 module,
@@ -231,7 +232,11 @@ def main():
     config = _config()
     textures = default_texture_atlas()
     segs = _segments()
-    subset = build_scene_subset(segs, textures)
+    subset = build_graph_inputs(
+        build_scene_map_data(segs),
+        {f"TEX{i}": t for i, t in enumerate(textures)},
+        max_bsp_nodes=_MAX_BSP_NODES,
+    )
 
     print("\nBuilding game graph...")
     graph_io, pos_encoding = build_game_graph(

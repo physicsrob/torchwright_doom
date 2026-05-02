@@ -78,7 +78,8 @@ def play(
 
     if mode == "transformer":
         from torchwright_doom.doom.compile import compile_game, step_frame
-        from torchwright_doom.doom.map_subset import build_scene_subset
+        from torchwright_doom.doom.graph_inputs import build_graph_inputs
+        from torchwright_doom.doom.subset import build_scene_map_data
 
         segments_a = segments
         segments_b = _make_alt_segments()
@@ -95,17 +96,25 @@ def play(
             d=2048,
             chunk_size=chunk_size,
         )
-        subset_a = build_scene_subset(segments_a, textures)
-        subset_b = build_scene_subset(segments_b, textures)
-        current_subset = [subset_a]  # mutable container for level-swap
+        # Hand-authored scenes use synthetic "TEX{i}" texture names
+        # (see mapdata_from_segments); pair each name with its array.
+        textures_dict = {f"TEX{i}": t for i, t in enumerate(textures or [])}
+        gi_a = build_graph_inputs(build_scene_map_data(segments_a), textures_dict)
+        gi_b = build_graph_inputs(build_scene_map_data(segments_b), textures_dict)
+        current_inputs = [gi_a]  # mutable container for level-swap
+        # Aliased for the level-swap event handler below.
+        subset_a = gi_a
+        subset_b = gi_b
 
         def frame_fn(state, inputs):
             return step_frame(
-                module, state, inputs, current_subset[0], config, textures=textures
+                module, state, inputs, current_inputs[0], config, textures=textures
             )
 
     else:
-        current_subset = [None]  # type: ignore[list-item]
+        current_inputs = [None]  # type: ignore[list-item]
+        subset_a = None  # type: ignore[assignment]
+        subset_b = None  # type: ignore[assignment]
         trig_table = config.trig_table
         # Build the MapData + name-keyed texture dict the new renderer
         # wants, once.  Static across frames since segments don't change.
@@ -145,11 +154,11 @@ def play(
                 if event.key == pygame.K_ESCAPE:
                     running = False
                 elif event.key == pygame.K_l and mode == "transformer":
-                    if current_subset[0] is subset_a:
-                        current_subset[0] = subset_b
+                    if current_inputs[0] is subset_a:
+                        current_inputs[0] = subset_b
                         level_name = "B"
                     else:
-                        current_subset[0] = subset_a
+                        current_inputs[0] = subset_a
                         level_name = "A"
                     print(f"Level swap → {level_name} (no recompile)")
 

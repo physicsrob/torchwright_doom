@@ -21,8 +21,8 @@ from torchwright_doom.doom.embedding import (
     vocab_id,
 )
 from torchwright_doom.doom.game import GameState
+from torchwright_doom.doom.graph_inputs import GraphInputs
 from torchwright_doom.doom.input import PlayerInput
-from torchwright_doom.doom.map_subset import MapSubset
 from torchwright_doom.doom.thinking_readback import INT_IDENTIFIER_NAMES
 from torchwright_doom.doom.trace import FrameTrace, RenderStepTrace
 from torchwright.ops.quantization import DEFAULT_N_LEVELS
@@ -253,7 +253,7 @@ def run_rollout(
     py: float,
     angle: int,
     inputs: PlayerInput,
-    subset: MapSubset,
+    graph_inputs: GraphInputs,
     config: RenderConfig,
     move_speed: float = 0.3,
     turn_speed: int = 4,
@@ -271,9 +271,9 @@ def run_rollout(
         module,
         state,
         inputs,
-        subset,
+        graph_inputs,
         config,
-        textures=subset.textures,
+        textures=graph_inputs.textures,
         trace=trace,
     )
     max_walls = int(module.metadata.get("max_walls", 8))

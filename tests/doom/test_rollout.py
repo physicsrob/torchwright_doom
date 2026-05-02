@@ -35,7 +35,8 @@ from tests.doom._rollout.scenarios import SCENARIOS, Scenario
 from torchwright_doom.doom.compile import compile_game
 from torchwright_doom.doom.embedding import IDENTIFIER_NAMES, vocab_id
 from torchwright_doom.doom.input import PlayerInput
-from torchwright_doom.doom.map_subset import build_scene_subset
+from torchwright_doom.doom.graph_inputs import build_graph_inputs
+from torchwright_doom.doom.subset import build_scene_map_data
 from torchwright_doom.reference_renderer.textures import default_texture_atlas
 from torchwright_doom.reference_renderer.trig import generate_trig_table
 from torchwright_doom.reference_renderer.types import RenderConfig, Segment
@@ -81,7 +82,10 @@ class TestRollout:
         config = _box_room_config()
         textures = default_texture_atlas()
         segs = _box_room_segments()
-        subset = build_scene_subset(segs, textures)
+        subset = build_graph_inputs(
+            build_scene_map_data(segs),
+            {f"TEX{i}": t for i, t in enumerate(textures)},
+        )
         return config, textures, subset, segs
 
     @pytest.fixture(scope="class")
@@ -114,7 +118,7 @@ class TestRollout:
             py=scenario.py,
             angle=scenario.angle,
             inputs=PlayerInput(**scenario.inputs),
-            subset=subset,
+            graph_inputs=subset,
             config=config,
             move_speed=_MOVE_SPEED,
             turn_speed=_TURN_SPEED,
@@ -128,7 +132,7 @@ class TestRollout:
             py=scenario.py,
             angle=scenario.angle,
             inputs=PlayerInput(**scenario.inputs),
-            subset=subset,
+            graph_inputs=subset,
             config=config,
             move_speed=_MOVE_SPEED,
             turn_speed=_TURN_SPEED,

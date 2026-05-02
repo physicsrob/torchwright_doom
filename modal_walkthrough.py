@@ -19,20 +19,24 @@ app = modal.App("torchwright-walkthrough", image=IMAGE)
 
 
 def _scene_data(scene, tex_size):
-    """Return ``(subset, start_x, start_y, start_angle, max_coord, still, player_eye_z)``.
+    """Return ``(subset_md, graph_inputs, start_x, start_y, start_angle,
+    max_coord, still, player_eye_z)``.
 
-    ``subset`` is a fully-built :class:`MapSubset` ready to feed
-    :func:`step_frame`.  ``still`` is True when the scene should be
-    rendered without wall-following motion (E1M1's 64-wall subset
-    would walk the player out of loaded geometry within a few
-    frames).  ``player_eye_z`` is in raw DOOM world units (= sector
-    floor + 41).
+    ``subset_md`` is the renumbered, mean-centred :class:`MapData`
+    (what the reference renderer consumes).  ``graph_inputs`` is the
+    transformer-ready slice built from it.  ``still`` is True when
+    the scene should be rendered without wall-following motion
+    (E1M1's 64-wall subset would walk the player out of loaded
+    geometry within a few frames).  ``player_eye_z`` is in raw DOOM
+    world units (= sector floor + 41).
     """
-    from torchwright_doom.doom.map_subset import (
+    from torchwright_doom.doom.graph_inputs import build_graph_inputs
+    from torchwright_doom.doom.subset import (
         DOOM_PLAYER_EYE_HEIGHT,
-        build_scene_subset,
+        build_scene_map_data,
         find_sector_at,
-        load_map_subset,
+        load_wad_textures_for_subset,
+        subset_from_wad,
     )
     from torchwright_doom.reference_renderer.scenes import box_room_textured
 
@@ -41,8 +45,17 @@ def _scene_data(scene, tex_size):
             wad_path="doom1.wad",
             tex_size=tex_size,
         )
-        subset = build_scene_subset(segments, textures)
-        return subset, 0.0, 0.0, 0, 200.0, False, DOOM_PLAYER_EYE_HEIGHT
+        subset_md = build_scene_map_data(segments)
+        textures_dict = {f"TEX{i}": t for i, t in enumerate(textures)}
+        graph_inputs = build_graph_inputs(
+            subset_md, textures_dict, max_textures=32, max_bsp_nodes=128,
+        )
+        return (
+            subset_md,
+            graph_inputs,
+            0.0, 0.0, 0,
+            200.0, False, DOOM_PLAYER_EYE_HEIGHT,
+        )
     else:  # e1m1
         from torchwright_doom.doom.wad import WADReader
 
@@ -54,26 +67,25 @@ def _scene_data(scene, tex_size):
         start_angle = round(spawn.angle / 360 * 256) % 256
         spawn_floor_h = float(md.sectors[find_sector_at(md, spawn_x, spawn_y)].floor_h)
         # See walkthrough.py for the rationale behind max_walls=64.
-        # The reference renderer is scale-invariant; raw DOOM coords
-        # are fed through.  Transformer callers running E1M1 will
-        # need their own host-side scaling step.
-        subset = load_map_subset(
+        subset_md, _orig = subset_from_wad(
             wad_path="doom1.wad",
             map_name="E1M1",
             px=spawn_x,
             py=spawn_y,
             max_walls=64,
             max_bsp_nodes=96,
-            tex_size=tex_size,
+        )
+        textures_dict = load_wad_textures_for_subset(
+            "doom1.wad", subset_md, tex_size=tex_size,
+        )
+        graph_inputs = build_graph_inputs(
+            subset_md, textures_dict, max_textures=32, max_bsp_nodes=128,
         )
         return (
-            subset,
-            spawn_x,
-            spawn_y,
-            start_angle,
-            4000.0,
-            True,
-            spawn_floor_h + DOOM_PLAYER_EYE_HEIGHT,
+            subset_md,
+            graph_inputs,
+            spawn_x, spawn_y, start_angle,
+            4000.0, True, spawn_floor_h + DOOM_PLAYER_EYE_HEIGHT,
         )
 
 
@@ -108,12 +120,13 @@ def generate_transformer(
     from torchwright_doom.doom.walkthrough import generate_walkthrough, save_gif
 
     config = _config(width, height)
-    subset, start_x, start_y, start_angle, max_coord, still, eye_z = _scene_data(
-        scene, tex_size
-    )
+    (
+        subset_md, graph_inputs, start_x, start_y, start_angle,
+        max_coord, still, eye_z,
+    ) = _scene_data(scene, tex_size)
     config.player_eye_z = eye_z
-    segments = subset.segments
-    textures = subset.textures
+    segments = graph_inputs.segments
+    textures = graph_inputs.textures
 
     print(f"Compiling game graph (walls-as-tokens, {len(segments)} walls)...")
     module = compile_game(
@@ -128,7 +141,9 @@ def generate_transformer(
     )
 
     def frame_fn(state, inputs):
-        return step_frame(module, state, inputs, subset, config, textures=textures)
+        return step_frame(
+            module, state, inputs, graph_inputs, config, textures=textures,
+        )
 
     print(f"Generating {frames} transformer frames at {width}x{height}...")
     frame_list = generate_walkthrough(
@@ -160,38 +175,55 @@ def generate_reference(
     fps: int = 10,
     scale: int = 4,
 ) -> bytes:
-    from torchwright_doom.doom.game import update_state
+    from torchwright_doom.doom.game import GameState, update_state
     from torchwright_doom.doom.walkthrough import generate_walkthrough, save_gif
-    from torchwright_doom.reference_renderer import (
-        R_RenderPlayerView,
-        mapdata_from_segments,
-    )
+    from torchwright_doom.reference_renderer import R_RenderPlayerView
 
     config = _config(width, height)
-    subset, start_x, start_y, start_angle, _, still, eye_z = _scene_data(
-        scene, tex_size
-    )
+    (
+        subset_md, graph_inputs, start_x, start_y, start_angle,
+        _, still, eye_z,
+    ) = _scene_data(scene, tex_size)
     config.player_eye_z = eye_z
-    segments = subset.segments
-    textures = subset.textures
-    ref_mapdata, ref_textures = mapdata_from_segments(segments, textures)
+    segments = graph_inputs.segments
+    textures = graph_inputs.textures
+    # Reference renderer reads texture pixels by name from the
+    # subset's sidedefs.  ``graph_inputs.tex_name_to_id`` carries the
+    # name→atlas-index map; pair each name with its array.
+    ref_textures = {
+        name: graph_inputs.textures[i]
+        for name, i in graph_inputs.tex_name_to_id.items()
+    }
+    origin_x, origin_y = graph_inputs.scene_origin
 
     def frame_fn(state, inputs):
-        new_state = update_state(
-            state,
-            inputs,
-            segments,
-            config.trig_table,
+        # Player coords are in world frame; the subset MapData is
+        # mean-centred, so shift the player into subset frame for
+        # both collision (update_state reads segments) and render.
+        shifted = GameState(
+            x=state.x - origin_x,
+            y=state.y - origin_y,
+            angle=state.angle,
+            move_speed=state.move_speed,
+            turn_speed=state.turn_speed,
         )
-        bam = (new_state.angle << 24) & 0xFFFFFFFF
+        new_shifted = update_state(shifted, inputs, segments, config.trig_table)
+        bam = (new_shifted.angle << 24) & 0xFFFFFFFF
         frame = R_RenderPlayerView(
-            new_state.x,
-            new_state.y,
+            new_shifted.x,
+            new_shifted.y,
             config.player_eye_z,
             bam,
-            ref_mapdata,
+            subset_md,
             config,
             ref_textures,
+        )
+        new_state = GameState(
+            x=new_shifted.x + origin_x,
+            y=new_shifted.y + origin_y,
+            angle=new_shifted.angle,
+            move_speed=new_shifted.move_speed,
+            turn_speed=new_shifted.turn_speed,
         )
         return frame, new_state
 

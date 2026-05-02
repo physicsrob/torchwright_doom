@@ -23,8 +23,8 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from torchwright_doom.doom.game import GameState, update_state
+from torchwright_doom.doom.graph_inputs import GraphInputs
 from torchwright_doom.doom.input import PlayerInput
-from torchwright_doom.doom.map_subset import MapSubset
 from torchwright_doom.reference_renderer._legacy_oracle import (
     _ray_angle_for_column,
     project_wall,
@@ -122,14 +122,14 @@ def _ref_hits(
     return int(hit_full), int(hit_x), int(hit_y)
 
 
-def _ref_bsp_ranks(subset: MapSubset, px: float, py: float) -> np.ndarray:
+def _ref_bsp_ranks(graph_inputs: GraphInputs, px: float, py: float) -> np.ndarray:
     """Reproduce the wall stage's BSP-rank dot product."""
-    n_cols = subset.seg_bsp_coeffs.shape[1]
+    n_cols = graph_inputs.seg_bsp_coeffs.shape[1]
     side_P_vec = np.zeros(n_cols)
-    for i, node in enumerate(subset.bsp_nodes):
-        val = node.nx * px + node.ny * py + node.d
+    for i, plane in enumerate(graph_inputs.bsp_planes):
+        val = plane.nx * px + plane.ny * py + plane.d
         side_P_vec[i] = 1.0 if val > 0 else 0.0
-    return subset.seg_bsp_coeffs @ side_P_vec + subset.seg_bsp_consts
+    return graph_inputs.seg_bsp_coeffs @ side_P_vec + graph_inputs.seg_bsp_consts
 
 
 def _central_ray_renderable(
@@ -296,7 +296,7 @@ def compute_reference(
     py: float,
     angle: int,
     inputs: PlayerInput,
-    subset: MapSubset,
+    graph_inputs: GraphInputs,
     config: RenderConfig,
     move_speed: float = 0.3,
     turn_speed: int = 4,
@@ -304,18 +304,18 @@ def compute_reference(
 ) -> Reference:
     """Build a :class:`Reference` for the given scenario."""
     trig = config.trig_table
-    segs = subset.segments
+    segs = graph_inputs.segments
 
-    # ``subset.segments`` and ``subset.bsp_nodes`` are stored in
-    # mean-centred frame by ``load_map_subset``; ``(px, py)`` arrives
-    # in world frame.  Shift the player into subset frame so every
-    # arithmetic combination below uses one consistent frame.
+    # ``graph_inputs.segments`` and ``graph_inputs.bsp_planes`` are
+    # stored in mean-centred frame by the subsetter; ``(px, py)``
+    # arrives in world frame.  Shift the player into subset frame so
+    # every arithmetic combination below uses one consistent frame.
     # Velocity is a delta and unaffected by translation.
-    origin_x, origin_y = subset.scene_origin
+    origin_x, origin_y = graph_inputs.scene_origin
     px_s = px - origin_x
     py_s = py - origin_y
 
-    bsp_ranks = _ref_bsp_ranks(subset, px_s, py_s)
+    bsp_ranks = _ref_bsp_ranks(graph_inputs, px_s, py_s)
     vx, vy = _player_velocity(angle, inputs, trig, move_speed, turn_speed)
 
     walls: List[WallRef] = []
