@@ -30,6 +30,7 @@ Conventions used throughout this module:
   to get W's rank.
 """
 
+import math
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -60,6 +61,13 @@ class BspNodeSubset:
 
         side_P = 1 iff nx*x + ny*y + d > 0 (player on FRONT side)
         side_P = 0 iff nx*x + ny*y + d <= 0 (BACK side)
+
+    Planes stored inside a :class:`MapSubset` are **unit-normalized**:
+    ``nx² + ny² == 1``, so ``d`` is the signed distance from the
+    origin (in subset frame) to the plane.  ``_make_plane`` produces
+    un-normalized planes (carrying DOOM's raw ``(dx, dy)`` direction
+    vectors); :func:`load_map_subset` and :func:`build_scene_subset`
+    both normalize before storing.
     """
 
     nx: float
@@ -89,6 +97,14 @@ class MapSubset:
     subtracting ``scene_origin``, and adds it back to
     ``RESOLVED_X/Y`` on the way out.  The graph never sees
     ``scene_origin``.
+
+    BSP planes are additionally **unit-normalized** (``nx² + ny² ==
+    1``), so ``d`` is the signed distance from origin to the plane
+    rather than a raw cross-product magnitude.  Both construction
+    paths upheld this contract:
+    :func:`build_scene_subset` produces axis-aligned unit normals by
+    construction; :func:`load_map_subset` normalizes during the
+    mean-centring pass.
 
     :func:`load_map_subset` sets ``scene_origin`` to the mean of the
     selected segments' vertex coordinates so the subset's geometry
@@ -591,6 +607,16 @@ def load_map_subset(
     incoming player coords (which are in world frame) before feeding
     the graph, and adds it back when reading ``RESOLVED_X/Y``.
 
+    BSP planes are additionally **unit-normalized**.
+    :func:`_make_plane` carries DOOM's raw ``(dx, dy)`` direction
+    vectors as ``(nx, ny)`` — these can be hundreds of units long, so
+    without normalization ``d`` lands in the tens of thousands for
+    E1M1-class maps.  Dividing ``(nx, ny, d)`` by ``√(nx² + ny²)``
+    preserves the side-of-plane classification (the sign of
+    ``nx·x + ny·y + d`` is invariant under positive scaling) while
+    putting ``(nx, ny)`` on the unit circle and ``d`` in the same
+    envelope as wall coords.
+
     Mean-centring keeps subset coordinates within roughly the same
     envelope as a hand-authored ``box_room`` (a few hundred units),
     even for E1M1-class maps where walls live at thousands of units
@@ -813,13 +839,43 @@ def load_map_subset(
     #     d' = d + nx*ox + ny*oy
     # so that ``nx*x' + ny*y' + d' = nx*x + ny*y + d`` when
     # ``x' = x − ox``, ``y' = y − oy``.
+    #
+    # Then unit-normalize: divide ``(nx, ny, d')`` by
+    # ``√(nx² + ny²)``.  The plane equation and the side-of-plane
+    # classification are both invariant under positive scaling of
+    # ``(nx, ny, d)``, so this preserves ``side_P`` (and therefore the
+    # BSP rank arithmetic, which only reads side bits).  After
+    # normalization, ``(nx, ny)`` is a unit normal and ``d`` is the
+    # signed distance from origin to the plane — small magnitudes for
+    # any local geometry, which keeps every consumer of
+    # ``MapSubset.bsp_nodes`` (sandbox specs, the rollout reference
+    # helper, the graph's bsp_plane_nx/ny inputs which already declare
+    # ``value_range=(-1, 1)``) operating on coordinates inside its
+    # declared envelope.
+    #
+    # WAD ``_make_plane`` carries DOOM's raw ``(dx, dy)`` direction
+    # vectors as ``(nx, ny)`` — these can be hundreds of units long, so
+    # without normalization ``d`` lands in the tens of thousands for
+    # E1M1-class maps and ``(nx, ny)`` overflows the graph's declared
+    # ``[-1, 1]`` input range.
     shifted_bsp_nodes: List[BspNodeSubset] = []
-    for plane in bsp_nodes:
+    for old_id, plane in zip(sorted_old_ids, bsp_nodes):
+        d_shifted = plane.d + plane.nx * centroid_x + plane.ny * centroid_y
+        mag = math.sqrt(plane.nx * plane.nx + plane.ny * plane.ny)
+        if mag == 0.0:
+            # Should never happen: a valid BSP partition line has a
+            # non-zero direction vector.  Surface a malformed map
+            # rather than emit a degenerate plane that would silently
+            # mis-classify every point as ``BACK``.
+            raise ValueError(
+                f"degenerate BSP partition line at node {old_id}: "
+                f"(nx, ny) = (0, 0)"
+            )
         shifted_bsp_nodes.append(
             BspNodeSubset(
-                nx=plane.nx,
-                ny=plane.ny,
-                d=plane.d + plane.nx * centroid_x + plane.ny * centroid_y,
+                nx=plane.nx / mag,
+                ny=plane.ny / mag,
+                d=d_shifted / mag,
             )
         )
 
