@@ -86,7 +86,12 @@ class MapSubset:
     ``seg_bsp_coeffs`` has shape ``(N, max_bsp_nodes)`` — rows match
     ``segments``, columns match ``bsp_nodes``.  Unused columns (when
     fewer than ``max_bsp_nodes`` real nodes are present) are filled
-    with zeros, so they contribute nothing to rank.
+    with zeros, so they contribute nothing to rank.  Among the real
+    columns, every column has at least one non-zero entry — i.e.
+    every plane in ``bsp_nodes`` participates in at least one
+    segment's rank.  Construction paths that produce all-zero
+    columns (e.g. high-level BSP partitions where every selected
+    subsector lies on the same side) prune them before returning.
 
     ``scene_origin`` is the offset that converts world coords to
     subset coords.  Segments and BSP planes in this struct are
@@ -524,6 +529,42 @@ def _compute_scene_coefficients(
     return coeffs, consts
 
 
+def _prune_zero_coeff_columns(
+    coeffs: np.ndarray,
+    bsp_nodes: List[BspNodeSubset],
+) -> Tuple[np.ndarray, List[BspNodeSubset]]:
+    """Drop BSP planes whose coefficient column is uniformly zero.
+
+    A column of all zeros in ``seg_bsp_coeffs`` means the
+    corresponding BSP plane contributes zero to every selected
+    segment's rank, regardless of player position.  This happens
+    naturally for high-level BSP partitions where every selected
+    subsector lies on the same side: the front/back path arithmetic
+    in ``_compute_coefficients`` produces structurally zero entries.
+
+    Pruning is safe — it changes neither side bits nor rank values —
+    and tightens the contract on ``MapSubset.bsp_nodes``: every plane
+    in the returned subset participates in at least one segment's
+    rank.
+
+    Preserves the matrix shape ``(N, max_bsp_nodes)``: surviving
+    columns shift left, the rest become padding zeros.
+    """
+    n_real = len(bsp_nodes)
+    if n_real == 0:
+        return coeffs, bsp_nodes
+    nonzero_mask = np.any(coeffs[:, :n_real] != 0.0, axis=0)
+    nonzero_idx = np.where(nonzero_mask)[0]
+    if len(nonzero_idx) == n_real:
+        # Nothing to prune.
+        return coeffs, bsp_nodes
+    n_kept = len(nonzero_idx)
+    new_coeffs = np.zeros_like(coeffs)
+    new_coeffs[:, :n_kept] = coeffs[:, nonzero_idx]
+    new_bsp_nodes = [bsp_nodes[i] for i in nonzero_idx]
+    return new_coeffs, new_bsp_nodes
+
+
 def build_scene_subset(
     segments: List[Segment],
     textures: List[np.ndarray],
@@ -566,6 +607,12 @@ def build_scene_subset(
         back_counts,
         max_bsp_nodes,
     )
+    # Same contract as load_map_subset: every plane in the returned
+    # subset participates in at least one segment's rank.  For the
+    # balanced BSP over hand-authored scenes this is typically a
+    # no-op (every split discriminates by construction), but applying
+    # the helper keeps the contract uniform across construction paths.
+    coeffs, bsp_nodes = _prune_zero_coeff_columns(coeffs, bsp_nodes)
     return MapSubset(
         segments=list(segments),
         textures=list(textures),
@@ -693,6 +740,23 @@ def load_map_subset(
         old_to_new_node,
         max_bsp_nodes,
     )
+
+    # Prune planes that contribute zero to every selected segment's
+    # rank — these are typically high-level BSP partitions where all
+    # selected subsectors lie on the same side, so the front/back path
+    # arithmetic produces a structurally-zero column.  Their plane
+    # ``d`` values can lie far outside the local geometry envelope
+    # (E1M1's spawn-area subset has root-level partitions at ~1100
+    # units from origin even after mean-centring); dropping them
+    # tightens both ``MapSubset.bsp_nodes`` and the envelope of plane
+    # parameters consumers see.
+    nonzero_idx = np.where(np.any(coeffs[:, : len(bsp_nodes)] != 0.0, axis=0))[0]
+    if len(nonzero_idx) < len(bsp_nodes):
+        new_coeffs = np.zeros_like(coeffs)
+        new_coeffs[:, : len(nonzero_idx)] = coeffs[:, nonzero_idx]
+        coeffs = new_coeffs
+        bsp_nodes = [bsp_nodes[i] for i in nonzero_idx]
+        sorted_old_ids = [sorted_old_ids[i] for i in nonzero_idx]
 
     # --- 7. Convert selected segs to Segment objects ---
     # Each seg carries the front sector's floor/ceiling (always) and the
