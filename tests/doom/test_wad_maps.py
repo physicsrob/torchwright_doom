@@ -21,14 +21,12 @@ import pytest
 
 from torchwright_doom.doom.wad import (
     SUBSECTOR_FLAG,
-    BspNode,
     Linedef,
     MapData,
     Seg,
     Sector,
     Sidedef,
     Subsector,
-    Thing,
     Vertex,
     WADReader,
     _assign_tex_id,
@@ -399,6 +397,20 @@ def test_texture_atlas_count_matches_ids(wad: WADReader) -> None:
     """``len(textures) == len(name_to_id)``."""
     _, textures, name_to_id = wad.get_map_segments("E1M1", tex_size=8)
     assert len(textures) == len(name_to_id)
+
+
+def test_get_flat_loads_native_64x64_rgb(wad: WADReader) -> None:
+    """Floor/ceiling flats are raw 64×64 palette-index tiles."""
+    flat = wad.get_flat("CEIL3_5")
+    assert flat is not None
+    assert flat.shape == (64, 64, 3)
+    assert flat.min() >= 0.0 and flat.max() <= 1.0
+
+
+def test_get_flat_missing_or_non_flat_returns_none(wad: WADReader) -> None:
+    assert wad.get_flat("DOES_NOT_EXIST") is None
+    assert wad.get_flat("-") is None
+    assert wad.get_flat("STARTAN3") is None
 
 
 def test_segment_texture_ids_in_range(wad: WADReader) -> None:

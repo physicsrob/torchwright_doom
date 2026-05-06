@@ -343,6 +343,30 @@ class WADReader:
                             canvas[dx, dy] = patch[col, row] / 255.0
         return canvas
 
+    def get_flat(self, name: str) -> Optional[np.ndarray]:
+        """Load a floor/ceiling flat by name.
+
+        DOOM flats are raw 64×64 arrays of palette indices, stored
+        row-major in their lump.  The returned array follows the same
+        column-major convention as wall textures:
+        ``flat[col, row] -> RGB`` with float64 values in [0, 1].
+
+        Returns ``None`` if the lump is missing or is not a 64×64 flat.
+        """
+        if not name or name == "-" or name not in self._lumps:
+            return None
+        off, size = self._lumps[name]
+        if size != 64 * 64:
+            return None
+        indices = np.frombuffer(
+            self._data[off : off + size],
+            dtype=np.uint8,
+        ).reshape(64, 64)
+        # WAD flat data is row-major (row, col); renderer textures are
+        # column-major (col, row).
+        rgb = self.palette[indices].astype(np.float64) / 255.0
+        return rgb.transpose(1, 0, 2).copy()
+
     def get_textures(self, names: List[str]) -> Dict[str, np.ndarray]:
         """Load multiple textures by name."""
         result = {}
@@ -350,6 +374,15 @@ class WADReader:
             tex = self.get_texture(name)
             if tex is not None:
                 result[name] = tex
+        return result
+
+    def get_flats(self, names: List[str]) -> Dict[str, np.ndarray]:
+        """Load multiple floor/ceiling flats by name."""
+        result = {}
+        for name in names:
+            flat = self.get_flat(name)
+            if flat is not None:
+                result[name] = flat
         return result
 
     def list_textures(self) -> List[str]:
