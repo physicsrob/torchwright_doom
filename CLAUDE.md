@@ -62,13 +62,21 @@ flexibility, flag it. Minimizing complexity in the explanation doesn't
 reduce the complexity of the mechanism — it just hides it, and the
 user will find it later in a more frustrating way.
 
-# DOOM game graph
+# Current state of this submodule
 
-Before working on anything under `torchwright_doom/doom/`,
-`torchwright_doom/doom/stages/`, or `tests/doom/`, read
-`docs/doom_graph.md`. It documents the full pipeline: token sequence,
-phase structure, every stage's computation, feedback layouts, and
-how the graph compiles to a transformer.
+This submodule is being torn down for the spec09 port. Only
+`torchwright_doom/torchwright_doom/doom/embedding.py` survives — the
+E8 / Gray-code helpers it carries are design-independent and worth
+keeping. Everything else (the old walls-as-tokens graph, the
+reference renderer, the host loop, the walkthrough machinery, every
+test that exercised them, plus the design notes describing the old
+pipeline) has been deleted on the `port-prep` branch.
+
+The spec09 port will rebuild this submodule on top of what survives.
+Until then, this file is mostly the project's general doctrine for
+reference (communication style, debugging, doctrine rules); the
+specific guidance for working in `doom/` no longer applies because
+`doom/` is empty.
 
 # Dumb host principle
 
@@ -90,12 +98,6 @@ computation. All rendering logic — wall selection, visibility,
 distance, texture lookup, compositing decisions — lives inside the
 transformer.
 
-**Known violations** (as of 2026-04-20):
-
-- `torchwright_doom/doom/compile.py` — ceiling/floor fill. The host decides pixel color
-  based on `y < center_y`. This is rendering logic that belongs in the
-  transformer.
-
 **Never violate this principle.** If a proposed design, optimization,
 or bug fix moves computation from the transformer to the host, it is
 wrong regardless of how much simpler it would make things. If you
@@ -103,123 +105,21 @@ discover existing code that violates this principle — host-side logic
 that does anything beyond token I/O and pixel blitting — flag it to
 the user immediately and stop other work until resolved.
 
-# What determines the size of the compiled DOOM graph
-
-The compiled transformer's layer count is set by the longest
-sequential chain of ops through the graph — but that chain weaves
-across token types through attention, not just through a single
-stage.
-
-Each token type (RENDER, WALL, BSP, SORTED, etc.) has its own
-subgraph with a **critical depth**: the longest chain of real ops
-(excluding Concatenate) within that subgraph. But a token type's
-ops don't all start at layer 0. When a stage attends to another
-token type's results, the dependent ops can't begin until the
-producing stage has written those results to the residual stream.
-
-This creates a cascading chain. For example: WALL computes
-visibility data (62 ops deep). BSP attends to WALL's results,
-which aren't available until layer 36 — so BSP's dependent ops
-start at layer 36, not layer 0. WALL then attends back to BSP at
-layer 47. SORTED attends to WALL at layer 49. Each attention hop
-serializes the stages: the consuming stage waits for the producing
-stage to finish.
-
-The total layer count (currently 70) is the length of the longest
-such cross-token-type chain, not the depth of any single stage.
-Adding a new attention hop between token types can increase the
-total depth even if neither stage's own subgraph gets deeper —
-because it adds another serialization point to the chain.
-
-`make graph-stats` shows both views: the per-stage "Own Depth"
-column (the stage's internal critical depth) and the "Bottleneck
-Input" column (which cross-position input arrives latest, forcing
-that stage's dependent ops to wait).
-
-NEVER pipe `make graph-stats` through `tail`, `head`, or any other
-output-truncating filter.  The user always wants to see the full
-output.
-
 # Testing
 
-Doom tests live in `tests/doom/` and `tests/reference_renderer/`. Most
-exercise `compile_game()` and need GPU.
+No tests live in this submodule today — the spec09 port will land its
+own tests. The `make test` / `make test-local` machinery and the
+sharding scaffold in `modal_test.py` survive for the port to fill in.
 
-## Running tests
+When tests do land:
 
-ALWAYS use `make test` to run tests. NEVER invoke pytest directly.
-
-    # Full suite, sharded across A100s on Modal
-    make test
-
-    # Single file (single container, no sharding)
-    make test FILE=tests/doom/test_frame_match.py
-
-    # Keyword filter (applied to all shards)
-    make test ARGS="-k thinking_wall"
-
-    # Combine
-    make test FILE=tests/doom/test_rollout.py ARGS="-k single_step"
-
-    # CPU-only (slow — sanity-check only)
-    make test ARGS="--device cpu"
-
-## Local iteration
-
-`make test-local` runs pytest on the local machine for fast single-file
-iteration without the Modal round-trip. `FILE=` is mandatory — the
-target refuses to run a whole directory locally.
-
-    make test-local FILE=tests/doom/test_normalize.py
-    make test-local FILE=tests/doom/test_normalize.py ARGS="-k foo -v"
-
-## Critical rules
-
-- NEVER run tests in the background. Always foreground, always wait.
-- NEVER invoke pytest directly. `make test` runs the sharded Modal
-  pipeline; pytest-direct loses the sharding and the log file.
-- NEVER run tests in parallel (no pytest-xdist, no `&`, no background).
+- ALWAYS use `make test` to run them; NEVER invoke pytest directly.
+- NEVER run tests in the background; always foreground.
+- NEVER run tests in parallel (no pytest-xdist, no `&`).
 - NEVER re-run tests just because you piped output through `| tail`
   and lost it — the full output is in the log file (printed at start
   and end; `/tmp/torchwright_doom-test.log` symlinks to the latest).
   Grep that file instead.
-
-## How sharding works
-
-`make test` runs the full suite across independent A100 containers on
-Modal. Each container runs a subset of tests with exclusive GPU
-access. Configured in `modal_test.py`:
-
-- `_HEAVY_FILES` — test files with large `compile_game()` calls get
-  their own container.
-- `_MEDIUM_FILE_GROUPS` — list of file lists; each inner list shares
-  one container.
-- Everything else goes to a catch-all shard automatically.
-
-When using `FILE=`, sharding is bypassed — the file runs in a single
-container. `-k` filters via `ARGS=` apply to every shard.
-
-## Writing tests that use compile_game()
-
-`compile_game()` is expensive (~17s to compile + ~2s per `step_frame`
-on A100).
-
-1. **Class-scoped fixtures** to share the compiled module across tests
-   in the same class.
-2. **Don't pass `device="cpu"`** to `compile_headless()` or
-   `compile_game()`. The default `"auto"` uses GPU when available;
-   forcing CPU is ~8× slower.
-
-## When full-suite tests fail but `-k` passes
-
-A test that passes under `make test FILE=... ARGS="-k foo"` but fails
-when the full `tests/doom/` suite runs is almost always cross-test
-GPU state — cuBLAS algorithm cache biased by prior allocations,
-tensor-cache warmup, or scheduler nondeterminism — not a logic bug
-in the failing test. The diagnostic signature is an
-allocator-sensitive compute path or a tolerance-boundary flake (see
-*FP nondeterminism at tolerance boundaries* under *Debugging compiled
-graphs*). Investigate the ops on the failing codepath, not the test.
 
 # Numerical noise
 
@@ -236,35 +136,6 @@ what your graph's chain noise has to fit under. The full
 measure/maintain workflow for op noise lives in torchwright's
 `CLAUDE.md`.
 
-# Walkthrough
-
-`make walkthrough` compiles the DOOM game graph on a Modal A100 and
-renders a GIF walkthrough — both a transformer-rendered
-`walkthrough.gif` and a reference-rendered `reference.gif`. The
-target opens the GIFs after rendering.
-
-    # Render 10 frames (default)
-    make walkthrough
-
-    # Pass arguments through ARGS=
-    make walkthrough ARGS="--frames 5"
-    make walkthrough ARGS="--scene e1m1"
-    make walkthrough ARGS="--frames 20 --scene e1m1"
-
-Available flags: `--width`, `--height`, `--fps`, `--scale`, `--d`,
-`--d-head`, `--rows-per-patch`, `--tex-size`, `--frames`, `--scene`.
-
-## Critical rules
-
-- NEVER pipe `make walkthrough` or `make graph-stats` through `tail`,
-  `head`, or any other output-truncating filter — the user wants the
-  full output.
-- NEVER re-run `make walkthrough` just because you piped output
-  through a filter and lost it. The full output is in the log file
-  printed at the start and end of the run, with
-  `/tmp/torchwright_doom-walkthrough.log` symlinked to the latest.
-  Grep that file, don't burn another render cycle.
-
 # Running scripts on GPU
 
 **If a script needs a GPU, run it on Modal via `make modal-run`.**
@@ -272,23 +143,21 @@ Never write a new `modal_*.py` file at the repo root just to run a
 script remotely.
 
     # Run a committed module (preferred)
-    make modal-run MODULE=scripts.investigate_phase_e
+    make modal-run MODULE=<dotted.path>
 
     # Pass args through
-    make modal-run MODULE=scripts.foo ARGS="--input bar"
+    make modal-run MODULE=<dotted.path> ARGS="--input bar"
 
     # Run an arbitrary file
     make modal-run SCRIPT=path/to/one_shot.py
 
     # CPU-only shard (no GPU reservation)
-    make modal-run MODULE=scripts.some_cpu_job CPU_ONLY=1
+    make modal-run MODULE=<dotted.path> CPU_ONLY=1
 
 ## When NOT to use modal-run
 
 - **Tests** — use `make test`. Its sharding + log-file plumbing is
   not reproduced by `modal-run`.
-- **Walkthrough renders** — use `make walkthrough`. It syncs GIF
-  bytes back to the local working tree, which `modal-run` does not.
 - **Scripts that produce local artifacts** (GIFs, JSON files under
   `docs/`, etc.). `modal-run` captures stdout/stderr only; anything
   the script writes to disk stays on the Modal worker. If your
@@ -300,8 +169,8 @@ script remotely.
 ## Critical rules
 
 - NEVER write a new `modal_*.py` at the repo root just to run a
-  one-off investigation. Put the script under `scripts/` (or
-  `tests/` if it's really a test) and run it via `make modal-run`.
+  one-off investigation. Put the script under a `scripts/` directory
+  (or `tests/` if it's really a test) and run it via `make modal-run`.
 - NEVER duplicate the Modal image definition. Import `IMAGE` from
   `modal_image.py`.
 - NEVER re-run `make modal-run` just because you piped output
@@ -506,13 +375,7 @@ the op's measured noise and GPU FP variation.  If a cond lives at
 its budget, that's brittle — either widen the tolerance (cheap,
 biases the cond "on") or tighten the upstream compute so the cond
 lands further from zero (principled, often requires graph-level
-changes).  Full-suite-only test regressions (passes under `-k`,
-fails in the full suite) are the most common way this bites; see
-*When full-suite tests fail but `-k` passes* under *Testing*.
-
-Worked example: `_VIS_C_TOL = 0.01` in
-`torchwright_doom/doom/stages/wall.py`, widened from the default
-`0.005`.
+changes).
 
 ## Triage sequence for wrong output
 

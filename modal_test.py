@@ -24,31 +24,23 @@ app = modal.App("torchwright-doom-test", image=IMAGE)
 # Simple file-level sharding.  Heavy compiled-test files get their
 # own container; everything else is batched together.
 # New test files are caught by the catch-all shard automatically.
+#
+# Empty until the spec09 port lands tests.  When you add a heavy
+# compiled-test file, list it in _HEAVY_FILES; medium-weight groups
+# go in _MEDIUM_FILE_GROUPS.  Anything not listed is picked up by the
+# catch-all shard at the bottom of SHARDS.
 
-_HEAVY_FILES = [
-    "tests/doom/test_rollout.py",
-    "tests/doom/test_rollout_walkthrough.py",
-    "tests/doom/test_rollout_e1m1.py",
-    "tests/doom/test_frame_match.py",
-    "tests/doom/test_affine_bounds.py",
-]
+_HEAVY_FILES: list[str] = []
 
-# Each inner list becomes one container.  Splitting medium files across
-# multiple groups keeps any single shard from dominating wall time.
-_MEDIUM_FILE_GROUPS: list[list[str]] = [
-    [
-        "tests/doom/test_parametric_intersection.py",
-        "tests/doom/test_render_graph_precision.py",
-        "tests/doom/test_wad_maps.py",
-    ],
-]
+_MEDIUM_FILE_GROUPS: list[list[str]] = []
 
 _ALL_NAMED_FILES = _HEAVY_FILES + [f for g in _MEDIUM_FILE_GROUPS for f in g]
 
 SHARDS = [
     *_HEAVY_FILES,
     *(" ".join(group) for group in _MEDIUM_FILE_GROUPS),
-    "tests " + " ".join(f"--ignore={f}" for f in _ALL_NAMED_FILES),
+    "tests "
+    + (" ".join(f"--ignore={f}" for f in _ALL_NAMED_FILES) if _ALL_NAMED_FILES else ""),
 ]
 
 

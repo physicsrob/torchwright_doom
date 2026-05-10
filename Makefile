@@ -35,20 +35,16 @@ test-local:
 		echo "       test-local runs pytest on the local machine and must target" >&2 ; \
 		echo "       a single file to avoid accidentally running the whole suite" >&2 ; \
 		echo "       (which belongs on Modal via 'make test')." >&2 ; \
-		echo "Example: make test-local FILE=tests/doom/test_normalize.py" >&2 ; \
+		echo "Example: make test-local FILE=tests/path/to_test.py" >&2 ; \
 		exit 2 ; \
 	fi
 	uv run pytest $(FILE) $(ARGS)
-
-.PHONY: graph-stats
-graph-stats:
-	uv run python graph_stats.py $(ARGS)
 
 .PHONY: modal-run
 modal-run:
 	@if [ -z "$(MODULE)$(SCRIPT)" ]; then \
 	    echo "Error: MODULE=<dotted.name> or SCRIPT=<path> required." >&2 ; \
-	    echo "Example: make modal-run MODULE=scripts.investigate_phase_e" >&2 ; \
+	    echo "Example: make modal-run MODULE=<some.committed.module>" >&2 ; \
 	    exit 2 ; \
 	fi
 	@bash -c ' \
@@ -71,21 +67,3 @@ modal-run:
 		exit $$rc \
 	'
 
-.PHONY: walkthrough
-walkthrough:
-	@bash -c ' \
-		LOGFILE=/tmp/torchwright_doom-walkthrough-$$(date +%Y%m%d-%H%M%S).log ; \
-		ln -sfn "$$LOGFILE" /tmp/torchwright_doom-walkthrough.log ; \
-		echo "=== Log file: $$LOGFILE ===" | tee "$$LOGFILE" ; \
-		echo "=== Rendering walkthrough on Modal ===" | tee -a "$$LOGFILE" ; \
-		start=$$(date +%s) ; \
-		uv run modal run modal_walkthrough.py $(ARGS) 2>&1 | tee -a "$$LOGFILE" ; \
-		rc=$${PIPESTATUS[0]} ; \
-		end=$$(date +%s) ; \
-		echo "" | tee -a "$$LOGFILE" ; \
-		echo "=== Finished in $$((end - start))s (exit $$rc) ===" | tee -a "$$LOGFILE" ; \
-		echo "=== Log file: $$LOGFILE ===" | tee -a "$$LOGFILE" ; \
-		exit $$rc \
-	'
-	xdg-open walkthrough.gif
-	xdg-open reference.gif
