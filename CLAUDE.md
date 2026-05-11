@@ -304,9 +304,10 @@ specific attention node and query position:
     print(ap.top(k=5, head=0))  # top-5 keys by weight
 
 `ap.weights` is `(n_heads, n_keys)` and `ap.logits` is the same
-shape.  Useful for diagnosing softmax concentration failures
-(the attention isn't picking a single key) — the symptom behind
-the historical angle-192 rendering artifact.
+shape.  Useful for diagnosing softmax concentration failures —
+the attention isn't picking a single key, so it blends values
+instead.  The fix is upstream: widen the score gap (raise the
+gain on the matching term) or sharpen the softmax temperature.
 
 ## probe_layer_diff — drift tracking
 
