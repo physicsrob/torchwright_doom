@@ -4,9 +4,8 @@ Mirrors the four checks called out in the embedding-port plan:
 
 1. Total cardinality fits the 2^17 budget.
 2. Shape sanity: every row's E8 category code is non-zero, slot raw
-   columns sit in [0, 1], the K column carries small-int slot values
-   for types that have one, and the Gray-code block matches
-   ``gray_code_16(k, levels)`` on large-cardinality slot rows.
+   columns sit in [0, 1], and the digit-quad block on every slot row
+   matches ``digit_quad_row(slot, slot_value)``.
 3. Derived-column round-trip: for a sample of tokens spanning each
    type that declares ``derived`` columns, the values in W_EMBED match
    the declared functions evaluated on the same slot values.
@@ -23,15 +22,16 @@ import pytest
 import torch
 
 from torchwright_doom.embedding import (
+    BASE,
+    CENTER,
     D_CATEGORY,
-    D_GRAY_PAYLOAD,
     DEFAULT_MAX_CARDINALITY,
-    MAX_INT_K,
     TOKEN_VOCAB,
     W_EMBED,
-    gray_code_16,
+    digit_quad_query_columns_for,
+    digit_quad_row,
 )
-from torchwright_doom.tokens import IntSlot
+from torchwright_doom.tokens import FloatSlot, IntSlot
 from torchwright_doom.vocab import (
     ANGLE_BAM,
     ANGLE_VALUE,
@@ -58,8 +58,9 @@ def test_cardinality_fits_budget() -> None:
 def test_shape_sanity() -> None:
     layout = TOKEN_VOCAB.layout
     assert W_EMBED.shape == (TOKEN_VOCAB.n_rows, layout.d_embed)
-    # Every row has a non-zero category code: E8 codes are unit-scale
-    # vectors so the per-row norm of cols [0:8] is bounded away from 0.
+    # Every row has a non-zero category code: E8 codes are scaled (10·)
+    # unit vectors, so the per-row norm of cols [0:8] is bounded away
+    # from 0.
     cat_norms = W_EMBED[:, 0:D_CATEGORY].norm(dim=1)
     assert (cat_norms > 1.0).all(), (
         f"some rows have near-zero E8 category code (min norm "
@@ -79,52 +80,112 @@ def test_raw_slot_columns_in_unit_interval() -> None:
         )
 
 
-def test_k_column_for_small_int_types() -> None:
-    """SEG's ``i`` slot is the first IntSlot fitting in [0, 255], so
-    every SEG row carries ``SEG.i`` in the K column."""
+def test_digit_quad_block_widths_match_cardinality() -> None:
+    """Every (type, slot) block width is 2 (cardinality ≤ 256) or 4
+    (cardinality 257..65536), matching ``digit_quad_query_columns_for``."""
     layout = TOKEN_VOCAB.layout
-    seg_start, _seg_end = TOKEN_VOCAB.type_to_row_range[SEG]
-    # SEG rows enumerate (i, is_first_of_ss) in declaration order with
-    # `is_first_of_ss` varying fastest, so row offset = i * 2 + flag.
-    n_i = SEG.slots["i"].hi - SEG.slots["i"].lo
-    for i in range(0, n_i):
-        for flag in range(2):
-            row = seg_start + i * 2 + flag
-            k_val = W_EMBED[row, layout.k_col].item()
-            assert k_val == float(i), (
-                f"SEG i={i} flag={flag}: K col = {k_val}, expected {i}"
+    for (type_name, slot_name), (_, n_cols) in layout.digit_quad_columns.items():
+        t = layout.types_by_name[type_name]
+        slot = t.slots[slot_name]
+        digits, expected_n = digit_quad_query_columns_for(slot)
+        assert n_cols == expected_n, (
+            f"{type_name}.{slot_name}: layout width {n_cols} != "
+            f"digit_quad_query_columns_for {expected_n}"
+        )
+        cardinality = (
+            slot.hi - slot.lo if isinstance(slot, IntSlot) else slot.levels
+        )
+        if cardinality <= 256:
+            assert n_cols == 2
+        else:
+            assert n_cols == 4
+        # Other types' rows should leave this block at 0.
+        start, _ = TOKEN_VOCAB.type_to_row_range[t]
+        col_start, _ = layout.digit_quad_columns[(type_name, slot_name)]
+        # Pick a non-empty foreign type to spot-check zeros (use the
+        # first type whose name differs).
+        for foreign in TOKEN_VOCAB.types:
+            if foreign.name == type_name:
+                continue
+            f_start, f_end = TOKEN_VOCAB.type_to_row_range[foreign]
+            if f_end == f_start:
+                continue
+            f_rows = W_EMBED[
+                f_start:f_end,
+                col_start : col_start + n_cols,
+            ]
+            assert torch.all(f_rows == 0), (
+                f"foreign type {foreign.name} has non-zero values in "
+                f"{type_name}.{slot_name} digit-quad block"
             )
-    # ANGLE_VALUE has IntSlot but range straddles 0 (lo=-4096), so it
-    # falls out of the K-slot eligibility. Its rows leave K at 0.
-    av_start, _ = TOKEN_VOCAB.type_to_row_range[ANGLE_VALUE]
-    assert W_EMBED[av_start, layout.k_col].item() == 0.0
+            break
 
 
-def test_gray_code_matches_helper_for_value_rows() -> None:
+def _digit_quad_block_for(
+    type_name: str, slot_name: str, row: torch.Tensor
+) -> torch.Tensor:
     layout = TOKEN_VOCAB.layout
-    value_start, _value_end = TOKEN_VOCAB.type_to_row_range[VALUE]
-    levels = VALUE.slots["v"].levels
-    for k in [0, 1, 100, 32767, 65535]:
+    start, n = layout.digit_quad_columns[(type_name, slot_name)]
+    return row[start : start + n]
+
+
+def test_digit_quad_payload_value_slot() -> None:
+    """VALUE.v is a 65,536-level FloatSlot — every row's digit-quad
+    block is the 4-wide ``digit_quad_row(slot, slot_value)`` payload
+    for that row's quantized value."""
+    layout = TOKEN_VOCAB.layout
+    value_start, _ = TOKEN_VOCAB.type_to_row_range[VALUE]
+    slot = VALUE.slots["v"]
+    span = slot.hi - slot.lo
+    for k in [0, 1, 100, 32767, 32768, 65534, 65535]:
+        quantized = slot.lo + (k / (slot.levels - 1)) * span
         row = W_EMBED[value_start + k]
-        expected = gray_code_16(k, levels)
-        actual = row[layout.gray_start : layout.gray_start + D_GRAY_PAYLOAD]
-        assert torch.equal(actual, expected), (
-            f"Gray code mismatch at VALUE row k={k}"
+        actual = _digit_quad_block_for("value", "v", row)
+        expected = digit_quad_row(slot, quantized)
+        assert torch.allclose(actual, expected, atol=1e-3), (
+            f"VALUE.v digit-quad mismatch at k={k}: actual={actual} "
+            f"expected={expected}"
         )
 
 
-def test_gray_code_matches_helper_for_angle_value_rows() -> None:
+def test_digit_quad_payload_angle_value_slot() -> None:
+    """ANGLE_VALUE.angle is a 8,192-level IntSlot — 4-wide digit-quad
+    block on every row."""
     layout = TOKEN_VOCAB.layout
     av_start, _ = TOKEN_VOCAB.type_to_row_range[ANGLE_VALUE]
-    angle_slot = ANGLE_VALUE.slots["angle"]
-    levels = angle_slot.hi - angle_slot.lo
-    for idx in [0, 1, 1024, levels - 1]:
-        row = W_EMBED[av_start + idx]
-        expected = gray_code_16(idx, levels)
-        actual = row[layout.gray_start : layout.gray_start + D_GRAY_PAYLOAD]
-        assert torch.equal(actual, expected), (
-            f"Gray code mismatch at ANGLE_VALUE idx={idx}"
+    slot = ANGLE_VALUE.slots["angle"]
+    levels = slot.hi - slot.lo
+    for k in [0, 1, 256, 1024, 4095, levels - 1]:
+        angle_value = slot.lo + k
+        row = W_EMBED[av_start + k]
+        actual = _digit_quad_block_for("angleValue", "angle", row)
+        expected = digit_quad_row(slot, angle_value)
+        assert torch.allclose(actual, expected, atol=0.0), (
+            f"ANGLE_VALUE.angle digit-quad mismatch at k={k}: "
+            f"actual={actual} expected={expected}"
         )
+
+
+def test_digit_quad_payload_small_int_slot() -> None:
+    """SEG has two IntSlots both with cardinality ≤ 256 → 2-wide
+    blocks."""
+    layout = TOKEN_VOCAB.layout
+    seg_start, _ = TOKEN_VOCAB.type_to_row_range[SEG]
+    n_i = SEG.slots["i"].hi - SEG.slots["i"].lo
+    for i in [0, 1, 5, n_i - 1]:
+        for flag in [0, 1]:
+            row_idx = seg_start + i * 2 + flag
+            row = W_EMBED[row_idx]
+
+            actual_i = _digit_quad_block_for("seg", "i", row)
+            expected_i = digit_quad_row(SEG.slots["i"], i)
+            assert torch.allclose(actual_i, expected_i)
+
+            actual_flag = _digit_quad_block_for("seg", "is_first_of_ss", row)
+            expected_flag = digit_quad_row(
+                SEG.slots["is_first_of_ss"], flag
+            )
+            assert torch.allclose(actual_flag, expected_flag)
 
 
 def _angle_row(angle: int) -> torch.Tensor:
@@ -222,6 +283,7 @@ def test_cross_check_against_sandbox() -> None:
     sb_api = pytest.importorskip("doom_sandbox.api")
     sb_runtime = pytest.importorskip("doom_sandbox.runtime.embedding")
 
+    Derived = sb_api.Derived
     sb_angle_value = sb_api.TokenType(
         "tw_doom_angleValue",
         slots={
@@ -229,8 +291,12 @@ def test_cross_check_against_sandbox() -> None:
                 -ANGLE_BAM // 2,
                 ANGLE_BAM // 2,
                 derived={
-                    "sin": lambda a: math.sin(a * 2 * math.pi / ANGLE_BAM),
-                    "cos": lambda a: math.cos(a * 2 * math.pi / ANGLE_BAM),
+                    "sin": Derived(
+                        lambda a: math.sin(a * 2 * math.pi / ANGLE_BAM)
+                    ),
+                    "cos": Derived(
+                        lambda a: math.cos(a * 2 * math.pi / ANGLE_BAM)
+                    ),
                 },
             ),
         },
@@ -248,10 +314,10 @@ def test_cross_check_against_sandbox() -> None:
 
         our_row = _angle_row(angle)
         for derived_name in ("sin", "cos"):
-            sb_col = sb_vocab.layout.derived_columns[
+            sb_col_start, _width = sb_vocab.layout.derived_columns[
                 (sb_angle_value.name, "angle", derived_name)
             ]
-            sb_value = float(sb_row[sb_col])
+            sb_value = float(sb_row[sb_col_start])
             our_col = layout.derived_columns[derived_name]
             our_value = our_row[our_col].item()
             assert math.isclose(sb_value, our_value, abs_tol=1e-6), (

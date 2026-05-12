@@ -7,47 +7,50 @@ combination across the vocab's ``TokenType`` list, producing one
 against ``W_EMBED``; on the output side, the matching projection
 through ``W_EMBED.T`` recovers the next token via argmax.
 
-The layout follows the spec09 sandbox design (see
-``doom_sandbox/runtime/embedding.py``) but produces a torchwright-shaped
-fp32 tensor. Each row carries:
+Each row carries:
 
-  cols [0 :  8]          — 8-wide E8 category code for the token's
-                            ``TokenType``. All rows of a given type
-                            share the same code; the slot/derived
-                            columns disambiguate within a type.
-  per-(type, slot) cols  — one column per (type, slot). The row's
-                            slot value is written normalized:
-                            ``(v - lo) / (hi - lo)`` for ``IntSlot``,
-                            ``(2k + 1) / (2 * levels)`` for the
-                            ``k``-th ``FloatSlot`` level. Columns
-                            for slots the row's type doesn't carry
-                            stay 0.
-  Gray-code block (16)   — 16-wide ±1 Gray-like payload for rows whose
-                            type has a large-cardinality slot
-                            (``>= GRAY_CODE_MIN_CARDINALITY``). Helps
-                            host-side argmax resolve adjacent slot
-                            values via Hamming-1 separation.
-  K column (1)           — small-integer literal channel. For rows
-                            whose first ``IntSlot`` value is in
-                            ``[0, MAX_INT_K]``, this column carries
-                            that value as a float. Lets attention
-                            recover the integer directly without a
-                            decode Linear.
-  per-derived-name cols  — one column per distinct ``derived_name``
-                            declared on any slot in the vocab.
-                            Token types are mutually exclusive at
-                            inference, so columns are shared across
-                            types: ``x_oh_007`` is one column whether
-                            it came from ``EMIT_X1.x`` or
-                            ``WALL_COLUMN.x``. The ``Layout`` asserts
-                            that same-named declarations agree on
-                            their function output by sampling at
-                            construction time.
+  cols [0 :  8]               — 8-wide E8 category code for the token's
+                                 ``TokenType``. All rows of a given type
+                                 share the same code; the slot / derived
+                                 columns disambiguate within a type.
+  per-(type, slot) raw col    — one column per (type, slot). The row's
+                                 slot value is written normalized:
+                                 ``(v - lo) / (hi - lo)`` for ``IntSlot``,
+                                 ``(2k + 1) / (2 * levels)`` for the
+                                 ``k``-th ``FloatSlot`` level. Columns
+                                 for slots the row's type doesn't carry
+                                 stay 0.
+  per-(type, slot) digit-quad — 2- or 4-wide block carrying a digit-
+                                 quadratic payload of the slot's integer
+                                 step index ``k``. The block lets the
+                                 producer query ``[2·hi_q_c, 1,
+                                 2·lo_q_c, 1]`` (the centered base-256
+                                 digits of the predicted ``q``) and have
+                                 the dot product against any candidate
+                                 row equal
+                                 ``-(hi - hi_q)² - (lo - lo_q)² +
+                                 const`` — argmax over a type's rows
+                                 picks the nearest byte pair to the
+                                 query. One digit (2 cols) for slots
+                                 with cardinality ≤ 256, two digits
+                                 (4 cols) for cardinality 257..65536.
+  per-derived-name cols       — one column per distinct ``derived_name``
+                                 declared on any slot in the vocab.
+                                 Token types are mutually exclusive at
+                                 inference, so columns are shared across
+                                 types: ``x_oh_007`` is one column whether
+                                 it came from ``EMIT_X1.x`` or
+                                 ``WALL_COLUMN.x``. The ``Layout`` asserts
+                                 that same-named declarations agree on
+                                 their function output by sampling at
+                                 construction time.
 
-Drops the M4-specific slot-onehot / is_any_identifier / is_value_category
-flags from the previous embedding — those were keyed to M4's
-``IDENTIFIER_NAMES`` and have no counterpart under the spec09 vocab.
-The E8 + Gray + raw + derived layout is what survives.
+The digit-quad block replaces the older 16-wide Gray-code payload and
+the 1-wide K column. The Gray-code design needed a 4096 / 8192 / 16384-
+peak triangle-wave PWL chain on the producer side (~3 MLP sublayers)
+to lay down a matching pattern from a computed ``q``. The digit-quad
+encoder is one vector-PWL staircase (the high byte) plus affine math
+(the low byte) — ~2 sublayers, and every slot uses the same recipe.
 """
 
 from __future__ import annotations
@@ -73,15 +76,23 @@ from .vocab import VOCAB_TYPES
 
 D_CATEGORY: int = 8
 
-GRAY_CODE_MIN_CARDINALITY: int = 256
-"""Slot rows below this cardinality skip the Gray-code block — their
-raw column already separates rows by ~1 LSB. The block is reserved
-for VALUE / ANGLE_VALUE-style payload slots."""
+BASE: int = 256
+"""Digit base for the digit-quadratic block. Splits any step index
+``k`` into ``hi = k // BASE`` and ``lo = k % BASE`` (both bytes)."""
 
-D_GRAY_PAYLOAD: int = 16
-D_K_SLOT: int = 1
-MAX_INT_K: int = 255
-"""Max integer literal stored in the K column."""
+CENTER: float = (BASE - 1) / 2
+"""Center of the byte range [0, BASE). Both row and query coordinates
+are stored as ``byte - CENTER`` so the quadratic-difference math is
+balanced around zero."""
+
+MAX_INT_K_PER_DIGIT: int = BASE - 1
+"""Maximum integer per digit, kept here for callers that want to
+assert their precomputed indices fit."""
+
+MAX_CARDINALITY_PER_BLOCK: int = BASE * BASE
+"""Largest slot cardinality supported by a 2-digit block. Slots beyond
+this would need a 3-digit recursion (not implemented; would only kick
+in if a slot grew past 65,536 levels)."""
 
 # Range for E8 category code indices. Any 89 indices in [0, 1024) give
 # distinct 8-wide codes; we assign them sequentially per-type. The
@@ -91,40 +102,99 @@ _MAX_E8_INDEX: int = 1024
 
 
 # ---------------------------------------------------------------------------
-# Gray-code payload helper — carried over from the M4 embedding.
-#
-# For a row representing the k-th level of a large-cardinality slot,
-# the encoder lays down the 16-wide ±1 pattern that
-# `compare(T_m(x_k), 0.5)` produces at `x_k = (2k+1) / (2·levels)`
-# for m = 1, 2, 4, ..., 2^15. Adjacent k differ in exactly one bit
-# (Hamming 1), giving a ≥ 1.75 dot-product margin between any two
-# rows within the same type — clean host-side argmax to the nearest k.
-#
-# The shifted grid avoids float32 round-to-0.5 ambiguity that
-# ``k / (levels - 1)`` would hit at certain k for the highest m.
+# Digit-quadratic encoding helpers
 # ---------------------------------------------------------------------------
 
 
-def gray_code_16(k: int, levels: int) -> torch.Tensor:
-    """Return the 16-wide ±1 pattern for the ``k``-th of ``levels``
-    quantization steps.
+def _digit_count_for_cardinality(cardinality: int) -> int:
+    """Pick 1 or 2 digits based on a slot's cardinality.
 
-    Bit 0 is ``sign(x_k - 0.5)``; bits 1..15 are
-    ``sign(T_{2^(i-1)}(x_k) - 0.5)`` where
-    ``T_m(x) = 1 - |2·frac(m·x) - 1|`` is the m-peak triangle wave.
-    ``x_k = (2k + 1) / (2 · levels)`` is the encoder's shifted grid.
+    ``cardinality`` is the number of distinct values the slot takes
+    (``IntSlot.hi - IntSlot.lo`` or ``FloatSlot.levels``). Slots with
+    > ``MAX_CARDINALITY_PER_BLOCK`` levels are not supported.
     """
-    assert 0 <= k < levels, f"gray_code_16 out of range: k={k}, levels={levels}"
-    x = (2 * k + 1) / (2.0 * levels)
-    bits = torch.empty(D_GRAY_PAYLOAD, dtype=torch.float32)
-    bits[0] = 1.0 if x > 0.5 else -1.0
-    for i in range(1, D_GRAY_PAYLOAD):
-        m = 1 << (i - 1)
-        y = m * x
-        y_frac = y - math.floor(y)
-        feature = 1.0 - abs(2.0 * y_frac - 1.0)
-        bits[i] = 1.0 if feature > 0.5 else -1.0
-    return bits
+    if cardinality <= 0:
+        raise ValueError(f"cardinality must be > 0: got {cardinality}")
+    if cardinality <= BASE:
+        return 1
+    if cardinality <= MAX_CARDINALITY_PER_BLOCK:
+        return 2
+    raise ValueError(
+        f"cardinality {cardinality} exceeds the 2-digit digit-quadratic "
+        f"block limit ({MAX_CARDINALITY_PER_BLOCK}). Add a 3-digit "
+        f"recursion if the vocab grows a slot this wide."
+    )
+
+
+def digit_quad_query_columns_for(
+    slot: IntSlot | FloatSlot,
+) -> tuple[int, int]:
+    """Return ``(digit_count, n_cols)`` for a slot's digit-quad block.
+
+    Companion to :func:`digit_quad_row`: producer-side emit helpers use
+    this to know how wide a block to write and how to lay out the
+    digit columns. ``digit_count`` is 1 or 2; ``n_cols`` is
+    ``2 * digit_count`` (each digit contributes a pair
+    ``[d_c, -d_c²]``).
+    """
+    cardinality = _slot_levels(slot)
+    digits = _digit_count_for_cardinality(cardinality)
+    return digits, 2 * digits
+
+
+def digit_quad_row(
+    slot: IntSlot | FloatSlot, slot_value: int | float
+) -> torch.Tensor:
+    """Build the digit-quadratic payload for a row representing
+    ``slot=slot_value``.
+
+    Splits the integer step index ``k = slot_value_to_step_index(slot,
+    slot_value)`` into base-256 digits and emits the centered
+    ``[d_c, -d_c²]`` pair for each:
+
+    * 1 digit (cardinality ≤ 256):
+      ``[lo_c, -lo_c²]`` where ``lo_c = k - CENTER``.
+    * 2 digits (cardinality ≤ 65,536):
+      ``[hi_c, -hi_c², lo_c, -lo_c²]`` where ``hi = k // 256``,
+      ``lo = k % 256``, and each ``*_c = byte - CENTER``.
+
+    The producer side (see ``emit.py``) computes a continuous query
+    ``[2·hi_q_c, 1, 2·lo_q_c, 1]``; the dot product against this row
+    equals ``-(hi - hi_q)² - (lo - lo_q)² + const``, so argmax over a
+    type's rows picks the nearest byte pair to ``q``.
+    """
+    cardinality = _slot_levels(slot)
+    digits = _digit_count_for_cardinality(cardinality)
+    k = _step_index_for(slot, slot_value)
+    if not (0 <= k < cardinality):
+        raise ValueError(
+            f"step index {k} out of range for slot with cardinality "
+            f"{cardinality} (slot_value={slot_value!r})"
+        )
+
+    if digits == 1:
+        lo_c = float(k) - CENTER
+        return torch.tensor([lo_c, -lo_c * lo_c], dtype=torch.float32)
+
+    hi = k // BASE
+    lo = k % BASE
+    hi_c = float(hi) - CENTER
+    lo_c = float(lo) - CENTER
+    return torch.tensor(
+        [hi_c, -hi_c * hi_c, lo_c, -lo_c * lo_c], dtype=torch.float32
+    )
+
+
+def _step_index_for(
+    slot: IntSlot | FloatSlot, slot_value: int | float
+) -> int:
+    """Integer step index for ``slot_value`` against ``slot``'s grid."""
+    if isinstance(slot, IntSlot):
+        return int(slot_value) - slot.lo
+    span = slot.hi - slot.lo
+    if span <= 0 or slot.levels <= 1:
+        return 0
+    return round((float(slot_value) - slot.lo) / span * (slot.levels - 1))
 
 
 # ---------------------------------------------------------------------------
@@ -150,11 +220,13 @@ class Layout:
     * ``e8_indices`` — map ``type_name -> int E8 index`` (the row at
       ``type_name`` writes ``index_to_vector(e8_indices[type_name])``
       into the category block).
-    * ``slot_columns`` — map ``(type_name, slot_name) -> int column``.
+    * ``slot_columns`` — map ``(type_name, slot_name) -> int column``
+      (the raw normalized slot column).
+    * ``digit_quad_columns`` — map
+      ``(type_name, slot_name) -> (start_col, n_cols)`` for the
+      per-slot digit-quad block (2 or 4 columns).
     * ``derived_columns`` — map ``derived_name -> int column`` (shared
       across types — see docstring at top of file).
-    * ``gray_start`` / ``k_col`` — bases for the Gray-code block and
-      the K literal column.
     """
 
     def __init__(self, types: list[TokenType]):
@@ -188,16 +260,16 @@ class Layout:
                 self.slot_kinds[(t.name, slot_name)] = slot
                 col += 1
 
-        # Gray-code block: shared across all types with a
-        # large-cardinality slot. The row computes which slot drives
-        # it by `_gray_slot_for_type` — at most one such slot per type
-        # in our vocab.
-        self.gray_start: int = col
-        col += D_GRAY_PAYLOAD
-
-        # K literal column.
-        self.k_col: int = col
-        col += D_K_SLOT
+        # Per-(type, slot) digit-quadratic blocks. Each slot gets its
+        # own block — output-side emit only ever needs one type's
+        # columns; other types' digit-quad cols stay 0 in both the
+        # query and the rows of other types.
+        self.digit_quad_columns: dict[tuple[str, str], tuple[int, int]] = {}
+        for t in types:
+            for slot_name, slot in t.slots.items():
+                _, n_cols = digit_quad_query_columns_for(slot)
+                self.digit_quad_columns[(t.name, slot_name)] = (col, n_cols)
+                col += n_cols
 
         # Derived columns: shared by name across types. Verify
         # cross-type agreement by sampling each function.
@@ -214,33 +286,6 @@ class Layout:
                         col += 1
 
         self.d_embed: int = col
-
-        # Map each type to the (slot_name) whose value drives the
-        # Gray code / K column for that type, if any.
-        self._gray_slot_by_type: dict[str, str | None] = {}
-        self._k_slot_by_type: dict[str, str | None] = {}
-        for t in types:
-            gray_slot: str | None = None
-            k_slot: str | None = None
-            for slot_name, slot in t.slots.items():
-                cardinality = (
-                    slot.hi - slot.lo if isinstance(slot, IntSlot)
-                    else slot.levels
-                )
-                if (
-                    gray_slot is None
-                    and cardinality >= GRAY_CODE_MIN_CARDINALITY
-                ):
-                    gray_slot = slot_name
-                if (
-                    k_slot is None
-                    and isinstance(slot, IntSlot)
-                    and slot.lo >= 0
-                    and slot.hi - 1 <= MAX_INT_K
-                ):
-                    k_slot = slot_name
-            self._gray_slot_by_type[t.name] = gray_slot
-            self._k_slot_by_type[t.name] = k_slot
 
     def _register_derived(
         self,
@@ -282,12 +327,6 @@ class Layout:
                     f"{sample_value!r}: previously {existing.expected!r}, "
                     f"now {expected!r} (declared on {t.name}.{slot_name})."
                 )
-
-    def gray_slot_for(self, type_name: str) -> str | None:
-        return self._gray_slot_by_type.get(type_name)
-
-    def k_slot_for(self, type_name: str) -> str | None:
-        return self._k_slot_by_type.get(type_name)
 
 
 # ---------------------------------------------------------------------------
@@ -407,7 +446,7 @@ def _build_w_embed(vocab: TokenVocab) -> torch.Tensor:
     """Construct W_EMBED in numpy column-by-column.
 
     The per-row, per-derived-column Python loop the docstring describes
-    is too slow on the full ~120k-row × ~325-derived vocab (35s+ at
+    is too slow on the full ~120k-row × ~330-derived vocab (35s+ at
     import time, dominated by torch element-assign overhead). The
     implementation below does the same writes column-batched in numpy
     and only converts to torch once at the end.
@@ -441,34 +480,16 @@ def _build_w_embed(vocab: TokenVocab) -> torch.Tensor:
             raw_col = layout.slot_columns[(t.name, slot_name)]
             w[start:end, raw_col] = _normalized_slot_column(slot, idxs)
 
+            dq_start, dq_n = layout.digit_quad_columns[(t.name, slot_name)]
+            w[start:end, dq_start : dq_start + dq_n] = _digit_quad_block(
+                idxs, dq_n
+            )
+
             for derived_name, fn in slot.derived.items():
                 col = layout.derived_columns[derived_name]
                 w[start:end, col] = _evaluate_derived(
                     fn, slot_value_arrays[slot_name]
                 )
-
-        gray_slot_name = layout.gray_slot_for(t.name)
-        if gray_slot_name is not None:
-            s_idx = list(t.slots).index(gray_slot_name)
-            slot = t.slots[gray_slot_name]
-            levels = _slot_levels(slot)
-            idxs = slot_indices[:, s_idx]
-            gray_block = _gray_code_block(idxs, levels)
-            w[start:end, layout.gray_start : layout.gray_start + D_GRAY_PAYLOAD] = (
-                gray_block
-            )
-
-        k_slot_name = layout.k_slot_for(t.name)
-        if k_slot_name is not None:
-            s_idx = list(t.slots).index(k_slot_name)
-            slot = t.slots[k_slot_name]
-            assert isinstance(slot, IntSlot)
-            idxs = slot_indices[:, s_idx]
-            slot_values = slot.lo + idxs  # integer values
-            mask = (slot_values >= 0) & (slot_values <= MAX_INT_K)
-            w[start:end, layout.k_col] = np.where(mask, slot_values, 0.0).astype(
-                np.float32
-            )
 
     return torch.from_numpy(w)
 
@@ -551,19 +572,24 @@ def _evaluate_derived(
         )
 
 
-def _gray_code_block(indices: np.ndarray, levels: int) -> np.ndarray:
-    """Vectorized 16-wide ±1 Gray-like block for ``indices`` against
-    ``levels``-step quantization. Matches ``gray_code_16`` row-by-row."""
-    x = (2.0 * indices + 1.0) / (2.0 * levels)
-    out = np.empty((indices.shape[0], D_GRAY_PAYLOAD), dtype=np.float32)
-    out[:, 0] = np.where(x > 0.5, 1.0, -1.0)
-    for i in range(1, D_GRAY_PAYLOAD):
-        m = 1 << (i - 1)
-        y = m * x
-        y_frac = y - np.floor(y)
-        feature = 1.0 - np.abs(2.0 * y_frac - 1.0)
-        out[:, i] = np.where(feature > 0.5, 1.0, -1.0)
-    return out
+def _digit_quad_block(indices: np.ndarray, n_cols: int) -> np.ndarray:
+    """Vectorized digit-quadratic block matching ``digit_quad_row``.
+
+    ``n_cols`` is 2 (one digit) or 4 (two digits). Rows are indexed by
+    integer step ``k = indices[row]`` along the slot's grid.
+    """
+    if n_cols == 2:
+        lo_c = indices.astype(np.float32) - np.float32(CENTER)
+        return np.stack([lo_c, -lo_c * lo_c], axis=1).astype(np.float32)
+    if n_cols == 4:
+        hi = (indices // BASE).astype(np.float32)
+        lo = (indices % BASE).astype(np.float32)
+        hi_c = hi - np.float32(CENTER)
+        lo_c = lo - np.float32(CENTER)
+        return np.stack(
+            [hi_c, -hi_c * hi_c, lo_c, -lo_c * lo_c], axis=1
+        ).astype(np.float32)
+    raise ValueError(f"Unsupported digit-quad block width: {n_cols}")
 
 
 # ---------------------------------------------------------------------------
