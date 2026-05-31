@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..asset_config import FLAT_ID_BY_NAME
 from .types import MapData, Sector
 
 
@@ -76,7 +77,10 @@ def build_plane_tables(md: MapData) -> PlaneTables:
     flat_names = sorted(
         {flat for sector in md.sectors for flat in (sector.floor_tex, sector.ceiling_tex)}
     )
-    flat_ids = {name: idx for idx, name in enumerate(flat_names)}
+    # Global asset flat numbering (matches the sandbox), so PLANE_DEF.flat_id
+    # *and* plane ordering (sorted by flat_id) align with get_prefill. Assumes
+    # the map's flats are compiled into asset_config.FLAT_ID_BY_NAME.
+    flat_ids = FLAT_ID_BY_NAME
 
     keys: set[_PlaneKey] = set()
     for sector in md.sectors:
