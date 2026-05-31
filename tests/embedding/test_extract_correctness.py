@@ -30,8 +30,7 @@ from torchwright_doom.vocab import (
     ANGLE_VALUE,
     BEGIN,
     DONE,
-    EMIT_X1,
-    FLAT_IS_SKY,
+    EMIT_X2,
     NODE,
     NO_OP,
     SCREEN_WIDTH,
@@ -140,9 +139,9 @@ def test_is_type_indicator_strict_zero_or_one() -> None:
     [
         (NODE, "j", [0, 1, 31, 63]),  # boundaries + interior
         (SEG_TWO_SIDED, "flag", [0, 1]),
-        (EMIT_X1, "x", [0, 1, SCREEN_WIDTH // 2, SCREEN_WIDTH - 1]),
+        (EMIT_X2, "x", [0, 1, SCREEN_WIDTH // 2, SCREEN_WIDTH - 1]),
     ],
-    ids=["NODE.j", "SEG_TWO_SIDED.flag", "EMIT_X1.x"],
+    ids=["NODE.j", "SEG_TWO_SIDED.flag", "EMIT_X2.x"],
 )
 def test_extract_type_slot_int_round_trip(token_type, slot_name, test_values) -> None:
     """For an IntSlot, ``extract_type_slot_raw`` recovers the integer
@@ -187,7 +186,7 @@ def test_extract_type_slot_wrong_type_returns_zero_masked() -> None:
     masked_node = extract.extract_type_slot(inp, NODE, "j")
 
     # VALUE row through "NODE.j"
-    row = _row_for(VALUE, {"v": 100.0})
+    row = _row_for(VALUE, {"v": 0.5})
     raw_out = _eval_one(raw_node, row)
     masked_out = _eval_one(masked_node, row)
     assert raw_out == pytest.approx(float(NODE.slots["j"].lo), abs=1e-3)
@@ -254,14 +253,14 @@ def test_extract_type_slot_float_wrong_type_masked_zero() -> None:
 
 def test_extract_int_slot_flat_namespace_across_types() -> None:
     """The slot name 'flag' is shared across SEG_TWO_SIDED,
-    SEG_EMPTY_LINE, SEG_CLOSED_DOOR, FLAT_IS_SKY — all IntSlot(0, 2).
+    SEG_EMPTY_LINE, SEG_CLOSED_DOOR — all IntSlot(0, 2).
     ``extract_int_slot('flag')`` returns the active type's flag value.
     """
     inp = create_input("iv", TOKEN_VOCAB.layout.d_embed)
     raw_node = extract.extract_int_slot_raw(inp, "flag")
     masked_node = extract.extract_int_slot(inp, "flag")
 
-    for t in (SEG_TWO_SIDED, SEG_EMPTY_LINE, SEG_CLOSED_DOOR, FLAT_IS_SKY):
+    for t in (SEG_TWO_SIDED, SEG_EMPTY_LINE, SEG_CLOSED_DOOR):
         for flag in [0, 1]:
             row = _row_for(t, {"flag": flag})
             raw_out = _eval_one(raw_node, row)
@@ -315,14 +314,14 @@ def test_extract_derived_angle_sin_cos() -> None:
 
 
 def test_extract_derived_one_hot_x_oh_NNN() -> None:
-    """EMIT_X1's ``x_oh_NNN`` derived column reads 1 at the matching x,
+    """EMIT_X2's ``x_oh_NNN`` derived column reads 1 at the matching x,
     0 elsewhere."""
     inp = create_input("iv", TOKEN_VOCAB.layout.d_embed)
     targets = [0, 7, SCREEN_WIDTH // 2, SCREEN_WIDTH - 1]
     nodes = {x: extract.extract_derived(inp, f"x_oh_{x:03d}") for x in targets}
 
     for x_actual in targets:
-        row = _row_for(EMIT_X1, {"x": x_actual})
+        row = _row_for(EMIT_X2, {"x": x_actual})
         for x_target, node in nodes.items():
             out = _eval_one(node, row)
             expected = 1.0 if x_target == x_actual else 0.0

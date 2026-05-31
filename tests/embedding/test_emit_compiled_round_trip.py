@@ -34,7 +34,7 @@ from torchwright_doom.emit import (
 from torchwright_doom.vocab import (
     BEGIN,
     NODE,
-    PLANE_DEF,
+    DRAWSEG_META,
     SEG,
     VALUE,
 )
@@ -127,35 +127,35 @@ def test_compiled_emit_int_slot_multi_round_trip() -> None:
 
 
 def test_compiled_emit_three_slot_round_trip() -> None:
-    """PLANE_DEF — three IntSlots, all small cardinality; mixed
-    multi-slot path."""
-    for p, flat_id, is_sky in [(0, 0, 0), (10, 31, 1), (31, 0, 0)]:
+    """DRAWSEG_META — three IntSlots, mixed cardinality; multi-slot path."""
+    for i, wall_kind, silhouette in [(0, 0, 0), (64, 2, 3), (127, 1, 0)]:
         with fresh_graph_session():
             pos_enc = create_pos_encoding()
-            p_in = create_input("p", 1, value_range=(-1.0, 64.0))
-            f_in = create_input("flat", 1, value_range=(-1.0, 64.0))
-            s_in = create_input("sky", 1, value_range=(-1.0, 4.0))
+            i_in = create_input("i", 1, value_range=(-1.0, 130.0))
+            wk_in = create_input("wk", 1, value_range=(-1.0, 4.0))
+            sil_in = create_input("sil", 1, value_range=(-1.0, 5.0))
             out = emit_int_slot_token(
-                PLANE_DEF, p=p_in, flat_id=f_in, is_sky=s_in
+                DRAWSEG_META, i=i_in, wall_kind=wk_in, silhouette=sil_in
             )
             compiled = compile_headless(out, pos_enc, verbose=False)
             prefill = build_prefill_from_input_values(
                 compiled,
                 {
-                    "p": torch.tensor([[float(p)]]),
-                    "flat": torch.tensor([[float(flat_id)]]),
-                    "sky": torch.tensor([[float(is_sky)]]),
+                    "i": torch.tensor([[float(i)]]),
+                    "wk": torch.tensor([[float(wall_kind)]]),
+                    "sil": torch.tensor([[float(silhouette)]]),
                 },
                 n_pos=1,
             )
             residual = compiled(prefill)
         argmax = _deembed_argmax(residual)
         expected = _row_for(
-            PLANE_DEF, {"p": p, "flat_id": flat_id, "is_sky": is_sky}
+            DRAWSEG_META,
+            {"i": i, "wall_kind": wall_kind, "silhouette": silhouette},
         )
         assert argmax == expected, (
-            f"PLANE_DEF(p={p}, flat_id={flat_id}, is_sky={is_sky}) "
-            f"round-trip: argmax {argmax} != expected {expected}"
+            f"DRAWSEG_META(i={i}, wall_kind={wall_kind}, "
+            f"silhouette={silhouette}) round-trip: argmax {argmax} != {expected}"
         )
 
 

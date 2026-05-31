@@ -33,7 +33,7 @@ from torchwright_doom.vocab import (
     DONE,
     NO_OP,
     NODE,
-    PLANE_DEF,
+    DRAWSEG_META,
     SEG,
     VALUE,
 )
@@ -124,37 +124,38 @@ def test_emit_int_slot_multi() -> None:
 
 
 def test_emit_int_slot_three_slots() -> None:
-    """PLANE_DEF has three IntSlots; verify mixed-cardinality emit."""
-    for p, flat_id, is_sky in [
+    """DRAWSEG_META has three IntSlots (mixed cardinality 128/3/4)."""
+    for i, wall_kind, silhouette in [
         (0, 0, 0),
-        (5, 0, 1),
-        (10, 31, 0),
-        (31, 31, 1),
+        (5, 1, 2),
+        (64, 2, 3),
+        (127, 2, 1),
     ]:
         with fresh_graph_session():
-            p_in = create_input("p", 1, value_range=(-1.0, 64.0))
-            f_in = create_input("flat", 1, value_range=(-1.0, 64.0))
-            s_in = create_input("sky", 1, value_range=(-1.0, 4.0))
+            i_in = create_input("i", 1, value_range=(-1.0, 130.0))
+            wk_in = create_input("wk", 1, value_range=(-1.0, 4.0))
+            sil_in = create_input("sil", 1, value_range=(-1.0, 5.0))
             out = emit_int_slot_token(
-                PLANE_DEF, p=p_in, flat_id=f_in, is_sky=s_in
+                DRAWSEG_META, i=i_in, wall_kind=wk_in, silhouette=sil_in
             )
             cache = reference_eval(
                 out,
                 input_values={
-                    "p": torch.tensor([[float(p)]]),
-                    "flat": torch.tensor([[float(flat_id)]]),
-                    "sky": torch.tensor([[float(is_sky)]]),
+                    "i": torch.tensor([[float(i)]]),
+                    "wk": torch.tensor([[float(wall_kind)]]),
+                    "sil": torch.tensor([[float(silhouette)]]),
                 },
                 n_pos=1,
             )
             value = cache[out]
         argmax = _project_and_argmax(value)
         expected = _row_for(
-            PLANE_DEF, {"p": p, "flat_id": flat_id, "is_sky": is_sky}
+            DRAWSEG_META,
+            {"i": i, "wall_kind": wall_kind, "silhouette": silhouette},
         )
         assert argmax == expected, (
-            f"PLANE_DEF(p={p}, flat_id={flat_id}, is_sky={is_sky}): "
-            f"argmax {argmax} != expected {expected}"
+            f"DRAWSEG_META(i={i}, wall_kind={wall_kind}, "
+            f"silhouette={silhouette}): argmax {argmax} != expected {expected}"
         )
 
 
@@ -221,12 +222,12 @@ def test_emit_token_dispatcher() -> None:
         v_in = create_input("v", 1, value_range=(-5000.0, 5000.0))
         out = emit_token(VALUE, v=v_in)
         cache = reference_eval(
-            out, input_values={"v": torch.tensor([[42.0]])}, n_pos=1
+            out, input_values={"v": torch.tensor([[0.5]])}, n_pos=1
         )
         value = cache[out]
     slot = VALUE.slots["v"]
     span = slot.hi - slot.lo
-    k = round((42.0 - slot.lo) / span * (slot.levels - 1))
+    k = round((0.5 - slot.lo) / span * (slot.levels - 1))
     quantized = slot.lo + (k / (slot.levels - 1)) * span
     assert _project_and_argmax(value) == _row_for(
         VALUE, {"v": quantized}

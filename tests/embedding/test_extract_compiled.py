@@ -30,7 +30,6 @@ from torchwright_doom.tokens import FloatSlot, IntSlot
 from torchwright_doom.vocab import (
     ANGLE_BAM,
     ANGLE_VALUE,
-    EMIT_X1,
     NODE,
     SCREEN_WIDTH,
     SEG_TWO_SIDED,
@@ -122,7 +121,7 @@ def test_compiled_is_type_self_and_cross(device) -> None:
 
     node_row = W_EMBED[_row_index(NODE, {"j": 5}) : _row_index(NODE, {"j": 5}) + 1]
     value_row = W_EMBED[
-        _row_index(VALUE, {"v": 100.0}) : _row_index(VALUE, {"v": 100.0}) + 1
+        _row_index(VALUE, {"v": 0.5}) : _row_index(VALUE, {"v": 0.5}) + 1
     ]
 
     out_self = _run_compiled(compiled, node_row, device)
@@ -156,7 +155,7 @@ def test_compiled_extract_type_slot_int(device) -> None:
 
     # Wrong type → masked 0
     value_row = W_EMBED[
-        _row_index(VALUE, {"v": 100.0}) : _row_index(VALUE, {"v": 100.0}) + 1
+        _row_index(VALUE, {"v": 0.5}) : _row_index(VALUE, {"v": 0.5}) + 1
     ]
     out = _run_compiled(compiled, value_row, device)
     assert out == pytest.approx(0.0, abs=1e-2), f"VALUE row through NODE.j: {out}"

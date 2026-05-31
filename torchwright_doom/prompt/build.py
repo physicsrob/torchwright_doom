@@ -1,14 +1,25 @@
 """Build a prompt token sequence from a :class:`MapData` + :class:`GameState`.
 
-The prompt is what the transformer sees: a flat sequence of typed
-tokens encoding the scene's geometry and the player's per-frame
-state. Section order: player state → per-node block → per-subsector +
-per-seg block → flats → planes → per-subsector plane refs → ``BEGIN``
-marker.
+The prompt is what the transformer sees: a flat sequence of typed tokens
+encoding the scene's geometry and the player's per-frame state. Section
+order mirrors the sandbox ``get_prefill``: player state -> per-node block
+-> per-subsector + per-seg block -> visplane defs + per-subsector plane
+refs -> ``BEGIN`` marker.
+
+Every continuous float payload is emitted through :func:`prefill_value`,
+which range-encodes it into the ``VALUE`` carrier's ``[-1, 1]`` space
+(the per-site ``ValueRange`` mirrors ``get_prefill``). Flats are carried
+by ``PLANE_DEF.flat_id`` (their pixels are weight-side); there are no
+standalone flat tokens.
 """
 
 from __future__ import annotations
 
+from ..asset_config import WALL_TEXTURE_ID_BY_NAME
+from ..doom_lighting import (
+    doom_wall_light_static,
+    doom_wall_orientation_light_bias,
+)
 from ..tokens import Token
 from ..vocab import (
     ANGLE_BAM,
@@ -23,8 +34,7 @@ from ..vocab import (
     BBOX_TOP_BACK,
     BBOX_TOP_FRONT,
     BEGIN,
-    FLAT_DEF,
-    FLAT_IS_SKY,
+    N_NODES_MAX,
     NODE,
     NODE_BACK_CHILD,
     NODE_DX,
@@ -32,14 +42,13 @@ from ..vocab import (
     NODE_FRONT_CHILD,
     NODE_PX,
     NODE_PY,
-    N_NODES_MAX,
+    PLANE_DEF,
+    PLANE_HEIGHT,
+    PLANE_LIGHT,
     PLAYER_ANGLE_MARK,
     PLAYER_X_MARK,
     PLAYER_Y_MARK,
     PLAYER_Z_MARK,
-    PLANE_DEF,
-    PLANE_HEIGHT,
-    PLANE_LIGHT,
     SEG,
     SEG_AX,
     SEG_AY,
@@ -51,23 +60,30 @@ from ..vocab import (
     SEG_EMPTY_LINE,
     SEG_FRONT_CEILING,
     SEG_FRONT_FLOOR,
+    SEG_LIGHT_STATIC,
     SEG_LOWER_TEXTURE,
     SEG_MID_TEXTURE,
     SEG_NORMAL_ANGLE,
+    SEG_PEGGING,
+    SEG_ROWOFFSET,
     SEG_TWO_SIDED,
     SEG_UPPER_TEXTURE,
     SS,
     SS_CEILING_PLANE,
     SS_FLOOR_PLANE,
-    VALUE,
+    ValueRange,
+    prefill_value,
 )
 from .geometry import Segment, bake_segments
-from .plane_tables import build_plane_tables, is_sky_flat
-from .types import MapData, GameState, SUBSECTOR_FLAG
+from .plane_tables import build_plane_tables
+from .types import GameState, MapData, SUBSECTOR_FLAG
 
 
 _GAMESTATE_TO_BAM = ANGLE_BAM // 256  # 32 at ANGLE_BAM=8192
 _BAM_HALF = ANGLE_BAM // 2
+
+ML_DONTPEGTOP = 0x0008
+ML_DONTPEGBOTTOM = 0x0010
 
 
 def _player_angle_signed(angle_256: int) -> int:
@@ -90,6 +106,12 @@ def _child_unified(encoded: int) -> int:
 
 def _has_texture(name: str) -> bool:
     return bool(name and name != "-")
+
+
+def _texture_id(name: str, name_to_id: dict[str, int]) -> int:
+    if not _has_texture(name):
+        return 0
+    return name_to_id.get(name.upper(), 0)
 
 
 def _back_floor(seg: Segment) -> float:
@@ -134,30 +156,56 @@ def _is_empty_line(md: MapData, seg_idx: int) -> bool:
     )
 
 
+def _seg_front_sector(md: MapData, seg_idx: int):
+    raw_seg = md.segs[seg_idx]
+    linedef = md.linedefs[raw_seg.linedef]
+    front_sd_idx = linedef.front_sidedef if raw_seg.side == 0 else linedef.back_sidedef
+    return md.sectors[md.sidedefs[front_sd_idx].sector]
+
+
+def _seg_light_static(md: MapData, seg_idx: int, seg: Segment) -> int:
+    front_sector = _seg_front_sector(md, seg_idx)
+    orientation_bias = doom_wall_orientation_light_bias(
+        seg.ax, seg.ay, seg.bx, seg.by
+    )
+    return doom_wall_light_static(
+        front_sector.light, orientation_bias=orientation_bias
+    )
+
+
+def _seg_pegging_and_offset(md: MapData, seg_idx: int) -> tuple[int, int, int]:
+    raw_seg = md.segs[seg_idx]
+    linedef = md.linedefs[raw_seg.linedef]
+    sd_idx = linedef.front_sidedef if raw_seg.side == 0 else linedef.back_sidedef
+    y_offset = md.sidedefs[sd_idx].y_offset if sd_idx >= 0 else 0
+    return (linedef.flags, y_offset, raw_seg.side)
+
+
 def build_prompt(md: MapData, state: GameState) -> list[Token]:
     segments = bake_segments(md)
     plane_tables = build_plane_tables(md)
     tokens: list[Token] = []
+    name_to_id = {"-": 0, "": 0, **WALL_TEXTURE_ID_BY_NAME}
 
     tokens.append(Token(PLAYER_X_MARK))
-    tokens.append(Token(VALUE, {"v": state.x}))
+    tokens.append(prefill_value(ValueRange.R1, state.x))
     tokens.append(Token(PLAYER_Y_MARK))
-    tokens.append(Token(VALUE, {"v": state.y}))
+    tokens.append(prefill_value(ValueRange.R1, state.y))
     tokens.append(Token(PLAYER_Z_MARK))
-    tokens.append(Token(VALUE, {"v": state.viewz}))
+    tokens.append(prefill_value(ValueRange.R3, state.viewz))
     tokens.append(Token(PLAYER_ANGLE_MARK))
     tokens.append(Token(ANGLE_VALUE, {"angle": _player_angle_signed(state.angle)}))
 
     for j, node in enumerate(md.nodes):
         tokens.append(Token(NODE, {"j": j}))
         tokens.append(Token(NODE_PX))
-        tokens.append(Token(VALUE, {"v": node.px}))
+        tokens.append(prefill_value(ValueRange.R1, node.px))
         tokens.append(Token(NODE_PY))
-        tokens.append(Token(VALUE, {"v": node.py}))
+        tokens.append(prefill_value(ValueRange.R1, node.py))
         tokens.append(Token(NODE_DX))
-        tokens.append(Token(VALUE, {"v": node.dx}))
+        tokens.append(prefill_value(ValueRange.R2, node.dx))
         tokens.append(Token(NODE_DY))
-        tokens.append(Token(VALUE, {"v": node.dy}))
+        tokens.append(prefill_value(ValueRange.R2, node.dy))
         tokens.append(
             Token(NODE_FRONT_CHILD, {"child_u": _child_unified(node.front_child)})
         )
@@ -167,21 +215,21 @@ def build_prompt(md: MapData, state: GameState) -> list[Token]:
         ft, fb, fl, fr = node.front_bbox
         bt, bb, bl, br = node.back_bbox
         tokens.append(Token(BBOX_TOP_FRONT))
-        tokens.append(Token(VALUE, {"v": ft}))
+        tokens.append(prefill_value(ValueRange.R0, ft))
         tokens.append(Token(BBOX_BOT_FRONT))
-        tokens.append(Token(VALUE, {"v": fb}))
+        tokens.append(prefill_value(ValueRange.R0, fb))
         tokens.append(Token(BBOX_LEFT_FRONT))
-        tokens.append(Token(VALUE, {"v": fl}))
+        tokens.append(prefill_value(ValueRange.R0, fl))
         tokens.append(Token(BBOX_RIGHT_FRONT))
-        tokens.append(Token(VALUE, {"v": fr}))
+        tokens.append(prefill_value(ValueRange.R0, fr))
         tokens.append(Token(BBOX_TOP_BACK))
-        tokens.append(Token(VALUE, {"v": bt}))
+        tokens.append(prefill_value(ValueRange.R0, bt))
         tokens.append(Token(BBOX_BOT_BACK))
-        tokens.append(Token(VALUE, {"v": bb}))
+        tokens.append(prefill_value(ValueRange.R0, bb))
         tokens.append(Token(BBOX_LEFT_BACK))
-        tokens.append(Token(VALUE, {"v": bl}))
+        tokens.append(prefill_value(ValueRange.R0, bl))
         tokens.append(Token(BBOX_RIGHT_BACK))
-        tokens.append(Token(VALUE, {"v": br}))
+        tokens.append(prefill_value(ValueRange.R0, br))
 
     for s, sub in enumerate(md.subsectors):
         tokens.append(Token(SS, {"s": s}))
@@ -192,13 +240,13 @@ def build_prompt(md: MapData, state: GameState) -> list[Token]:
                 Token(SEG, {"i": i, "is_first_of_ss": 1 if k == 0 else 0})
             )
             tokens.append(Token(SEG_AX))
-            tokens.append(Token(VALUE, {"v": seg.ax}))
+            tokens.append(prefill_value(ValueRange.R1, seg.ax))
             tokens.append(Token(SEG_AY))
-            tokens.append(Token(VALUE, {"v": seg.ay}))
+            tokens.append(prefill_value(ValueRange.R1, seg.ay))
             tokens.append(Token(SEG_BX))
-            tokens.append(Token(VALUE, {"v": seg.bx}))
+            tokens.append(prefill_value(ValueRange.R1, seg.bx))
             tokens.append(Token(SEG_BY))
-            tokens.append(Token(VALUE, {"v": seg.by}))
+            tokens.append(prefill_value(ValueRange.R1, seg.by))
             tokens.append(
                 Token(SEG_TWO_SIDED, {"flag": 1 if seg.is_two_sided else 0})
             )
@@ -207,27 +255,30 @@ def build_prompt(md: MapData, state: GameState) -> list[Token]:
                 Token(ANGLE_VALUE, {"angle": _seg_normal_angle(md.segs[i].angle)})
             )
             tokens.append(Token(SEG_FRONT_FLOOR))
-            tokens.append(Token(VALUE, {"v": seg.front_floor}))
+            tokens.append(prefill_value(ValueRange.R3, seg.front_floor))
             tokens.append(Token(SEG_FRONT_CEILING))
-            tokens.append(Token(VALUE, {"v": seg.front_ceiling}))
+            tokens.append(prefill_value(ValueRange.R3, seg.front_ceiling))
             tokens.append(Token(SEG_BACK_FLOOR))
-            tokens.append(Token(VALUE, {"v": _back_floor(seg)}))
+            tokens.append(prefill_value(ValueRange.R4, _back_floor(seg)))
             tokens.append(Token(SEG_BACK_CEILING))
-            tokens.append(Token(VALUE, {"v": _back_ceiling(seg)}))
+            tokens.append(prefill_value(ValueRange.R4, _back_ceiling(seg)))
             tokens.append(
                 Token(SEG_MID_TEXTURE, {
-                    "present": 1 if _has_texture(seg.middle_texture_name) else 0,
+                    "tex_id": _texture_id(seg.middle_texture_name, name_to_id),
                 })
             )
             tokens.append(
                 Token(SEG_UPPER_TEXTURE, {
-                    "present": 1 if _has_texture(seg.upper_texture_name) else 0,
+                    "tex_id": _texture_id(seg.upper_texture_name, name_to_id),
                 })
             )
             tokens.append(
                 Token(SEG_LOWER_TEXTURE, {
-                    "present": 1 if _has_texture(seg.lower_texture_name) else 0,
+                    "tex_id": _texture_id(seg.lower_texture_name, name_to_id),
                 })
+            )
+            tokens.append(
+                Token(SEG_LIGHT_STATIC, {"light": _seg_light_static(md, i, seg)})
             )
             tokens.append(
                 Token(SEG_EMPTY_LINE, {"flag": 1 if _is_empty_line(md, i) else 0})
@@ -235,34 +286,35 @@ def build_prompt(md: MapData, state: GameState) -> list[Token]:
             tokens.append(
                 Token(SEG_CLOSED_DOOR, {"flag": 1 if _is_closed(seg) else 0})
             )
-
-    for flat_id, flat_name in enumerate(plane_tables.flat_names):
-        tokens.append(Token(FLAT_DEF, {"flat_id": flat_id}))
-        tokens.append(
-            Token(FLAT_IS_SKY, {"flag": 1 if is_sky_flat(flat_name) else 0})
-        )
+            flags, rowoffset, _side = _seg_pegging_and_offset(md, i)
+            tokens.append(
+                Token(SEG_PEGGING, {
+                    "dontpegtop": 1 if flags & ML_DONTPEGTOP else 0,
+                    "dontpegbottom": 1 if flags & ML_DONTPEGBOTTOM else 0,
+                })
+            )
+            tokens.append(Token(SEG_ROWOFFSET))
+            tokens.append(prefill_value(ValueRange.R3, float(rowoffset)))
 
     for plane in plane_tables.planes:
         tokens.append(
-            Token(PLANE_DEF, {
-                "p": plane.plane_id,
-                "flat_id": plane.flat_id,
-                "is_sky": plane.is_sky,
-            })
+            Token(PLANE_DEF, {"p": plane.plane_id, "flat_id": plane.flat_id})
         )
         tokens.append(Token(PLANE_HEIGHT))
-        tokens.append(Token(VALUE, {"v": plane.height}))
+        tokens.append(prefill_value(ValueRange.R3, plane.height))
         tokens.append(Token(PLANE_LIGHT, {"light": plane.light}))
 
     for s, info in enumerate(plane_tables.subsectors):
         if info is None:
             continue
-        tokens.append(
-            Token(SS_FLOOR_PLANE, {"s": s, "p": info.floor_plane_id})
-        )
-        tokens.append(
-            Token(SS_CEILING_PLANE, {"s": s, "p": info.ceiling_plane_id})
-        )
+        if info.floor_plane_id is not None:
+            tokens.append(
+                Token(SS_FLOOR_PLANE, {"s": s, "p": info.floor_plane_id})
+            )
+        if info.ceiling_plane_id is not None:
+            tokens.append(
+                Token(SS_CEILING_PLANE, {"s": s, "p": info.ceiling_plane_id})
+            )
 
     tokens.append(Token(BEGIN))
     return tokens

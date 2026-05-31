@@ -35,7 +35,7 @@ from torchwright_doom.tokens import FloatSlot, IntSlot
 from torchwright_doom.vocab import (
     ANGLE_BAM,
     ANGLE_VALUE,
-    EMIT_X1,
+    EMIT_X2,
     NODE,
     SCREEN_WIDTH,
     SEG,
@@ -217,22 +217,34 @@ def test_derived_column_round_trip_angle_value() -> None:
     for angle in test_angles:
         row = _angle_row(angle)
         for derived_name, d in angle_slot.derived.items():
-            start, _w = layout.derived_columns[
+            start, width = layout.derived_columns[
                 (ANGLE_VALUE.name, "angle", derived_name)
             ]
-            expected = float(d.fn(angle))
-            actual = row[start].item()
-            assert math.isclose(actual, expected, abs_tol=1e-6), (
-                f"angle={angle} derived={derived_name}: "
-                f"actual={actual} expected={expected}"
-            )
+            expected = d.fn(angle)
+            if width == 1:
+                assert math.isclose(
+                    row[start].item(), float(expected), abs_tol=1e-6
+                ), (
+                    f"angle={angle} derived={derived_name}: "
+                    f"actual={row[start].item()} expected={float(expected)}"
+                )
+            else:
+                exp_list = [float(x) for x in expected]
+                assert len(exp_list) == width
+                for off in range(width):
+                    assert math.isclose(
+                        row[start + off].item(), exp_list[off], abs_tol=1e-6
+                    ), (
+                        f"angle={angle} derived={derived_name}[{off}]: "
+                        f"actual={row[start + off].item()} exp={exp_list[off]}"
+                    )
 
 
 def test_derived_column_round_trip_value() -> None:
     """Every VALUE derived column equals fn(v) on the quantized v."""
     layout = TOKEN_VOCAB.layout
     v_slot = VALUE.slots["v"]
-    test_values = [-1024.0, -1.0, 0.0, 1.0, 100.0, 1024.0]
+    test_values = [-1.0, -0.5, -0.125, 0.0, 0.25, 0.5, 1.0]
     for v in test_values:
         row, quantized = _value_row_for(v)
         for derived_name, d in v_slot.derived.items():
@@ -246,20 +258,20 @@ def test_derived_column_round_trip_value() -> None:
 
 
 def test_derived_column_round_trip_one_hot_emit_x1() -> None:
-    """EMIT_X1's ``x_oh_NNN`` columns are 1.0 at the matching x, 0
+    """EMIT_X2's ``x_oh_NNN`` columns are 1.0 at the matching x, 0
     elsewhere — the canonical column-addressed token for screen-X."""
     layout = TOKEN_VOCAB.layout
-    emit_start, _ = TOKEN_VOCAB.type_to_row_range[EMIT_X1]
+    emit_start, _ = TOKEN_VOCAB.type_to_row_range[EMIT_X2]
     test_xs = [0, 1, SCREEN_WIDTH // 2, SCREEN_WIDTH - 1]
     for x in test_xs:
         row = W_EMBED[emit_start + x]
         for col_name in (f"x_oh_{c:03d}" for c in range(SCREEN_WIDTH)):
-            start, _w = layout.derived_columns[(EMIT_X1.name, "x", col_name)]
+            start, _w = layout.derived_columns[(EMIT_X2.name, "x", col_name)]
             target = int(col_name.split("_")[-1])
             expected = 1.0 if x == target else 0.0
             actual = row[start].item()
             assert actual == expected, (
-                f"EMIT_X1.x={x} derived={col_name}: {actual} != {expected}"
+                f"EMIT_X2.x={x} derived={col_name}: {actual} != {expected}"
             )
 
 
