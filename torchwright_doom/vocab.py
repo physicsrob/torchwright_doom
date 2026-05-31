@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import math
 
+from .constants import SCREEN_HEIGHT, SCREEN_WIDTH
 from .tokens import FloatSlot, IntSlot, TokenType
 
 
@@ -44,8 +45,10 @@ N_PLANES_MAX = 32
 N_FLATS_MAX = 32
 N_LIGHT_LEVELS = 256
 
-SCREEN_WIDTH = 160
-SCREEN_HEIGHT = 100
+# SCREEN_WIDTH / SCREEN_HEIGHT now live in `.constants` (imported above) so
+# `value_ranges.py` can depend on them without importing `vocab.py` — see
+# constants.py for why. Porting scale is 60×50; retarget to 160×100 is a
+# deferred one-line change in constants.py.
 
 FOV_HALF_BAM = ANGLE_BAM // 8  # 1024
 _TAN_FOV_HALF = math.tan(FOV_HALF_BAM * 2 * math.pi / ANGLE_BAM)
