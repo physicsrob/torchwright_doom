@@ -18,7 +18,10 @@ otherwise reconstruct the function from the raw slot value.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Mapping, Sequence, Union
+from typing import TYPE_CHECKING, Callable, Mapping, Sequence, Union
+
+if TYPE_CHECKING:
+    from torchwright.graph import Node
 
 
 DerivedFn = Callable[[Union[int, float]], "float | Sequence[float]"]
@@ -133,6 +136,28 @@ class TokenType:
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, TokenType) and self.name == other.name
+
+    def check(self, input_vec: "Node") -> "Node":
+        """±1 indicator that ``input_vec``'s active type is this type.
+
+        Method form of :func:`torchwright_doom.extract.is_type_pm1`
+        (imported lazily — ``extract`` -> ``embedding`` -> ``vocab`` ->
+        ``tokens`` would otherwise cycle).
+        """
+        from .extract import is_type_pm1
+
+        return is_type_pm1(input_vec, self)
+
+    def extract(self, input_vec: "Node", slot_name: str) -> "Node":
+        """Read the ``(self, slot_name)`` column from ``input_vec``.
+
+        Method form of
+        :func:`torchwright_doom.extract.extract_type_slot` (lazy import,
+        as for :meth:`check`).
+        """
+        from .extract import extract_type_slot
+
+        return extract_type_slot(input_vec, self, slot_name)
 
 
 @dataclass

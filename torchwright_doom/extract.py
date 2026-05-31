@@ -57,7 +57,12 @@ from .tokens import FloatSlot, IntSlot, TokenType
 
 __all__ = [
     "is_type",
+    "is_type_pm1",
     "type_code",
+    "input_type_code",
+    "type_matches",
+    "type_matches_any",
+    "indicator_to_bool",
     "extract_type_slot",
     "extract_type_slot_raw",
     "extract_int_slot",
@@ -503,3 +508,91 @@ def _any_type_pm1(input_vec: Node, types: list[TokenType]) -> Node:
     bias = torch.tensor([float(k - 1)], dtype=torch.float32)
     label = "_".join(t.name for t in types)[:40]
     return Linear(stacked, weights, bias, name=f"any_type_pm1_{label}")
+
+
+# ---------------------------------------------------------------------------
+# Token-compatibility helpers (Plan A / A7) — the surface Plan B's
+# GraphPast.input_type() / _input_type_matches consume.
+# ---------------------------------------------------------------------------
+
+
+def is_type_pm1(input_vec: Node, token_type: TokenType) -> Node:
+    """Public ±1 indicator that the active token is ``token_type``.
+
+    The +1/-1 form (the free :func:`is_type` returns 0/1). This is the
+    surface ported code should use directly for boolean composition or
+    attention validity. Adds depth +1 (one ``compare``).
+    """
+    return _is_type_pm1(input_vec, token_type)
+
+
+def input_type_code(input_vec: Node) -> Node:
+    """Extract the 8-wide E8 category block (cols ``[0:8]``) of ``input_vec``.
+
+    The compact per-token type code. Plan B's ``GraphPast.input_type()``
+    returns a handle over this; :func:`type_matches` / :func:`type_matches_any`
+    compare it against token types without re-reading the full
+    ``input_vec``. Depth +1 (one fused ``Linear``).
+    """
+    layout = TOKEN_VOCAB.layout
+    if len(input_vec) != layout.d_embed:
+        raise ValueError(
+            f"input_type_code: expected input_vec width "
+            f"{layout.d_embed}, got {len(input_vec)}"
+        )
+    weights = torch.zeros((layout.d_embed, D_CATEGORY), dtype=torch.float32)
+    for c in range(D_CATEGORY):
+        weights[c, c] = 1.0
+    return Linear(input_vec, weights, name="input_type_code")
+
+
+def type_matches(type_code: Node, token_type: TokenType) -> Node:
+    """±1 whether an 8-wide E8 ``type_code`` is ``token_type``.
+
+    ``type_code`` is the output of :func:`input_type_code`. Computes
+    ``type_code · E8(token_type)`` and ``compare``\\ s it against the same
+    halfway threshold :func:`is_type` uses, saturating to +1 (match) /
+    -1 (mismatch). Depth +1.
+    """
+    if len(type_code) != D_CATEGORY:
+        raise ValueError(
+            f"type_matches: expected an {D_CATEGORY}-wide type code, "
+            f"got width {len(type_code)}"
+        )
+    thresh = _is_type_threshold(token_type)
+    weights = _e8_code(token_type).reshape(D_CATEGORY, 1)
+    dot = Linear(type_code, weights, name=f"type_matches_dot_{token_type.name}")
+    return compare(dot, thresh)
+
+
+def type_matches_any(type_code: Node, token_types: list[TokenType]) -> Node:
+    """±1 whether an 8-wide ``type_code`` matches any of ``token_types``.
+
+    Mirrors :func:`_any_type_pm1` but over a type code: per-type
+    :func:`type_matches` outputs are folded into a single ±1 via one
+    ``Linear`` — ``sum + (k - 1)`` maps "exactly one match" -> +1 and
+    "none" -> -1.
+    """
+    if not token_types:
+        raise ValueError("type_matches_any requires at least one token type")
+    if len(token_types) == 1:
+        return type_matches(type_code, token_types[0])
+    per_type = [type_matches(type_code, t) for t in token_types]
+    stacked = Concatenate(per_type)
+    k = len(token_types)
+    weights = torch.ones((k, 1), dtype=torch.float32)
+    bias = torch.tensor([float(k - 1)], dtype=torch.float32)
+    label = "_".join(t.name for t in token_types)[:40]
+    return Linear(stacked, weights, bias, name=f"type_matches_any_{label}")
+
+
+def indicator_to_bool(indicator_01: Node) -> Node:
+    """Convert a numeric 0/1 indicator to a +1/-1 boolean (``2x - 1``).
+
+    The inverse of the ±1 -> 0/1 fold :func:`is_type` applies on its way
+    out. Elementwise over any width; depth +1 (one fused ``Linear``).
+    """
+    width = len(indicator_01)
+    weights = torch.eye(width, dtype=torch.float32) * 2.0
+    bias = torch.full((width,), -1.0, dtype=torch.float32)
+    return Linear(indicator_01, weights, bias, name="indicator_to_bool")
