@@ -52,10 +52,24 @@ class FloatSlot:
 
 @dataclass(eq=False)
 class TokenType:
-    """Identity-based equality — module-level instances are unique by reference."""
+    """Name-based equality (Plan A / A3).
+
+    Two instances with the same ``name`` compare equal and hash equally,
+    regardless of slot definitions; names are expected to be unique
+    within a vocab. This mirrors the sandbox ``TokenType`` so copied
+    sandbox helpers that reconstruct a type from its name keep working
+    across the ported/native boundary — removing a class of silent
+    "looks like the same type but isn't" failures.
+    """
 
     name: str
     slots: Mapping[str, IntSlot | FloatSlot] = field(default_factory=dict)
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, TokenType) and self.name == other.name
 
 
 @dataclass
