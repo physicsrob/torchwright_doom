@@ -30,8 +30,11 @@ from .asset_config import N_FLATS, N_WALL_TEXTURES, PLAYPAL
 from .constants import SCREEN_HEIGHT, SCREEN_WIDTH
 from .doom_lighting import doom_flat_startmap
 from .tokens import Derived, FloatSlot, IntSlot, Token, TokenType
-from .value_ranges import ValueRange, prefill_value as _prefill_value, value_derived_columns
-
+from .value_ranges import (
+    ValueRange,
+    prefill_value as _prefill_value,
+    value_derived_columns,
+)
 
 # ---------------------------------------------------------------------------
 # Capacity constants
@@ -128,15 +131,9 @@ def _tex_id_present(tid: int) -> float:
     return 1.0 if int(tid) != 0 else 0.0
 
 
-SCREEN_X_ONE_HOT_DERIVED_NAMES = tuple(
-    f"x_oh_{x:03d}" for x in range(SCREEN_WIDTH)
-)
-ANGLE_RAY_X_DERIVED_NAMES = tuple(
-    f"ray_x_{x:03d}" for x in range(SCREEN_WIDTH)
-)
-ANGLE_RAY_Y_DERIVED_NAMES = tuple(
-    f"ray_y_{x:03d}" for x in range(SCREEN_WIDTH)
-)
+SCREEN_X_ONE_HOT_DERIVED_NAMES = tuple(f"x_oh_{x:03d}" for x in range(SCREEN_WIDTH))
+ANGLE_RAY_X_DERIVED_NAMES = tuple(f"ray_x_{x:03d}" for x in range(SCREEN_WIDTH))
+ANGLE_RAY_Y_DERIVED_NAMES = tuple(f"ray_y_{x:03d}" for x in range(SCREEN_WIDTH))
 
 _SCREEN_X_ONE_HOT_DERIVED = {
     name: (lambda value, column=column: 1.0 if int(value) == column else 0.0)
@@ -190,21 +187,15 @@ def _checkcoord_row(boxpos: int) -> tuple[int, int, int, int]:
 
 
 _BOXPOS_DERIVED = {
-    "check_a_x_right": (
-        lambda boxpos: 1.0 if _checkcoord_row(boxpos)[0] == 3 else 0.0
-    ),
+    "check_a_x_right": (lambda boxpos: 1.0 if _checkcoord_row(boxpos)[0] == 3 else 0.0),
     "check_a_y_bottom": (
         lambda boxpos: 1.0 if _checkcoord_row(boxpos)[1] == 1 else 0.0
     ),
-    "check_b_x_right": (
-        lambda boxpos: 1.0 if _checkcoord_row(boxpos)[2] == 3 else 0.0
-    ),
+    "check_b_x_right": (lambda boxpos: 1.0 if _checkcoord_row(boxpos)[2] == 3 else 0.0),
     "check_b_y_bottom": (
         lambda boxpos: 1.0 if _checkcoord_row(boxpos)[3] == 1 else 0.0
     ),
-    "fails_open": (
-        lambda boxpos: 1.0 if int(boxpos) in (3, 5, 7, 11) else 0.0
-    ),
+    "fails_open": (lambda boxpos: 1.0 if int(boxpos) in (3, 5, 7, 11) else 0.0),
 }
 
 
@@ -241,6 +232,7 @@ def prefill_value(range_id: ValueRange, value: float) -> Token:
     """
     return _prefill_value(VALUE, range_id, value)
 
+
 ANGLE_VALUE = TokenType(
     "angleValue",
     slots={
@@ -257,8 +249,7 @@ ANGLE_VALUE = TokenType(
                 **{
                     name: (
                         lambda a, column=column: math.cos(
-                            a * 2 * math.pi / ANGLE_BAM
-                            + _xtoviewangle_rad(column)
+                            a * 2 * math.pi / ANGLE_BAM + _xtoviewangle_rad(column)
                         )
                     )
                     for column, name in enumerate(ANGLE_RAY_X_DERIVED_NAMES)
@@ -266,8 +257,7 @@ ANGLE_VALUE = TokenType(
                 **{
                     name: (
                         lambda a, column=column: math.sin(
-                            a * 2 * math.pi / ANGLE_BAM
-                            + _xtoviewangle_rad(column)
+                            a * 2 * math.pi / ANGLE_BAM + _xtoviewangle_rad(column)
                         )
                     )
                     for column, name in enumerate(ANGLE_RAY_Y_DERIVED_NAMES)
@@ -290,19 +280,17 @@ PLAYER_ANGLE_MARK = TokenType("viewangle")
 # Section 2: Per-node block (header + plane + children + bboxes)
 # ---------------------------------------------------------------------------
 
-NODE = TokenType("node", slots={"j": IntSlot(0, N_NODES_MAX, derived=_ID_LIFTED_KEY_DERIVED)})
+NODE = TokenType(
+    "node", slots={"j": IntSlot(0, N_NODES_MAX, derived=_ID_LIFTED_KEY_DERIVED)}
+)
 
 NODE_PX = TokenType("node.x")
 NODE_PY = TokenType("node.y")
 NODE_DX = TokenType("node.dx")
 NODE_DY = TokenType("node.dy")
 
-NODE_FRONT_CHILD = TokenType(
-    "node.child1", slots={"child_u": IntSlot(0, N_ENTITY_MAX)}
-)
-NODE_BACK_CHILD = TokenType(
-    "node.child0", slots={"child_u": IntSlot(0, N_ENTITY_MAX)}
-)
+NODE_FRONT_CHILD = TokenType("node.child1", slots={"child_u": IntSlot(0, N_ENTITY_MAX)})
+NODE_BACK_CHILD = TokenType("node.child0", slots={"child_u": IntSlot(0, N_ENTITY_MAX)})
 
 BBOX_TOP_FRONT = TokenType("node.bbox1.top")
 BBOX_BOT_FRONT = TokenType("node.bbox1.bottom")
@@ -317,7 +305,9 @@ BBOX_RIGHT_BACK = TokenType("node.bbox0.right")
 # Section 3: Per-subsector + per-seg blocks
 # ---------------------------------------------------------------------------
 
-SS = TokenType("SSECTOR", slots={"s": IntSlot(0, N_SUBSECTORS_MAX, derived=_ID_LIFTED_KEY_DERIVED)})
+SS = TokenType(
+    "SSECTOR", slots={"s": IntSlot(0, N_SUBSECTORS_MAX, derived=_ID_LIFTED_KEY_DERIVED)}
+)
 
 SEG = TokenType(
     "seg",
@@ -406,29 +396,56 @@ BEGIN = TokenType("begin")
 
 PROMPT_TYPES = [
     # Shared payload
-    VALUE, ANGLE_VALUE,
+    VALUE,
+    ANGLE_VALUE,
     # Section 1
-    PLAYER_X_MARK, PLAYER_Y_MARK, PLAYER_Z_MARK, PLAYER_ANGLE_MARK,
+    PLAYER_X_MARK,
+    PLAYER_Y_MARK,
+    PLAYER_Z_MARK,
+    PLAYER_ANGLE_MARK,
     # Section 2: per-node
     NODE,
-    NODE_PX, NODE_PY, NODE_DX, NODE_DY,
-    NODE_FRONT_CHILD, NODE_BACK_CHILD,
-    BBOX_TOP_FRONT, BBOX_BOT_FRONT, BBOX_LEFT_FRONT, BBOX_RIGHT_FRONT,
-    BBOX_TOP_BACK, BBOX_BOT_BACK, BBOX_LEFT_BACK, BBOX_RIGHT_BACK,
+    NODE_PX,
+    NODE_PY,
+    NODE_DX,
+    NODE_DY,
+    NODE_FRONT_CHILD,
+    NODE_BACK_CHILD,
+    BBOX_TOP_FRONT,
+    BBOX_BOT_FRONT,
+    BBOX_LEFT_FRONT,
+    BBOX_RIGHT_FRONT,
+    BBOX_TOP_BACK,
+    BBOX_BOT_BACK,
+    BBOX_LEFT_BACK,
+    BBOX_RIGHT_BACK,
     # Section 3: per-ss + per-seg
-    SS, SEG,
-    SEG_AX, SEG_AY, SEG_BX, SEG_BY,
-    SEG_TWO_SIDED, SEG_NORMAL_ANGLE,
-    SEG_FRONT_FLOOR, SEG_FRONT_CEILING,
-    SEG_BACK_FLOOR, SEG_BACK_CEILING,
-    SEG_MID_TEXTURE, SEG_UPPER_TEXTURE, SEG_LOWER_TEXTURE,
+    SS,
+    SEG,
+    SEG_AX,
+    SEG_AY,
+    SEG_BX,
+    SEG_BY,
+    SEG_TWO_SIDED,
+    SEG_NORMAL_ANGLE,
+    SEG_FRONT_FLOOR,
+    SEG_FRONT_CEILING,
+    SEG_BACK_FLOOR,
+    SEG_BACK_CEILING,
+    SEG_MID_TEXTURE,
+    SEG_UPPER_TEXTURE,
+    SEG_LOWER_TEXTURE,
     SEG_LIGHT_STATIC,
-    SEG_EMPTY_LINE, SEG_CLOSED_DOOR,
+    SEG_EMPTY_LINE,
+    SEG_CLOSED_DOOR,
     SEG_PEGGING,
     SEG_ROWOFFSET,
     # Section 3b: visplane prefill
-    PLANE_DEF, PLANE_HEIGHT, PLANE_LIGHT,
-    SS_FLOOR_PLANE, SS_CEILING_PLANE,
+    PLANE_DEF,
+    PLANE_HEIGHT,
+    PLANE_LIGHT,
+    SS_FLOOR_PLANE,
+    SS_CEILING_PLANE,
     # Section 4
     BEGIN,
 ]

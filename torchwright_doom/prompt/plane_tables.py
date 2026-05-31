@@ -75,7 +75,11 @@ def _subsector_front_sector(md: MapData, s: int) -> Sector | None:
 
 def build_plane_tables(md: MapData) -> PlaneTables:
     flat_names = sorted(
-        {flat for sector in md.sectors for flat in (sector.floor_tex, sector.ceiling_tex)}
+        {
+            flat
+            for sector in md.sectors
+            for flat in (sector.floor_tex, sector.ceiling_tex)
+        }
     )
     # Global asset flat numbering (matches the sandbox), so PLANE_DEF.flat_id
     # *and* plane ordering (sorted by flat_id) align with get_prefill. Assumes
@@ -85,7 +89,9 @@ def build_plane_tables(md: MapData) -> PlaneTables:
     keys: set[_PlaneKey] = set()
     for sector in md.sectors:
         keys.add(_plane_key(sector.floor_h, sector.floor_tex, sector.light, flat_ids))
-        keys.add(_plane_key(sector.ceiling_h, sector.ceiling_tex, sector.light, flat_ids))
+        keys.add(
+            _plane_key(sector.ceiling_h, sector.ceiling_tex, sector.light, flat_ids)
+        )
     sorted_keys = sorted(keys, key=lambda k: (k.is_sky, k.height, k.flat_id, k.light))
     plane_id_by_key = {key: idx for idx, key in enumerate(sorted_keys)}
     planes = [
@@ -101,13 +107,21 @@ def build_plane_tables(md: MapData) -> PlaneTables:
 
     subsectors: list[SubsectorPlaneInfo | None] = []
     for s in range(len(md.subsectors)):
-        sector = _subsector_front_sector(md, s)
-        if sector is None:
+        front_sector = _subsector_front_sector(md, s)
+        if front_sector is None:
             subsectors.append(None)
             continue
-        floor_key = _plane_key(sector.floor_h, sector.floor_tex, sector.light, flat_ids)
+        floor_key = _plane_key(
+            front_sector.floor_h,
+            front_sector.floor_tex,
+            front_sector.light,
+            flat_ids,
+        )
         ceiling_key = _plane_key(
-            sector.ceiling_h, sector.ceiling_tex, sector.light, flat_ids
+            front_sector.ceiling_h,
+            front_sector.ceiling_tex,
+            front_sector.light,
+            flat_ids,
         )
         subsectors.append(
             SubsectorPlaneInfo(

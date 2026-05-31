@@ -42,18 +42,14 @@ def _digit_quad_query_block(indices: np.ndarray, n_cols: int) -> np.ndarray:
     """
     if n_cols == 2:
         lo_c = indices.astype(np.float32) - np.float32(CENTER)
-        return np.stack(
-            [2.0 * lo_c, np.ones_like(lo_c)], axis=1
-        ).astype(np.float32)
+        return np.stack([2.0 * lo_c, np.ones_like(lo_c)], axis=1).astype(np.float32)
     if n_cols == 4:
         hi = (indices // BASE).astype(np.float32)
         lo = (indices % BASE).astype(np.float32)
         hi_c = hi - np.float32(CENTER)
         lo_c = lo - np.float32(CENTER)
         ones = np.ones_like(hi_c)
-        return np.stack(
-            [2.0 * hi_c, ones, 2.0 * lo_c, ones], axis=1
-        ).astype(np.float32)
+        return np.stack([2.0 * hi_c, ones, 2.0 * lo_c, ones], axis=1).astype(np.float32)
     raise ValueError(f"Unsupported digit-quad query width: {n_cols}")
 
 
@@ -84,9 +80,7 @@ def _build_ideal_emit_rows_for_type(t) -> torch.Tensor:
 
         # Digit-quad query payload (NOT the row payload).
         dq_start, dq_n = layout.digit_quad_columns[(t.name, slot_name)]
-        out[:, dq_start : dq_start + dq_n] = _digit_quad_query_block(
-            idxs, dq_n
-        )
+        out[:, dq_start : dq_start + dq_n] = _digit_quad_query_block(idxs, dq_n)
 
     # Derived columns stay at zero on the emit side.
     return torch.from_numpy(out)
@@ -113,9 +107,9 @@ def test_within_type_argmax_lands_on_row(device) -> None:
             expected = torch.arange(cs, ce, device=device)
             mismatch = (argmax != expected).nonzero(as_tuple=True)[0]
             if mismatch.numel() > 0:
-                first = mismatch[0].item()
+                first = int(mismatch[0].item())
                 bad_row = cs + first
-                bad_pick = argmax[first].item()
+                bad_pick = int(argmax[first].item())
                 raise AssertionError(
                     f"Within-type argmax mismatch on {t.name}: row "
                     f"{bad_row} (slot_values="

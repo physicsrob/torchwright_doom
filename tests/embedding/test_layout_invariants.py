@@ -17,10 +17,16 @@ from torchwright_doom.tokens import Derived, IntSlot, TokenType
 
 def test_width_disagreement_raises() -> None:
     """Same derived name, different widths across two types -> raise."""
-    t1 = TokenType("a", slots={"x": IntSlot(0, 4, derived={"d": Derived(lambda v: float(v))})})
+    t1 = TokenType(
+        "a", slots={"x": IntSlot(0, 4, derived={"d": Derived(lambda v: float(v))})}
+    )
     t2 = TokenType(
         "b",
-        slots={"y": IntSlot(0, 4, derived={"d": Derived(lambda v: [float(v), 0.0], width=2)})},
+        slots={
+            "y": IntSlot(
+                0, 4, derived={"d": Derived(lambda v: [float(v), 0.0], width=2)}
+            )
+        },
     )
     with pytest.raises(VocabLayoutError):
         Layout([t1, t2])
@@ -42,8 +48,12 @@ def test_duplicate_name_within_type_raises() -> None:
 
 def test_same_name_same_width_across_types_ok() -> None:
     """A shared name with agreeing widths gets one span per declaration."""
-    t1 = TokenType("a", slots={"x": IntSlot(0, 4, derived={"d": Derived(lambda v: float(v))})})
-    t2 = TokenType("b", slots={"y": IntSlot(0, 4, derived={"d": Derived(lambda v: float(v))})})
+    t1 = TokenType(
+        "a", slots={"x": IntSlot(0, 4, derived={"d": Derived(lambda v: float(v))})}
+    )
+    t2 = TokenType(
+        "b", slots={"y": IntSlot(0, 4, derived={"d": Derived(lambda v: float(v))})}
+    )
     layout = Layout([t1, t2])
     entries = layout.derived_columns_by_name["d"]
     assert len(entries) == 2  # one span per declaration

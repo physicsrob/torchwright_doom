@@ -31,6 +31,7 @@ from torchwright_doom.emit import (
     emit_int_slot_token,
     emit_slotless,
 )
+from torchwright_doom.tokens import FloatSlot
 from torchwright_doom.vocab import (
     BEGIN,
     NODE,
@@ -38,6 +39,12 @@ from torchwright_doom.vocab import (
     SEG,
     VALUE,
 )
+
+
+def _value_slot() -> FloatSlot:
+    slot = VALUE.slots["v"]
+    assert isinstance(slot, FloatSlot)
+    return slot
 
 
 def _deembed_argmax(compiled_residual: torch.Tensor) -> int:
@@ -74,8 +81,7 @@ def test_compiled_emit_slotless_round_trip() -> None:
         residual = compiled(prefill)
     argmax = _deembed_argmax(residual)
     assert argmax == _row_for(BEGIN, {}), (
-        f"BEGIN round-trip: argmax {argmax} != "
-        f"expected {_row_for(BEGIN, {})}"
+        f"BEGIN round-trip: argmax {argmax} != " f"expected {_row_for(BEGIN, {})}"
     )
 
 
@@ -94,9 +100,9 @@ def test_compiled_emit_int_slot_single_round_trip() -> None:
             residual = compiled(prefill)
         argmax = _deembed_argmax(residual)
         expected = _row_for(NODE, {"j": j})
-        assert argmax == expected, (
-            f"NODE(j={j}) round-trip: argmax {argmax} != expected {expected}"
-        )
+        assert (
+            argmax == expected
+        ), f"NODE(j={j}) round-trip: argmax {argmax} != expected {expected}"
 
 
 def test_compiled_emit_int_slot_multi_round_trip() -> None:
@@ -162,7 +168,7 @@ def test_compiled_emit_three_slot_round_trip() -> None:
 def test_compiled_emit_float_slot_round_trip() -> None:
     """VALUE.v — the FloatSlot path. 2-digit digit-quad block via
     ``thermometer_floor_div`` (one MLP sublayer)."""
-    slot = VALUE.slots["v"]
+    slot = _value_slot()
     span = slot.hi - slot.lo
     # Cover the full FloatSlot range plus byte-boundary neighbors.
     test_ks = [0, 1, 100, 32767, 32768, 65534, 65535]

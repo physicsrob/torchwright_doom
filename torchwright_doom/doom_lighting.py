@@ -62,8 +62,8 @@ def doom_wall_lightnum(
 ) -> int:
     """Return the clamped ``scalelight`` light-number index for a wall."""
 
-    lightnum = (int(sector_light) >> LIGHTSEGSHIFT) + int(extralight) + int(
-        orientation_bias
+    lightnum = (
+        (int(sector_light) >> LIGHTSEGSHIFT) + int(extralight) + int(orientation_bias)
     )
     return _clamp_int(lightnum, 0, LIGHTLEVELS - 1)
 

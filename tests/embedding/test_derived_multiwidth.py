@@ -28,9 +28,7 @@ def _row_for(token_type, slot_values: dict) -> torch.Tensor:
         return W_EMBED[start : start + 1].clone()
     slot_names = list(token_type.slots.keys())
     slot_objs = [token_type.slots[n] for n in slot_names]
-    sizes = [
-        (s.hi - s.lo) if isinstance(s, IntSlot) else s.levels for s in slot_objs
-    ]
+    sizes = [(s.hi - s.lo) if isinstance(s, IntSlot) else s.levels for s in slot_objs]
 
     def step_index(slot, value):
         if isinstance(slot, IntSlot):
@@ -38,7 +36,9 @@ def _row_for(token_type, slot_values: dict) -> torch.Tensor:
         span = slot.hi - slot.lo
         return round((float(value) - slot.lo) / span * (slot.levels - 1))
 
-    indices = [step_index(slot_objs[i], slot_values[n]) for i, n in enumerate(slot_names)]
+    indices = [
+        step_index(slot_objs[i], slot_values[n]) for i, n in enumerate(slot_names)
+    ]
     row = 0
     for i, idx in enumerate(indices):
         stride = 1
@@ -60,9 +60,9 @@ def test_id_lifted_key_width3_round_trip() -> None:
     for j in (0, 1, 5, 17, 63):
         got = _eval(node, _row_for(NODE, {"j": j}))
         expected = torch.tensor([float(j), float(-(j * j)), 1.0])
-        assert torch.allclose(got, expected, atol=1e-4), (
-            f"NODE.j={j}: id_lifted_key {got.tolist()} != {expected.tolist()}"
-        )
+        assert torch.allclose(
+            got, expected, atol=1e-4
+        ), f"NODE.j={j}: id_lifted_key {got.tolist()} != {expected.tolist()}"
 
 
 def test_id_lifted_key_off_type_zero() -> None:
@@ -80,6 +80,6 @@ def test_u_tan_by_column_width_screen_width_round_trip() -> None:
     for angle in (-1024, 0, 256, 1024):
         got = _eval(node, _row_for(ANGLE_VALUE, {"angle": angle}))
         expected = torch.tensor(_u_tan_by_column(angle), dtype=torch.float32)
-        assert torch.allclose(got, expected, atol=1e-4), (
-            f"angle={angle}: u_tan_by_column mismatch"
-        )
+        assert torch.allclose(
+            got, expected, atol=1e-4
+        ), f"angle={angle}: u_tan_by_column mismatch"

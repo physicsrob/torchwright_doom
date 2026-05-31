@@ -91,7 +91,6 @@ from .embedding import (
 )
 from .tokens import FloatSlot, IntSlot, TokenType
 
-
 __all__ = [
     "emit_slotless",
     "emit_int_slot_token",
@@ -150,7 +149,8 @@ def emit_int_slot_token(
                 f"emit_float_slot_token for FloatSlot types."
             )
     return _emit_token_with_step_indices(
-        token_type, _value_to_step_index_nodes(token_type, slot_value_nodes),
+        token_type,
+        _value_to_step_index_nodes(token_type, slot_value_nodes),
         suffix=suffix,
     )
 
@@ -173,19 +173,16 @@ def emit_float_slot_token(
     quantization needed.
     """
     if not token_type.slots:
-        raise ValueError(
-            f"emit_float_slot_token: {token_type.name!r} has no slots."
-        )
-    has_float = any(
-        isinstance(slot, FloatSlot) for slot in token_type.slots.values()
-    )
+        raise ValueError(f"emit_float_slot_token: {token_type.name!r} has no slots.")
+    has_float = any(isinstance(slot, FloatSlot) for slot in token_type.slots.values())
     if not has_float:
         raise ValueError(
             f"emit_float_slot_token: {token_type.name!r} has no FloatSlot; "
             f"use emit_int_slot_token instead."
         )
     return _emit_token_with_step_indices(
-        token_type, _value_to_step_index_nodes(token_type, slot_value_nodes),
+        token_type,
+        _value_to_step_index_nodes(token_type, slot_value_nodes),
         suffix=suffix,
     )
 
@@ -204,13 +201,9 @@ def emit_token(
                 f"slot kwargs {sorted(slot_value_nodes)}"
             )
         return emit_slotless(token_type, suffix=suffix)
-    has_float = any(
-        isinstance(slot, FloatSlot) for slot in token_type.slots.values()
-    )
+    has_float = any(isinstance(slot, FloatSlot) for slot in token_type.slots.values())
     if has_float:
-        return emit_float_slot_token(
-            token_type, suffix=suffix, **slot_value_nodes
-        )
+        return emit_float_slot_token(token_type, suffix=suffix, **slot_value_nodes)
     return emit_int_slot_token(token_type, suffix=suffix, **slot_value_nodes)
 
 
@@ -260,14 +253,18 @@ def _value_to_step_index_nodes(
                 out[slot_name] = value_node
             else:
                 out[slot_name] = _affine_1d(
-                    value_node, 1.0, -float(slot.lo),
+                    value_node,
+                    1.0,
+                    -float(slot.lo),
                     name=f"q_{token_type.name}_{slot_name}",
                 )
         else:
             span = slot.hi - slot.lo
             scale = (slot.levels - 1) / span
             out[slot_name] = _affine_1d(
-                value_node, scale, -scale * float(slot.lo),
+                value_node,
+                scale,
+                -scale * float(slot.lo),
                 name=f"q_{token_type.name}_{slot_name}",
             )
     return out
@@ -401,9 +398,7 @@ def _raw_col_from_step_index(
     )
 
 
-def _digit_quad_payload(
-    q_node: Node, slot: IntSlot | FloatSlot, *, name: str
-) -> Node:
+def _digit_quad_payload(q_node: Node, slot: IntSlot | FloatSlot, *, name: str) -> Node:
     """Build the digit-quad payload ``[..., 2·d_c, 1, ...]`` from a
     step-index node ``q``.
 
@@ -437,9 +432,7 @@ def _digit_quad_payload(
     # k = 1..max_q//BASE; that's exactly the half-integer byte
     # threshold we want. Integer-step q never lands inside the ramp.
     hi_q = thermometer_floor_div(q_node, BASE, max_q)
-    hi_c_2 = _affine_1d(
-        hi_q, 2.0, -2.0 * CENTER, name=f"{name}_hi_c2"
-    )
+    hi_c_2 = _affine_1d(hi_q, 2.0, -2.0 * CENTER, name=f"{name}_hi_c2")
     # lo_q = q − BASE·hi_q realised as a single Linear over the
     # concat of (q, hi_q). The ``subtract(q, multiply_const(hi_q,
     # BASE))`` form leaves two chained Linears the compiler will not

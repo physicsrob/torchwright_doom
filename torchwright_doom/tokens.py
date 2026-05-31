@@ -18,13 +18,14 @@ otherwise reconstruct the function from the raw slot value.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Mapping, Sequence, Union
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence, TypeAlias
 
 if TYPE_CHECKING:
     from torchwright.graph import Node
 
 
-DerivedFn = Callable[[Union[int, float]], "float | Sequence[float]"]
+DerivedFn = Callable[[Any], "float | Sequence[float]"]
+DerivedLike: TypeAlias = "Derived | Callable[..., Any]"
 
 
 @dataclass(frozen=True)
@@ -51,7 +52,7 @@ class Derived:
 
 
 def _normalize_derived(
-    slot_kind: str, derived: Mapping[str, "Derived | Callable"] | None
+    slot_kind: str, derived: Mapping[str, DerivedLike] | None
 ) -> dict[str, "Derived"]:
     """Accept either ``Derived`` instances or bare scalar callables on a
     slot's ``derived`` map, normalizing bare callables to
@@ -89,12 +90,10 @@ class IntSlot:
 
     lo: int
     hi: int
-    derived: Mapping[str, "Derived | Callable"] = field(default_factory=dict)
+    derived: Mapping[str, DerivedLike] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "derived", _normalize_derived("IntSlot", self.derived)
-        )
+        object.__setattr__(self, "derived", _normalize_derived("IntSlot", self.derived))
 
 
 @dataclass(frozen=True)
@@ -108,7 +107,7 @@ class FloatSlot:
     lo: float
     hi: float
     levels: int = 65536
-    derived: Mapping[str, "Derived | Callable"] = field(default_factory=dict)
+    derived: Mapping[str, DerivedLike] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(

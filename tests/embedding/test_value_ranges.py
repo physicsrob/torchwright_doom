@@ -20,12 +20,18 @@ from torchwright.ops.inout_nodes import create_input
 
 from torchwright_doom import value_ranges as vr
 from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
-from torchwright_doom.tokens import IntSlot
+from torchwright_doom.tokens import FloatSlot
 from torchwright_doom.vocab import VALUE
 
 
-def _value_row(encoded: float) -> torch.Tensor:
+def _value_slot() -> FloatSlot:
     slot = VALUE.slots["v"]
+    assert isinstance(slot, FloatSlot)
+    return slot
+
+
+def _value_row(encoded: float) -> torch.Tensor:
+    slot = _value_slot()
     span = slot.hi - slot.lo
     idx = round((encoded - slot.lo) / span * (slot.levels - 1))
     idx = max(0, min(slot.levels - 1, idx))
@@ -53,9 +59,7 @@ def test_value_derived_round_trip_all_ranges() -> None:
             v = spec.lo + frac * (spec.hi - spec.lo)
             row = _value_row(vr.encode_float(rng, v))
             got = _eval_one(node, row)
-            assert abs(got - v) <= tol, (
-                f"{rng.name} v={v}: recovered {got}, tol {tol}"
-            )
+            assert abs(got - v) <= tol, f"{rng.name} v={v}: recovered {got}, tol {tol}"
 
 
 def test_value_derived_inverse_column() -> None:
@@ -72,15 +76,15 @@ def test_value_derived_inverse_column() -> None:
         # decode is grid-snapped; compare 1/decoded, not 1/v
         decoded = vr.decode_float(rng, vr.encode_float(rng, v))
         expected = vr._VALUE_INVERSE_LIMIT if decoded == 0.0 else 1.0 / decoded
-        assert abs(got - expected) <= abs(expected) * 1e-3 + 1e-4, (
-            f"{rng.name} inv: recovered {got}, expected {expected}"
-        )
+        assert (
+            abs(got - expected) <= abs(expected) * 1e-3 + 1e-4
+        ), f"{rng.name} inv: recovered {got}, expected {expected}"
 
 
 def test_encode_grid_decode_pure() -> None:
     """encode -> VALUE grid snap -> decode recovers v within the per-range
     grid step (the same grid emit.py quantizes onto for AR emission)."""
-    slot = VALUE.slots["v"]
+    slot = _value_slot()
     span = slot.hi - slot.lo
     for rng in vr.ValueRange:
         spec = vr.VALUE_RANGES[rng]
@@ -90,6 +94,6 @@ def test_encode_grid_decode_pure() -> None:
             encoded = vr.encode_float(rng, v)
             idx = round((encoded - slot.lo) / span * (slot.levels - 1))
             snapped = slot.lo + (idx / (slot.levels - 1)) * span
-            assert abs(vr.decode_float(rng, snapped) - v) <= tol, (
-                f"{rng.name} v={v}: grid round-trip out of tolerance"
-            )
+            assert (
+                abs(vr.decode_float(rng, snapped) - v) <= tol
+            ), f"{rng.name} v={v}: grid round-trip out of tolerance"

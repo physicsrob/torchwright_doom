@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 SUBSECTOR_FLAG = 0x8000
 
 

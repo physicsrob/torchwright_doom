@@ -30,6 +30,7 @@ def _bare_screen_literals(path: str) -> list[tuple[int, str]]:
 
 def test_no_bare_screen_dim_literals() -> None:
     for module in (vocab, value_ranges):
+        assert module.__file__ is not None
         hits = _bare_screen_literals(module.__file__)
         assert not hits, (
             f"{module.__name__} has bare 60/50 literals at {hits}; use "

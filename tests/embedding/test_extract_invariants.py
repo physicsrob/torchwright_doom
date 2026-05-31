@@ -25,7 +25,6 @@ from torchwright_doom import extract
 from torchwright_doom.embedding import TOKEN_VOCAB
 from torchwright_doom.vocab import NODE, VALUE
 
-
 # ---------------------------------------------------------------------------
 # is_type threshold margin — the load-bearing E8 sanity check.
 # ---------------------------------------------------------------------------
@@ -47,9 +46,9 @@ def test_every_vocab_type_has_safe_is_type_gap() -> None:
         thresh = extract._is_type_threshold(T)
         # Threshold is exactly midway, given uniform max cross-dot = 1200
         # in the current E8 assignment.
-        assert 1300.0 <= thresh <= 1500.0, (
-            f"{T.name} threshold {thresh} far from the expected midpoint"
-        )
+        assert (
+            1300.0 <= thresh <= 1500.0
+        ), f"{T.name} threshold {thresh} far from the expected midpoint"
 
 
 def test_e8_gap_directly() -> None:
@@ -100,9 +99,7 @@ def test_flat_namespace_disagreement_raises(monkeypatch) -> None:
     # both ``types`` (for iteration) and ``slot_columns`` (assigned in
     # the raw-extract Linear construction — but the test should raise
     # before that point during ``_flat_declaring_types``).
-    monkeypatch.setattr(
-        TOKEN_VOCAB.layout, "types", [fake_a, fake_b], raising=True
-    )
+    monkeypatch.setattr(TOKEN_VOCAB.layout, "types", [fake_a, fake_b], raising=True)
     monkeypatch.setattr(
         TOKEN_VOCAB.layout,
         "slot_columns",

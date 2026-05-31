@@ -36,10 +36,15 @@ from torchwright_doom.vocab import (
     VALUE,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _value_slot() -> FloatSlot:
+    slot = VALUE.slots["v"]
+    assert isinstance(slot, FloatSlot)
+    return slot
 
 
 def _row_index(token_type, slot_values: dict[str, int | float]) -> int:
@@ -62,7 +67,9 @@ def _row_index(token_type, slot_values: dict[str, int | float]) -> int:
         (slot.hi - slot.lo) if isinstance(slot, IntSlot) else slot.levels
         for slot in slot_objs
     ]
-    indices = [step_index(slot_objs[i], slot_values[n]) for i, n in enumerate(slot_names)]
+    indices = [
+        step_index(slot_objs[i], slot_values[n]) for i, n in enumerate(slot_names)
+    ]
     row = 0
     for i, idx in enumerate(indices):
         stride = 1
@@ -126,12 +133,12 @@ def test_compiled_is_type_self_and_cross(device) -> None:
 
     out_self = _run_compiled(compiled, node_row, device)
     out_cross = _run_compiled(compiled, value_row, device)
-    assert out_self == pytest.approx(1.0, abs=1e-3), (
-        f"is_type(NODE) on NODE row compiled to {out_self}, expected 1.0"
-    )
-    assert out_cross == pytest.approx(0.0, abs=1e-3), (
-        f"is_type(NODE) on VALUE row compiled to {out_cross}, expected 0.0"
-    )
+    assert out_self == pytest.approx(
+        1.0, abs=1e-3
+    ), f"is_type(NODE) on NODE row compiled to {out_self}, expected 1.0"
+    assert out_cross == pytest.approx(
+        0.0, abs=1e-3
+    ), f"is_type(NODE) on VALUE row compiled to {out_cross}, expected 0.0"
 
 
 # ---------------------------------------------------------------------------
@@ -149,9 +156,7 @@ def test_compiled_extract_type_slot_int(device) -> None:
     for j in [0, 5, 63]:
         row = W_EMBED[_row_index(NODE, {"j": j}) : _row_index(NODE, {"j": j}) + 1]
         out = _run_compiled(compiled, row, device)
-        assert out == pytest.approx(float(j), abs=1e-2), (
-            f"NODE.j={j} compiled to {out}"
-        )
+        assert out == pytest.approx(float(j), abs=1e-2), f"NODE.j={j} compiled to {out}"
 
     # Wrong type → masked 0
     value_row = W_EMBED[
@@ -173,7 +178,7 @@ def test_compiled_extract_type_slot_float(device) -> None:
     masked = extract.extract_type_slot(inp, VALUE, "v")
     compiled, _ = _compile_one(masked, device)
 
-    slot = VALUE.slots["v"]
+    slot = _value_slot()
     span = slot.hi - slot.lo
     for k in [0, 32768, slot.levels - 1]:
         snapped = slot.lo + (k / (slot.levels - 1)) * span
@@ -183,9 +188,9 @@ def test_compiled_extract_type_slot_float(device) -> None:
         out = _run_compiled(compiled, row, device)
         # The affine round-trip + cond_gate scales by M ≈ 4096; fp32
         # multiplies and the cond_gate cancellation add a few-ULP residual.
-        assert out == pytest.approx(snapped, abs=1.0), (
-            f"VALUE.v k={k} (snapped={snapped}) compiled to {out}"
-        )
+        assert out == pytest.approx(
+            snapped, abs=1.0
+        ), f"VALUE.v k={k} (snapped={snapped}) compiled to {out}"
 
     node_row = W_EMBED[_row_index(NODE, {"j": 5}) : _row_index(NODE, {"j": 5}) + 1]
     out = _run_compiled(compiled, node_row, device)
@@ -212,9 +217,9 @@ def test_compiled_extract_int_slot_flat(device) -> None:
             + 1
         ]
         out = _run_compiled(compiled, row, device)
-        assert out == pytest.approx(float(flag), abs=1e-2), (
-            f"SEG_TWO_SIDED.flag={flag} compiled to {out}"
-        )
+        assert out == pytest.approx(
+            float(flag), abs=1e-2
+        ), f"SEG_TWO_SIDED.flag={flag} compiled to {out}"
 
     # Off-name → 0
     node_row = W_EMBED[_row_index(NODE, {"j": 5}) : _row_index(NODE, {"j": 5}) + 1]
@@ -244,6 +249,6 @@ def test_compiled_extract_derived_sin(device) -> None:
         ]
         out = _run_compiled(compiled, row, device)
         expected = math.sin(angle * 2 * math.pi / ANGLE_BAM)
-        assert out == pytest.approx(expected, abs=1e-4), (
-            f"angle={angle}: derived sin compiled={out} expected={expected}"
-        )
+        assert out == pytest.approx(
+            expected, abs=1e-4
+        ), f"angle={angle}: derived sin compiled={out} expected={expected}"

@@ -21,11 +21,13 @@ from torchwright.ops.inout_nodes import create_input
 
 from torchwright_doom import extract
 from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
-from torchwright_doom.tokens import IntSlot
+from torchwright_doom.tokens import IntSlot, TokenType
 from torchwright_doom.vocab import DONE, NODE, SEG, VALUE
 
 
-def _row_for(token_type, slot_values: dict) -> torch.Tensor:
+def _row_for(
+    token_type: TokenType, slot_values: dict[str, int | float]
+) -> torch.Tensor:
     start, _end = TOKEN_VOCAB.type_to_row_range[token_type]
     if not token_type.slots:
         return W_EMBED[start : start + 1].clone()
@@ -38,9 +40,7 @@ def _row_for(token_type, slot_values: dict) -> torch.Tensor:
         span = slot.hi - slot.lo
         return round((float(value) - slot.lo) / span * (slot.levels - 1))
 
-    sizes = [
-        (s.hi - s.lo) if isinstance(s, IntSlot) else s.levels for s in slot_objs
-    ]
+    sizes = [(s.hi - s.lo) if isinstance(s, IntSlot) else s.levels for s in slot_objs]
     indices = [
         step_index(slot_objs[i], slot_values[n]) for i, n in enumerate(slot_names)
     ]
@@ -60,7 +60,7 @@ def _eval_one(node, row: torch.Tensor) -> float:
 
 
 # Representative rows for a handful of distinct types.
-_ROWS = {
+_ROWS: dict[str, tuple[TokenType, dict[str, int | float]]] = {
     "NODE": (NODE, {"j": 5}),
     "SEG": (SEG, {"i": 3, "is_first_of_ss": 0}),
     "VALUE": (VALUE, {"v": 0.25}),

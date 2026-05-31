@@ -36,6 +36,7 @@ from torchwright.ops.inout_nodes import create_input
 
 from torchwright_doom.embedding import BASE, TOKEN_VOCAB, W_EMBED
 from torchwright_doom.emit import emit_float_slot_token, emit_int_slot_token
+from torchwright_doom.tokens import FloatSlot
 from torchwright_doom.vocab import ANGLE_VALUE, VALUE
 
 
@@ -53,15 +54,21 @@ def _value_row(t, values: dict) -> int:
 
 
 def _value_for_q(q: float) -> float:
-    slot = VALUE.slots["v"]
+    slot = _value_slot()
     span = slot.hi - slot.lo
     return slot.lo + q / (slot.levels - 1) * span
+
+
+def _value_slot() -> FloatSlot:
+    slot = VALUE.slots["v"]
+    assert isinstance(slot, FloatSlot)
+    return slot
 
 
 def _emit_value_for_q(q: float) -> torch.Tensor:
     """Emit residual for ``VALUE`` at a (possibly non-integer) step
     index ``q`` via ``emit_float_slot_token``."""
-    slot = VALUE.slots["v"]
+    slot = _value_slot()
     v = _value_for_q(q)
     with fresh_graph_session():
         v_in = create_input(
@@ -70,14 +77,12 @@ def _emit_value_for_q(q: float) -> torch.Tensor:
             value_range=(float(slot.lo) - 1.0, float(slot.hi) + 1.0),
         )
         out = emit_float_slot_token(VALUE, v=v_in)
-        cache = reference_eval(
-            out, {"v": torch.tensor([[float(v)]])}, n_pos=1
-        )
+        cache = reference_eval(out, {"v": torch.tensor([[float(v)]])}, n_pos=1)
         return cache[out]
 
 
 def _quantized_v(k: int) -> float:
-    slot = VALUE.slots["v"]
+    slot = _value_slot()
     span = slot.hi - slot.lo
     return slot.lo + (k / (slot.levels - 1)) * span
 
@@ -90,8 +95,7 @@ def test_value_near_integer_step_strict() -> None:
     """
     deltas = [-0.4, -0.1, 0.0, 0.1, 0.4]
     # Cover the full range plus byte-boundary neighbors.
-    test_ks = [0, 1, 5, 100, 255, 256, 257, 511, 512, 32767, 32768,
-               65534, 65535]
+    test_ks = [0, 1, 5, 100, 255, 256, 257, 511, 512, 32767, 32768, 65534, 65535]
     for k in test_ks:
         for d in deltas:
             q = k + d
@@ -146,7 +150,7 @@ def test_value_byte_boundary_outside_ramp() -> None:
     m (post-ramp), lo_q = -0.44, nearest row by (hi, lo) distance is
     ``(m, 0) = m·BASE``.
     """
-    levels = VALUE.slots["v"].levels
+    levels = _value_slot().levels
     test_ms = [1, 2, 32, 128, 200, 255]
     for m in test_ms:
         midpoint = m * BASE - 0.5

@@ -17,6 +17,8 @@ Mirrors the four checks called out in the embedding-port plan:
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping, Sequence
+from typing import cast
 
 import pytest
 import torch
@@ -31,7 +33,7 @@ from torchwright_doom.embedding import (
     digit_quad_query_columns_for,
     digit_quad_row,
 )
-from torchwright_doom.tokens import FloatSlot, IntSlot
+from torchwright_doom.tokens import Derived, FloatSlot, IntSlot, TokenType
 from torchwright_doom.vocab import (
     ANGLE_BAM,
     ANGLE_VALUE,
@@ -41,6 +43,22 @@ from torchwright_doom.vocab import (
     SEG,
     VALUE,
 )
+
+
+def _float_slot(token_type: TokenType, slot_name: str) -> FloatSlot:
+    slot = token_type.slots[slot_name]
+    assert isinstance(slot, FloatSlot)
+    return slot
+
+
+def _int_slot(token_type: TokenType, slot_name: str) -> IntSlot:
+    slot = token_type.slots[slot_name]
+    assert isinstance(slot, IntSlot)
+    return slot
+
+
+def _derived_items(slot: IntSlot | FloatSlot):
+    return cast(Mapping[str, Derived], slot.derived).items()
 
 
 def test_cardinality_fits_budget() -> None:
@@ -75,9 +93,9 @@ def test_raw_slot_columns_in_unit_interval() -> None:
         # Rows from other types contribute 0; rows from the declaring
         # type write a normalized value in [0, 1].
         assert values.min().item() >= 0.0
-        assert values.max().item() <= 1.0 + 1e-6, (
-            f"raw col for {type_name} exceeds 1.0: {values.max().item()}"
-        )
+        assert (
+            values.max().item() <= 1.0 + 1e-6
+        ), f"raw col for {type_name} exceeds 1.0: {values.max().item()}"
 
 
 def test_digit_quad_block_widths_match_cardinality() -> None:
@@ -92,9 +110,7 @@ def test_digit_quad_block_widths_match_cardinality() -> None:
             f"{type_name}.{slot_name}: layout width {n_cols} != "
             f"digit_quad_query_columns_for {expected_n}"
         )
-        cardinality = (
-            slot.hi - slot.lo if isinstance(slot, IntSlot) else slot.levels
-        )
+        cardinality = slot.hi - slot.lo if isinstance(slot, IntSlot) else slot.levels
         if cardinality <= 256:
             assert n_cols == 2
         else:
@@ -135,7 +151,7 @@ def test_digit_quad_payload_value_slot() -> None:
     for that row's quantized value."""
     layout = TOKEN_VOCAB.layout
     value_start, _ = TOKEN_VOCAB.type_to_row_range[VALUE]
-    slot = VALUE.slots["v"]
+    slot = _float_slot(VALUE, "v")
     span = slot.hi - slot.lo
     for k in [0, 1, 100, 32767, 32768, 65534, 65535]:
         quantized = slot.lo + (k / (slot.levels - 1)) * span
@@ -153,7 +169,7 @@ def test_digit_quad_payload_angle_value_slot() -> None:
     block on every row."""
     layout = TOKEN_VOCAB.layout
     av_start, _ = TOKEN_VOCAB.type_to_row_range[ANGLE_VALUE]
-    slot = ANGLE_VALUE.slots["angle"]
+    slot = _int_slot(ANGLE_VALUE, "angle")
     levels = slot.hi - slot.lo
     for k in [0, 1, 256, 1024, 4095, levels - 1]:
         angle_value = slot.lo + k
@@ -171,27 +187,27 @@ def test_digit_quad_payload_small_int_slot() -> None:
     blocks."""
     layout = TOKEN_VOCAB.layout
     seg_start, _ = TOKEN_VOCAB.type_to_row_range[SEG]
-    n_i = SEG.slots["i"].hi - SEG.slots["i"].lo
+    seg_i_slot = _int_slot(SEG, "i")
+    seg_first_slot = _int_slot(SEG, "is_first_of_ss")
+    n_i = seg_i_slot.hi - seg_i_slot.lo
     for i in [0, 1, 5, n_i - 1]:
         for flag in [0, 1]:
             row_idx = seg_start + i * 2 + flag
             row = W_EMBED[row_idx]
 
             actual_i = _digit_quad_block_for("seg", "i", row)
-            expected_i = digit_quad_row(SEG.slots["i"], i)
+            expected_i = digit_quad_row(seg_i_slot, i)
             assert torch.allclose(actual_i, expected_i)
 
             actual_flag = _digit_quad_block_for("seg", "is_first_of_ss", row)
-            expected_flag = digit_quad_row(
-                SEG.slots["is_first_of_ss"], flag
-            )
+            expected_flag = digit_quad_row(seg_first_slot, flag)
             assert torch.allclose(actual_flag, expected_flag)
 
 
 def _angle_row(angle: int) -> torch.Tensor:
     """Pick the W_EMBED row representing ``ANGLE_VALUE(angle=...)``."""
     av_start, _ = TOKEN_VOCAB.type_to_row_range[ANGLE_VALUE]
-    idx = angle - ANGLE_VALUE.slots["angle"].lo
+    idx = angle - _int_slot(ANGLE_VALUE, "angle").lo
     return W_EMBED[av_start + idx]
 
 
@@ -202,7 +218,7 @@ def _value_row_for(v: float) -> tuple[torch.Tensor, float]:
     65,536-step grid, callers compare against the snapped value).
     """
     v_start, _ = TOKEN_VOCAB.type_to_row_range[VALUE]
-    slot = VALUE.slots["v"]
+    slot = _float_slot(VALUE, "v")
     span = slot.hi - slot.lo
     idx = round((v - slot.lo) / span * (slot.levels - 1))
     quantized = slot.lo + (idx / (slot.levels - 1)) * span
@@ -212,24 +228,25 @@ def _value_row_for(v: float) -> tuple[torch.Tensor, float]:
 def test_derived_column_round_trip_angle_value() -> None:
     """Every ANGLE_VALUE derived column equals fn(angle) on the row's angle."""
     layout = TOKEN_VOCAB.layout
-    angle_slot = ANGLE_VALUE.slots["angle"]
+    angle_slot = _int_slot(ANGLE_VALUE, "angle")
     test_angles = [-2048, -1024, 0, 256, 1024, 2048]
     for angle in test_angles:
         row = _angle_row(angle)
-        for derived_name, d in angle_slot.derived.items():
+        for derived_name, d in _derived_items(angle_slot):
             start, width = layout.derived_columns[
                 (ANGLE_VALUE.name, "angle", derived_name)
             ]
             expected = d.fn(angle)
             if width == 1:
+                expected_scalar = cast(float, expected)
                 assert math.isclose(
-                    row[start].item(), float(expected), abs_tol=1e-6
+                    row[start].item(), float(expected_scalar), abs_tol=1e-6
                 ), (
                     f"angle={angle} derived={derived_name}: "
-                    f"actual={row[start].item()} expected={float(expected)}"
+                    f"actual={row[start].item()} expected={float(expected_scalar)}"
                 )
             else:
-                exp_list = [float(x) for x in expected]
+                exp_list = [float(x) for x in cast(Sequence[float], expected)]
                 assert len(exp_list) == width
                 for off in range(width):
                     assert math.isclose(
@@ -243,13 +260,13 @@ def test_derived_column_round_trip_angle_value() -> None:
 def test_derived_column_round_trip_value() -> None:
     """Every VALUE derived column equals fn(v) on the quantized v."""
     layout = TOKEN_VOCAB.layout
-    v_slot = VALUE.slots["v"]
+    v_slot = _float_slot(VALUE, "v")
     test_values = [-1.0, -0.5, -0.125, 0.0, 0.25, 0.5, 1.0]
     for v in test_values:
         row, quantized = _value_row_for(v)
-        for derived_name, d in v_slot.derived.items():
+        for derived_name, d in _derived_items(v_slot):
             start, _w = layout.derived_columns[(VALUE.name, "v", derived_name)]
-            expected = float(d.fn(quantized))
+            expected = float(cast(float, d.fn(quantized)))
             actual = row[start].item()
             assert math.isclose(actual, expected, rel_tol=1e-6, abs_tol=1e-6), (
                 f"v={quantized} derived={derived_name}: "
@@ -270,9 +287,9 @@ def test_derived_column_round_trip_one_hot_emit_x1() -> None:
             target = int(col_name.split("_")[-1])
             expected = 1.0 if x == target else 0.0
             actual = row[start].item()
-            assert actual == expected, (
-                f"EMIT_X2.x={x} derived={col_name}: {actual} != {expected}"
-            )
+            assert (
+                actual == expected
+            ), f"EMIT_X2.x={x} derived={col_name}: {actual} != {expected}"
 
 
 def test_cross_check_against_sandbox() -> None:
@@ -305,12 +322,8 @@ def test_cross_check_against_sandbox() -> None:
                 -ANGLE_BAM // 2,
                 ANGLE_BAM // 2,
                 derived={
-                    "sin": Derived(
-                        lambda a: math.sin(a * 2 * math.pi / ANGLE_BAM)
-                    ),
-                    "cos": Derived(
-                        lambda a: math.cos(a * 2 * math.pi / ANGLE_BAM)
-                    ),
+                    "sin": Derived(lambda a: math.sin(a * 2 * math.pi / ANGLE_BAM)),
+                    "cos": Derived(lambda a: math.cos(a * 2 * math.pi / ANGLE_BAM)),
                 },
             ),
         },
@@ -320,9 +333,7 @@ def test_cross_check_against_sandbox() -> None:
     layout = TOKEN_VOCAB.layout
     test_angles = [0, 256, 1024, -1024, 2048]
     for angle in test_angles:
-        sb_token = sb_api.Token(
-            type=sb_angle_value, values={"angle": angle}
-        )
+        sb_token = sb_api.Token(type=sb_angle_value, values={"angle": angle})
         sb_vec = sb_runtime.embed(sb_token, sb_vocab.layout)
         sb_row = sb_vec._data[0]
 

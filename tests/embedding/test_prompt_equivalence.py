@@ -52,9 +52,9 @@ def test_build_prompt_matches_sandbox_get_prefill(fixture_name: str) -> None:
         real = build_prompt(real_md, real_state)
         sand = sb_prefill.get_prefill(scene, pose)
 
-        assert len(real) == len(sand), (
-            f"{fixture_name} pose {p}: token count {len(real)} != {len(sand)}"
-        )
+        assert len(real) == len(
+            sand
+        ), f"{fixture_name} pose {p}: token count {len(real)} != {len(sand)}"
         for i, (r, s) in enumerate(zip(real, sand)):
             assert r.type.name == s.type.name, (
                 f"{fixture_name} pose {p} pos {i}: type "

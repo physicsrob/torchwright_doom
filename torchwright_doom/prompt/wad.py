@@ -29,7 +29,6 @@ from .types import (
     Vertex,
 )
 
-
 _MAP_LUMP_NAMES = frozenset(
     {
         "THINGS",
@@ -83,11 +82,21 @@ class WADReader:
 
     def get_map(self, map_name: str) -> MapData:
         lumps = self._find_map_lumps(map_name)
-        required = ("VERTEXES", "LINEDEFS", "SIDEDEFS", "SECTORS", "SEGS", "SSECTORS", "NODES")
+        required = (
+            "VERTEXES",
+            "LINEDEFS",
+            "SIDEDEFS",
+            "SECTORS",
+            "SEGS",
+            "SSECTORS",
+            "NODES",
+        )
         missing = [n for n in required if n not in lumps]
         if missing:
             raise KeyError(f"Map {map_name!r} missing required lumps: {missing}")
-        things = _parse_things(self._slice(lumps["THINGS"])) if "THINGS" in lumps else []
+        things = (
+            _parse_things(self._slice(lumps["THINGS"])) if "THINGS" in lumps else []
+        )
         return MapData(
             name=map_name,
             vertices=_parse_vertexes(self._slice(lumps["VERTEXES"])),

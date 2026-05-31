@@ -28,6 +28,7 @@ from torchwright_doom.emit import (
     emit_slotless,
     emit_token,
 )
+from torchwright_doom.tokens import FloatSlot
 from torchwright_doom.vocab import (
     BEGIN,
     DONE,
@@ -37,6 +38,12 @@ from torchwright_doom.vocab import (
     SEG,
     VALUE,
 )
+
+
+def _value_slot() -> FloatSlot:
+    slot = VALUE.slots["v"]
+    assert isinstance(slot, FloatSlot)
+    return slot
 
 
 def _project_and_argmax(emit_value: torch.Tensor) -> int:
@@ -65,9 +72,9 @@ def test_emit_slotless_argmax() -> None:
         assert value.shape == (1, TOKEN_VOCAB.layout.d_embed)
         argmax = _project_and_argmax(value)
         expected = _row_for(t, {})
-        assert argmax == expected, (
-            f"slotless {t.name}: argmax {argmax} != expected {expected}"
-        )
+        assert (
+            argmax == expected
+        ), f"slotless {t.name}: argmax {argmax} != expected {expected}"
 
 
 def test_emit_int_slot_single() -> None:
@@ -84,9 +91,9 @@ def test_emit_int_slot_single() -> None:
             value = cache[out]
         argmax = _project_and_argmax(value)
         expected = _row_for(NODE, {"j": j})
-        assert argmax == expected, (
-            f"NODE(j={j}): argmax {argmax} != expected {expected}"
-        )
+        assert (
+            argmax == expected
+        ), f"NODE(j={j}): argmax {argmax} != expected {expected}"
 
 
 def test_emit_int_slot_multi() -> None:
@@ -103,9 +110,7 @@ def test_emit_int_slot_multi() -> None:
         with fresh_graph_session():
             i_in = create_input("i", 1, value_range=(-1.0, 256.0))
             f_in = create_input("flag", 1, value_range=(-1.0, 4.0))
-            out = emit_int_slot_token(
-                SEG, i=i_in, is_first_of_ss=f_in
-            )
+            out = emit_int_slot_token(SEG, i=i_in, is_first_of_ss=f_in)
             cache = reference_eval(
                 out,
                 input_values={
@@ -118,8 +123,7 @@ def test_emit_int_slot_multi() -> None:
         argmax = _project_and_argmax(value)
         expected = _row_for(SEG, {"i": i, "is_first_of_ss": flag})
         assert argmax == expected, (
-            f"SEG(i={i}, flag={flag}): argmax {argmax} != "
-            f"expected {expected}"
+            f"SEG(i={i}, flag={flag}): argmax {argmax} != " f"expected {expected}"
         )
 
 
@@ -166,7 +170,7 @@ def test_emit_float_slot_at_grid_levels() -> None:
     the matching row. Spans the full slot range plus a few interior
     levels.
     """
-    slot = VALUE.slots["v"]
+    slot = _value_slot()
     span = slot.hi - slot.lo
     for k in [0, 1, 100, 32767, 32768, 65534, 65535]:
         v = slot.lo + (k / (slot.levels - 1)) * span
@@ -185,9 +189,9 @@ def test_emit_float_slot_at_grid_levels() -> None:
             value = cache[out]
         argmax = _project_and_argmax(value)
         expected = _row_for(VALUE, {"v": v})
-        assert argmax == expected, (
-            f"VALUE(v={v}, k={k}): argmax {argmax} != expected {expected}"
-        )
+        assert (
+            argmax == expected
+        ), f"VALUE(v={v}, k={k}): argmax {argmax} != expected {expected}"
 
 
 def test_emit_token_dispatcher() -> None:
@@ -213,22 +217,16 @@ def test_emit_token_dispatcher() -> None:
             n_pos=1,
         )
         value = cache[out]
-    assert _project_and_argmax(value) == _row_for(
-        SEG, {"i": 5, "is_first_of_ss": 1}
-    )
+    assert _project_and_argmax(value) == _row_for(SEG, {"i": 5, "is_first_of_ss": 1})
 
     # FloatSlot
     with fresh_graph_session():
         v_in = create_input("v", 1, value_range=(-5000.0, 5000.0))
         out = emit_token(VALUE, v=v_in)
-        cache = reference_eval(
-            out, input_values={"v": torch.tensor([[0.5]])}, n_pos=1
-        )
+        cache = reference_eval(out, input_values={"v": torch.tensor([[0.5]])}, n_pos=1)
         value = cache[out]
-    slot = VALUE.slots["v"]
+    slot = _value_slot()
     span = slot.hi - slot.lo
     k = round((0.5 - slot.lo) / span * (slot.levels - 1))
     quantized = slot.lo + (k / (slot.levels - 1)) * span
-    assert _project_and_argmax(value) == _row_for(
-        VALUE, {"v": quantized}
-    )
+    assert _project_and_argmax(value) == _row_for(VALUE, {"v": quantized})

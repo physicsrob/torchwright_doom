@@ -46,6 +46,6 @@ def test_live_diff_matches_committed_baseline_and_is_empty() -> None:
         "regenerate it (NUMBA_DISABLE_JIT=1 python scripts/vocab_diff.py > "
         "baseline_vocab_diff.txt) as a deliberate, reviewable change"
     )
-    assert "[contract diff empty] true" in live, (
-        "real TOKEN_VOCAB no longer mirrors the sandbox contract"
-    )
+    assert (
+        "[contract diff empty] true" in live
+    ), "real TOKEN_VOCAB no longer mirrors the sandbox contract"

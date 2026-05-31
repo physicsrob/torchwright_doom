@@ -40,10 +40,15 @@ from torchwright_doom.vocab import (
     VALUE,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _value_slot() -> FloatSlot:
+    slot = VALUE.slots["v"]
+    assert isinstance(slot, FloatSlot)
+    return slot
 
 
 def _row_for(token_type, slot_values: dict[str, int | float]) -> torch.Tensor:
@@ -56,9 +61,9 @@ def _row_for(token_type, slot_values: dict[str, int | float]) -> torch.Tensor:
     """
     start, end = TOKEN_VOCAB.type_to_row_range[token_type]
     if not token_type.slots:
-        assert slot_values == {}, (
-            f"{token_type.name} is slotless; got slot_values {slot_values}"
-        )
+        assert (
+            slot_values == {}
+        ), f"{token_type.name} is slotless; got slot_values {slot_values}"
         return W_EMBED[start : start + 1].clone()
 
     slot_names = list(token_type.slots.keys())
@@ -74,7 +79,9 @@ def _row_for(token_type, slot_values: dict[str, int | float]) -> torch.Tensor:
         (slot.hi - slot.lo) if isinstance(slot, IntSlot) else slot.levels
         for slot in slot_objs
     ]
-    indices = [step_index(slot_objs[i], slot_values[n]) for i, n in enumerate(slot_names)]
+    indices = [
+        step_index(slot_objs[i], slot_values[n]) for i, n in enumerate(slot_names)
+    ]
     # itertools.product is C-order: last dim fastest. Compose:
     row = 0
     for i, idx in enumerate(indices):
@@ -114,19 +121,17 @@ def test_is_type_indicator_strict_zero_or_one() -> None:
 
         # Self-match: exactly 1.0.
         out = _eval_one(is_type_nodes[T.name], row)
-        assert out == pytest.approx(1.0, abs=1e-6), (
-            f"is_type({T.name}) on a {T.name} row should be 1.0, got {out}"
-        )
+        assert out == pytest.approx(
+            1.0, abs=1e-6
+        ), f"is_type({T.name}) on a {T.name} row should be 1.0, got {out}"
 
         # Cross-match against the first non-matching type.
-        other = next(
-            (Tp for Tp in TOKEN_VOCAB.types if Tp.name != T.name), None
-        )
+        other = next((Tp for Tp in TOKEN_VOCAB.types if Tp.name != T.name), None)
         assert other is not None
         out = _eval_one(is_type_nodes[other.name], row)
-        assert out == pytest.approx(0.0, abs=1e-6), (
-            f"is_type({other.name}) on a {T.name} row should be 0.0, got {out}"
-        )
+        assert out == pytest.approx(
+            0.0, abs=1e-6
+        ), f"is_type({other.name}) on a {T.name} row should be 0.0, got {out}"
 
 
 # ---------------------------------------------------------------------------
@@ -160,19 +165,17 @@ def test_extract_type_slot_int_round_trip(token_type, slot_name, test_values) ->
                     continue
                 other_slot = token_type.slots[other_name]
                 slot_vals[other_name] = (
-                    other_slot.lo
-                    if isinstance(other_slot, IntSlot)
-                    else other_slot.lo
+                    other_slot.lo if isinstance(other_slot, IntSlot) else other_slot.lo
                 )
             row = _row_for(token_type, slot_vals)
         raw_out = _eval_one(raw_node, row)
         masked_out = _eval_one(masked_node, row)
-        assert raw_out == pytest.approx(float(value), abs=1e-3), (
-            f"{token_type.name}.{slot_name}={value} raw mismatch: {raw_out}"
-        )
-        assert masked_out == pytest.approx(float(value), abs=1e-3), (
-            f"{token_type.name}.{slot_name}={value} masked mismatch: {masked_out}"
-        )
+        assert raw_out == pytest.approx(
+            float(value), abs=1e-3
+        ), f"{token_type.name}.{slot_name}={value} raw mismatch: {raw_out}"
+        assert masked_out == pytest.approx(
+            float(value), abs=1e-3
+        ), f"{token_type.name}.{slot_name}={value} masked mismatch: {masked_out}"
 
 
 def test_extract_type_slot_wrong_type_returns_zero_masked() -> None:
@@ -211,7 +214,7 @@ def test_extract_type_slot_float_round_trip_grid_aligned() -> None:
     raw_node = extract.extract_type_slot_raw(inp, VALUE, "v")
     masked_node = extract.extract_type_slot(inp, VALUE, "v")
 
-    slot = VALUE.slots["v"]
+    slot = _value_slot()
     span = slot.hi - slot.lo
     for k in [0, 1, 32768, slot.levels - 1]:
         snapped = slot.lo + (k / (slot.levels - 1)) * span
@@ -220,9 +223,9 @@ def test_extract_type_slot_float_round_trip_grid_aligned() -> None:
         masked_out = _eval_one(masked_node, row)
         # FloatSlot grid-snap step is ~0.125 for VALUE.v; sub-LSB
         # noise from the affine round-trip is well under 1e-3.
-        assert raw_out == pytest.approx(snapped, abs=0.2), (
-            f"VALUE.v k={k} (snapped={snapped}): raw_out={raw_out}"
-        )
+        assert raw_out == pytest.approx(
+            snapped, abs=0.2
+        ), f"VALUE.v k={k} (snapped={snapped}): raw_out={raw_out}"
         assert masked_out == pytest.approx(snapped, abs=0.2)
 
 
@@ -239,7 +242,7 @@ def test_extract_type_slot_float_wrong_type_masked_zero() -> None:
     row = _row_for(NODE, {"j": 5})
     raw_out = _eval_one(raw_node, row)
     masked_out = _eval_one(masked_node, row)
-    slot = VALUE.slots["v"]
+    slot = _value_slot()
     off_type_residual = (slot.hi - slot.lo) / (2.0 * (slot.levels - 1))
     expected_raw = slot.lo - off_type_residual
     assert raw_out == pytest.approx(expected_raw, abs=1e-3)
@@ -265,12 +268,12 @@ def test_extract_int_slot_flat_namespace_across_types() -> None:
             row = _row_for(t, {"flag": flag})
             raw_out = _eval_one(raw_node, row)
             masked_out = _eval_one(masked_node, row)
-            assert raw_out == pytest.approx(float(flag), abs=1e-3), (
-                f"{t.name}.flag={flag}: raw={raw_out}"
-            )
-            assert masked_out == pytest.approx(float(flag), abs=1e-3), (
-                f"{t.name}.flag={flag}: masked={masked_out}"
-            )
+            assert raw_out == pytest.approx(
+                float(flag), abs=1e-3
+            ), f"{t.name}.flag={flag}: raw={raw_out}"
+            assert masked_out == pytest.approx(
+                float(flag), abs=1e-3
+            ), f"{t.name}.flag={flag}: masked={masked_out}"
 
 
 def test_extract_int_slot_off_name_masked_zero() -> None:
@@ -305,12 +308,12 @@ def test_extract_derived_angle_sin_cos() -> None:
         out_cos = _eval_one(cos_node, row)
         expected_sin = math.sin(angle * 2 * math.pi / ANGLE_BAM)
         expected_cos = math.cos(angle * 2 * math.pi / ANGLE_BAM)
-        assert out_sin == pytest.approx(expected_sin, abs=1e-5), (
-            f"angle={angle}: sin {out_sin} != {expected_sin}"
-        )
-        assert out_cos == pytest.approx(expected_cos, abs=1e-5), (
-            f"angle={angle}: cos {out_cos} != {expected_cos}"
-        )
+        assert out_sin == pytest.approx(
+            expected_sin, abs=1e-5
+        ), f"angle={angle}: sin {out_sin} != {expected_sin}"
+        assert out_cos == pytest.approx(
+            expected_cos, abs=1e-5
+        ), f"angle={angle}: cos {out_cos} != {expected_cos}"
 
 
 def test_extract_derived_one_hot_x_oh_NNN() -> None:
@@ -325,9 +328,9 @@ def test_extract_derived_one_hot_x_oh_NNN() -> None:
         for x_target, node in nodes.items():
             out = _eval_one(node, row)
             expected = 1.0 if x_target == x_actual else 0.0
-            assert out == pytest.approx(expected, abs=1e-5), (
-                f"x_actual={x_actual} x_target={x_target}: {out} != {expected}"
-            )
+            assert out == pytest.approx(
+                expected, abs=1e-5
+            ), f"x_actual={x_actual} x_target={x_target}: {out} != {expected}"
 
 
 def test_extract_derived_off_type_zero() -> None:
@@ -351,9 +354,9 @@ def test_type_code_matches_e8_index() -> None:
     for T in (VALUE, NODE, ANGLE_VALUE, BEGIN, DONE, NO_OP):
         node = extract.type_code(T)
         out = reference_eval(node, {}, 1)[node]
-        expected = index_to_vector(
-            TOKEN_VOCAB.layout.e8_indices[T.name]
-        ).to(torch.float32)
-        assert torch.allclose(out.squeeze(0), expected, atol=0.0), (
-            f"type_code({T.name}) mismatch"
+        expected = index_to_vector(TOKEN_VOCAB.layout.e8_indices[T.name]).to(
+            torch.float32
         )
+        assert torch.allclose(
+            out.squeeze(0), expected, atol=0.0
+        ), f"type_code({T.name}) mismatch"

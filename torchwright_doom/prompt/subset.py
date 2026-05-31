@@ -78,10 +78,7 @@ def _seg_intersects_bbox(
     seg_bottom = min(v1.y, v2.y)
     seg_top = max(v1.y, v2.y)
     return not (
-        seg_right < left
-        or seg_left > right
-        or seg_top < bottom
-        or seg_bottom > top
+        seg_right < left or seg_left > right or seg_top < bottom or seg_bottom > top
     )
 
 
@@ -137,8 +134,8 @@ def subset_by_bbox(
     root_idx = len(md.nodes) - 1
     paths = _walk_paths(md, root_idx)
     subset_node_ids: set[int] = set()
-    for ss in selected_subsectors:
-        for node_idx in paths[ss]:
+    for ss_idx in selected_subsectors:
+        for node_idx in paths[ss_idx]:
             subset_node_ids.add(node_idx)
 
     sorted_old_ss = sorted(selected_subsectors)
@@ -149,9 +146,11 @@ def subset_by_bbox(
     new_subsector_first_seg: list[int] = []
     new_subsector_seg_count: list[int] = []
     for old_ss_idx in sorted_old_ss:
-        ss = md.subsectors[old_ss_idx]
+        subsector = md.subsectors[old_ss_idx]
         first_new_seg = len(new_segs_old_indices)
-        for old_seg_idx in range(ss.first_seg, ss.first_seg + ss.seg_count):
+        for old_seg_idx in range(
+            subsector.first_seg, subsector.first_seg + subsector.seg_count
+        ):
             if old_seg_idx in selected_set:
                 new_segs_old_indices.append(old_seg_idx)
         new_subsector_first_seg.append(first_new_seg)
@@ -272,7 +271,9 @@ def subset_by_bbox(
             return SUBSECTOR_FLAG | empty_ss_new_idx
         return new_node
 
-    def _shift_bbox(bbox: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+    def _shift_bbox(
+        bbox: tuple[float, float, float, float],
+    ) -> tuple[float, float, float, float]:
         t, b, l, r = bbox
         return (t - centroid_y, b - centroid_y, l - centroid_x, r - centroid_x)
 

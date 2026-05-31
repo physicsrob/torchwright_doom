@@ -78,7 +78,6 @@ from .geometry import Segment, bake_segments
 from .plane_tables import build_plane_tables
 from .types import GameState, MapData, SUBSECTOR_FLAG
 
-
 _GAMESTATE_TO_BAM = ANGLE_BAM // 256  # 32 at ANGLE_BAM=8192
 _BAM_HALF = ANGLE_BAM // 2
 
@@ -127,10 +126,7 @@ def _is_closed(seg: Segment) -> bool:
         seg.is_two_sided
         and seg.back_floor is not None
         and seg.back_ceiling is not None
-        and (
-            seg.back_ceiling <= seg.front_floor
-            or seg.back_floor >= seg.front_ceiling
-        )
+        and (seg.back_ceiling <= seg.front_floor or seg.back_floor >= seg.front_ceiling)
     )
 
 
@@ -165,12 +161,8 @@ def _seg_front_sector(md: MapData, seg_idx: int):
 
 def _seg_light_static(md: MapData, seg_idx: int, seg: Segment) -> int:
     front_sector = _seg_front_sector(md, seg_idx)
-    orientation_bias = doom_wall_orientation_light_bias(
-        seg.ax, seg.ay, seg.bx, seg.by
-    )
-    return doom_wall_light_static(
-        front_sector.light, orientation_bias=orientation_bias
-    )
+    orientation_bias = doom_wall_orientation_light_bias(seg.ax, seg.ay, seg.bx, seg.by)
+    return doom_wall_light_static(front_sector.light, orientation_bias=orientation_bias)
 
 
 def _seg_pegging_and_offset(md: MapData, seg_idx: int) -> tuple[int, int, int]:
@@ -236,9 +228,7 @@ def build_prompt(md: MapData, state: GameState) -> list[Token]:
         for k in range(sub.seg_count):
             i = sub.first_seg + k
             seg = segments[i]
-            tokens.append(
-                Token(SEG, {"i": i, "is_first_of_ss": 1 if k == 0 else 0})
-            )
+            tokens.append(Token(SEG, {"i": i, "is_first_of_ss": 1 if k == 0 else 0}))
             tokens.append(Token(SEG_AX))
             tokens.append(prefill_value(ValueRange.R1, seg.ax))
             tokens.append(Token(SEG_AY))
@@ -247,9 +237,7 @@ def build_prompt(md: MapData, state: GameState) -> list[Token]:
             tokens.append(prefill_value(ValueRange.R1, seg.bx))
             tokens.append(Token(SEG_BY))
             tokens.append(prefill_value(ValueRange.R1, seg.by))
-            tokens.append(
-                Token(SEG_TWO_SIDED, {"flag": 1 if seg.is_two_sided else 0})
-            )
+            tokens.append(Token(SEG_TWO_SIDED, {"flag": 1 if seg.is_two_sided else 0}))
             tokens.append(Token(SEG_NORMAL_ANGLE))
             tokens.append(
                 Token(ANGLE_VALUE, {"angle": _seg_normal_angle(md.segs[i].angle)})
@@ -263,19 +251,28 @@ def build_prompt(md: MapData, state: GameState) -> list[Token]:
             tokens.append(Token(SEG_BACK_CEILING))
             tokens.append(prefill_value(ValueRange.R4, _back_ceiling(seg)))
             tokens.append(
-                Token(SEG_MID_TEXTURE, {
-                    "tex_id": _texture_id(seg.middle_texture_name, name_to_id),
-                })
+                Token(
+                    SEG_MID_TEXTURE,
+                    {
+                        "tex_id": _texture_id(seg.middle_texture_name, name_to_id),
+                    },
+                )
             )
             tokens.append(
-                Token(SEG_UPPER_TEXTURE, {
-                    "tex_id": _texture_id(seg.upper_texture_name, name_to_id),
-                })
+                Token(
+                    SEG_UPPER_TEXTURE,
+                    {
+                        "tex_id": _texture_id(seg.upper_texture_name, name_to_id),
+                    },
+                )
             )
             tokens.append(
-                Token(SEG_LOWER_TEXTURE, {
-                    "tex_id": _texture_id(seg.lower_texture_name, name_to_id),
-                })
+                Token(
+                    SEG_LOWER_TEXTURE,
+                    {
+                        "tex_id": _texture_id(seg.lower_texture_name, name_to_id),
+                    },
+                )
             )
             tokens.append(
                 Token(SEG_LIGHT_STATIC, {"light": _seg_light_static(md, i, seg)})
@@ -283,23 +280,22 @@ def build_prompt(md: MapData, state: GameState) -> list[Token]:
             tokens.append(
                 Token(SEG_EMPTY_LINE, {"flag": 1 if _is_empty_line(md, i) else 0})
             )
-            tokens.append(
-                Token(SEG_CLOSED_DOOR, {"flag": 1 if _is_closed(seg) else 0})
-            )
+            tokens.append(Token(SEG_CLOSED_DOOR, {"flag": 1 if _is_closed(seg) else 0}))
             flags, rowoffset, _side = _seg_pegging_and_offset(md, i)
             tokens.append(
-                Token(SEG_PEGGING, {
-                    "dontpegtop": 1 if flags & ML_DONTPEGTOP else 0,
-                    "dontpegbottom": 1 if flags & ML_DONTPEGBOTTOM else 0,
-                })
+                Token(
+                    SEG_PEGGING,
+                    {
+                        "dontpegtop": 1 if flags & ML_DONTPEGTOP else 0,
+                        "dontpegbottom": 1 if flags & ML_DONTPEGBOTTOM else 0,
+                    },
+                )
             )
             tokens.append(Token(SEG_ROWOFFSET))
             tokens.append(prefill_value(ValueRange.R3, float(rowoffset)))
 
     for plane in plane_tables.planes:
-        tokens.append(
-            Token(PLANE_DEF, {"p": plane.plane_id, "flat_id": plane.flat_id})
-        )
+        tokens.append(Token(PLANE_DEF, {"p": plane.plane_id, "flat_id": plane.flat_id}))
         tokens.append(Token(PLANE_HEIGHT))
         tokens.append(prefill_value(ValueRange.R3, plane.height))
         tokens.append(Token(PLANE_LIGHT, {"light": plane.light}))
@@ -308,13 +304,9 @@ def build_prompt(md: MapData, state: GameState) -> list[Token]:
         if info is None:
             continue
         if info.floor_plane_id is not None:
-            tokens.append(
-                Token(SS_FLOOR_PLANE, {"s": s, "p": info.floor_plane_id})
-            )
+            tokens.append(Token(SS_FLOOR_PLANE, {"s": s, "p": info.floor_plane_id}))
         if info.ceiling_plane_id is not None:
-            tokens.append(
-                Token(SS_CEILING_PLANE, {"s": s, "p": info.ceiling_plane_id})
-            )
+            tokens.append(Token(SS_CEILING_PLANE, {"s": s, "p": info.ceiling_plane_id}))
 
     tokens.append(Token(BEGIN))
     return tokens

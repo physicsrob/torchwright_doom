@@ -17,7 +17,6 @@ from .subset import subset_by_bbox
 from .types import GameState, MapData
 from .wad import WADReader
 
-
 # Submodule-root doom1.wad. ``WAD_PATH`` is resolved at import time so
 # scene declarations can reference a single canonical location.
 WAD_PATH: Path = Path(__file__).resolve().parents[2] / "doom1.wad"

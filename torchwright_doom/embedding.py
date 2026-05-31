@@ -56,7 +56,7 @@ encoder is one vector-PWL staircase (the high byte) plus affine math
 from __future__ import annotations
 
 import itertools
-from typing import Callable, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping, cast
 
 import numpy as np
 import torch
@@ -64,7 +64,7 @@ import torch
 from torchwright.graph.embedding import Embedding
 from torchwright.graph.spherical_codes import index_to_vector
 
-from .tokens import FloatSlot, IntSlot, TokenType
+from .tokens import Derived, FloatSlot, IntSlot, TokenType
 from .vocab import VOCAB_TYPES
 
 
@@ -150,9 +150,7 @@ def digit_quad_query_columns_for(
     return digits, 2 * digits
 
 
-def digit_quad_row(
-    slot: IntSlot | FloatSlot, slot_value: int | float
-) -> torch.Tensor:
+def digit_quad_row(slot: IntSlot | FloatSlot, slot_value: int | float) -> torch.Tensor:
     """Build the digit-quadratic payload for a row representing
     ``slot=slot_value``.
 
@@ -188,14 +186,10 @@ def digit_quad_row(
     lo = k % BASE
     hi_c = float(hi) - CENTER
     lo_c = float(lo) - CENTER
-    return torch.tensor(
-        [hi_c, -hi_c * hi_c, lo_c, -lo_c * lo_c], dtype=torch.float32
-    )
+    return torch.tensor([hi_c, -hi_c * hi_c, lo_c, -lo_c * lo_c], dtype=torch.float32)
 
 
-def _step_index_for(
-    slot: IntSlot | FloatSlot, slot_value: int | float
-) -> int:
+def _step_index_for(slot: IntSlot | FloatSlot, slot_value: int | float) -> int:
     """Integer step index for ``slot_value`` against ``slot``'s grid."""
     if isinstance(slot, IntSlot):
         return int(slot_value) - slot.lo
@@ -244,9 +238,7 @@ class Layout:
     def __init__(self, types: list[TokenType]):
         names = [t.name for t in types]
         if len(set(names)) != len(names):
-            raise ValueError(
-                f"Vocab has duplicate type names: {sorted(names)}"
-            )
+            raise ValueError(f"Vocab has duplicate type names: {sorted(names)}")
         if len(types) > _MAX_E8_INDEX:
             raise ValueError(
                 f"Vocab has {len(types)} types; max distinct E8 codes "
@@ -257,9 +249,7 @@ class Layout:
         self.types_by_name: dict[str, TokenType] = {t.name: t for t in types}
 
         # E8: one index per type, assigned sequentially.
-        self.e8_indices: dict[str, int] = {
-            t.name: i for i, t in enumerate(types)
-        }
+        self.e8_indices: dict[str, int] = {t.name: i for i, t in enumerate(types)}
 
         col = D_CATEGORY
 
@@ -291,14 +281,14 @@ class Layout:
         # one type (extract is name-addressed within the active type).
         derived_region_start = col
         self.derived_columns: dict[tuple[str, str, str], tuple[int, int]] = {}
-        self.derived_columns_by_name: dict[
-            str, list[tuple[str, str, int, int]]
-        ] = {}
+        self.derived_columns_by_name: dict[str, list[tuple[str, str, int, int]]] = {}
         _name_width: dict[str, int] = {}
         for t in types:
             seen_this_type: dict[str, str] = {}
             for slot_name, slot in t.slots.items():
-                for derived_name, d in slot.derived.items():
+                for derived_name, d in cast(
+                    Mapping[str, Derived], slot.derived
+                ).items():
                     width = d.width
                     prior = _name_width.get(derived_name)
                     if prior is None:
@@ -322,9 +312,9 @@ class Layout:
                         col,
                         width,
                     )
-                    self.derived_columns_by_name.setdefault(
-                        derived_name, []
-                    ).append((t.name, slot_name, col, width))
+                    self.derived_columns_by_name.setdefault(derived_name, []).append(
+                        (t.name, slot_name, col, width)
+                    )
                     col += width
 
         self.d_embed: int = col
@@ -386,9 +376,7 @@ class TokenVocab:
             offenders = sorted(
                 self.types, key=lambda t: _type_cardinality(t), reverse=True
             )[:3]
-            details = ", ".join(
-                f"{t.name}={_type_cardinality(t):,}" for t in offenders
-            )
+            details = ", ".join(f"{t.name}={_type_cardinality(t):,}" for t in offenders)
             raise ValueError(
                 f"TokenVocab cardinality {n_rows:,} exceeds budget "
                 f"{max_cardinality:,}. Top contributors: {details}."
@@ -467,8 +455,7 @@ def _build_w_embed(vocab: TokenVocab) -> torch.Tensor:
     w = np.zeros((vocab.n_rows, layout.d_embed), dtype=np.float32)
 
     e8_codes: dict[str, np.ndarray] = {
-        t.name: index_to_vector(layout.e8_indices[t.name]).numpy()
-        for t in vocab.types
+        t.name: index_to_vector(layout.e8_indices[t.name]).numpy() for t in vocab.types
     }
 
     for t in vocab.types:
@@ -493,11 +480,9 @@ def _build_w_embed(vocab: TokenVocab) -> torch.Tensor:
             w[start:end, raw_col] = _normalized_slot_column(slot, idxs)
 
             dq_start, dq_n = layout.digit_quad_columns[(t.name, slot_name)]
-            w[start:end, dq_start : dq_start + dq_n] = _digit_quad_block(
-                idxs, dq_n
-            )
+            w[start:end, dq_start : dq_start + dq_n] = _digit_quad_block(idxs, dq_n)
 
-            for derived_name, d in slot.derived.items():
+            for derived_name, d in cast(Mapping[str, Derived], slot.derived).items():
                 span_start, width = layout.derived_columns[
                     (t.name, slot_name, derived_name)
                 ]
@@ -559,7 +544,7 @@ def _normalized_slot_column(
 
 
 def _evaluate_derived(
-    fn: Callable[[int | float], object],
+    fn: Callable[[Any], Any],
     width: int,
     slot_values: np.ndarray,
 ) -> np.ndarray:
@@ -617,9 +602,9 @@ def _digit_quad_block(indices: np.ndarray, n_cols: int) -> np.ndarray:
         lo = (indices % BASE).astype(np.float32)
         hi_c = hi - np.float32(CENTER)
         lo_c = lo - np.float32(CENTER)
-        return np.stack(
-            [hi_c, -hi_c * hi_c, lo_c, -lo_c * lo_c], axis=1
-        ).astype(np.float32)
+        return np.stack([hi_c, -hi_c * hi_c, lo_c, -lo_c * lo_c], axis=1).astype(
+            np.float32
+        )
     raise ValueError(f"Unsupported digit-quad block width: {n_cols}")
 
 
@@ -642,9 +627,7 @@ def build_doom_embedding(input_name: str = "token_ids") -> Embedding:
     """
     # ``Embedding`` carries a vocabulary list for introspection; build
     # one-name-per-row entries from the (type, slot_values) table.
-    vocab_names = [
-        _row_label(t, values) for t, values in TOKEN_VOCAB.row_to_token
-    ]
+    vocab_names = [_row_label(t, values) for t, values in TOKEN_VOCAB.row_to_token]
     return Embedding(
         vocab=vocab_names,
         d_embed=TOKEN_VOCAB.layout.d_embed,
@@ -658,7 +641,6 @@ def _row_label(t: TokenType, values: Mapping[str, int | float]) -> str:
     if not values:
         return t.name
     parts = [
-        f"{k}={v:g}" if isinstance(v, float) else f"{k}={v}"
-        for k, v in values.items()
+        f"{k}={v:g}" if isinstance(v, float) else f"{k}={v}" for k, v in values.items()
     ]
     return f"{t.name}({','.join(parts)})"

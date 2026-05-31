@@ -54,7 +54,6 @@ from torchwright.ops.logic_ops import cond_gate
 from .embedding import D_CATEGORY, TOKEN_VOCAB
 from .tokens import FloatSlot, IntSlot, TokenType
 
-
 __all__ = [
     "is_type",
     "is_type_pm1",
@@ -90,9 +89,7 @@ def _e8_code(token_type: TokenType) -> torch.Tensor:
     """Return the 8-wide E8 code for ``token_type``, as float32."""
     layout = TOKEN_VOCAB.layout
     if token_type.name not in layout.e8_indices:
-        raise ValueError(
-            f"token type {token_type.name!r} is not in the active vocab"
-        )
+        raise ValueError(f"token type {token_type.name!r} is not in the active vocab")
     return index_to_vector(layout.e8_indices[token_type.name]).to(torch.float32)
 
 
@@ -239,9 +236,7 @@ def extract_type_slot_raw(
     return _bound_slot_output(raw, slot)
 
 
-def extract_type_slot(
-    input_vec: Node, token_type: TokenType, slot_name: str
-) -> Node:
+def extract_type_slot(input_vec: Node, token_type: TokenType, slot_name: str) -> Node:
     """Auto-masked single-``(type, slot)`` read.
 
     Returns the slot value when the active token has type
