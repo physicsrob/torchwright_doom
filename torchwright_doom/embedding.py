@@ -56,8 +56,6 @@ encoder is one vector-PWL staircase (the high byte) plus affine math
 from __future__ import annotations
 
 import itertools
-import math
-from dataclasses import dataclass
 from typing import Callable, Iterable, Mapping
 
 import numpy as np
@@ -68,6 +66,16 @@ from torchwright.graph.spherical_codes import index_to_vector
 
 from .tokens import FloatSlot, IntSlot, TokenType
 from .vocab import VOCAB_TYPES
+
+
+class VocabLayoutError(ValueError):
+    """Raised at vocab/layout construction time when derived-column
+    declarations are inconsistent: a shared derived name declared with
+    different widths across types, or a derived name declared on more
+    than one slot of the same token type (``extract_derived`` is
+    name-addressed within the active type). A ``ValueError`` subclass so
+    existing ``except ValueError`` callers still catch it.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -202,15 +210,6 @@ def _step_index_for(
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class _DerivedCheckSample:
-    """One (input, expected_output) pair to verify same-named derived
-    columns agree across types."""
-
-    slot_value: float
-    expected: float
-
-
 class Layout:
     """Column allocation for ``W_EMBED``.
 
@@ -225,8 +224,21 @@ class Layout:
     * ``digit_quad_columns`` — map
       ``(type_name, slot_name) -> (start_col, n_cols)`` for the
       per-slot digit-quad block (2 or 4 columns).
-    * ``derived_columns`` — map ``derived_name -> int column`` (shared
-      across types — see docstring at top of file).
+    * ``derived_columns`` — map
+      ``(type_name, slot_name, derived_name) -> (start_col, width)``.
+      Each declaration owns its own ``width``-wide span (no cross-type
+      column sharing), so per-type derived functions need not agree;
+      ``extract_derived`` sums across a name's spans and only the active
+      type's span is non-zero. A shared name's widths must agree, and a
+      name may not repeat on two slots of one type.
+    * ``derived_columns_by_name`` — map
+      ``derived_name -> [(type_name, slot_name, start_col, width), …]``
+      grouping every declaration of a name.
+    * ``derived_column_indices_by_name`` — map
+      ``derived_name -> np.ndarray (n_declarations, width)`` of column
+      indices, for the gather/sum extract path.
+    * ``n_derived_columns`` — total width of all derived spans (the
+      trailing contiguous derived region).
     """
 
     def __init__(self, types: list[TokenType]):
@@ -271,62 +283,62 @@ class Layout:
                 self.digit_quad_columns[(t.name, slot_name)] = (col, n_cols)
                 col += n_cols
 
-        # Derived columns: shared by name across types. Verify
-        # cross-type agreement by sampling each function.
-        self.derived_columns: dict[str, int] = {}
-        self._derived_samples: dict[str, _DerivedCheckSample] = {}
+        # Derived columns: one width-N span per (type, slot, derived_name)
+        # declaration. A name shared across types gets one span PER
+        # declaration (extract sums them; only the active type's span is
+        # non-zero), so per-type functions need not agree — but a shared
+        # name's widths must, and a name may not repeat on two slots of
+        # one type (extract is name-addressed within the active type).
+        derived_region_start = col
+        self.derived_columns: dict[tuple[str, str, str], tuple[int, int]] = {}
+        self.derived_columns_by_name: dict[
+            str, list[tuple[str, str, int, int]]
+        ] = {}
+        _name_width: dict[str, int] = {}
         for t in types:
+            seen_this_type: dict[str, str] = {}
             for slot_name, slot in t.slots.items():
-                if not slot.derived:
-                    continue
-                for derived_name, fn in slot.derived.items():
-                    self._register_derived(t, slot_name, slot, derived_name, fn, col)
-                    if derived_name not in self.derived_columns:
-                        self.derived_columns[derived_name] = col
-                        col += 1
+                for derived_name, d in slot.derived.items():
+                    width = d.width
+                    prior = _name_width.get(derived_name)
+                    if prior is None:
+                        _name_width[derived_name] = width
+                    elif prior != width:
+                        raise VocabLayoutError(
+                            f"derived column {derived_name!r} declared with "
+                            f"width {width} on {t.name}.{slot_name} but width "
+                            f"{prior} elsewhere; widths for a shared derived "
+                            f"name must agree"
+                        )
+                    if derived_name in seen_this_type:
+                        raise VocabLayoutError(
+                            f"derived column {derived_name!r} declared on both "
+                            f"{t.name}.{seen_this_type[derived_name]} and "
+                            f"{t.name}.{slot_name}; a derived name may appear "
+                            f"on at most one slot per token type"
+                        )
+                    seen_this_type[derived_name] = slot_name
+                    self.derived_columns[(t.name, slot_name, derived_name)] = (
+                        col,
+                        width,
+                    )
+                    self.derived_columns_by_name.setdefault(
+                        derived_name, []
+                    ).append((t.name, slot_name, col, width))
+                    col += width
 
         self.d_embed: int = col
+        self.n_derived_columns: int = col - derived_region_start
 
-    def _register_derived(
-        self,
-        t: TokenType,
-        slot_name: str,
-        slot: IntSlot | FloatSlot,
-        derived_name: str,
-        fn: Callable[[int | float], float],
-        col: int,
-    ) -> None:
-        """Sample ``fn`` at a representative slot value and confirm any
-        prior declaration of ``derived_name`` agrees on that value."""
-        sample_value: float
-        if isinstance(slot, IntSlot):
-            sample_value = float(slot.lo)
-        else:
-            sample_value = float(slot.lo)
-        try:
-            expected = float(fn(sample_value))
-        except Exception as exc:  # pragma: no cover
-            raise ValueError(
-                f"Derived column {derived_name!r} on {t.name}.{slot_name} "
-                f"failed sample evaluation at value={sample_value}: {exc}"
-            )
-        existing = self._derived_samples.get(derived_name)
-        if existing is None:
-            self._derived_samples[derived_name] = _DerivedCheckSample(
-                slot_value=sample_value, expected=expected
-            )
-        else:
-            if not math.isclose(
-                existing.expected, expected, rel_tol=1e-9, abs_tol=1e-9
-            ) and not (
-                math.isnan(existing.expected) and math.isnan(expected)
-            ):
-                raise ValueError(
-                    f"Derived column {derived_name!r} is shared across "
-                    f"types but disagrees on the sample value "
-                    f"{sample_value!r}: previously {existing.expected!r}, "
-                    f"now {expected!r} (declared on {t.name}.{slot_name})."
-                )
+        # Precomputed column-index spans per name, for the gather/sum
+        # extract path (extract_derived sums across declarations).
+        self.derived_column_indices_by_name: dict[str, np.ndarray] = {}
+        for name, entries in self.derived_columns_by_name.items():
+            width = entries[0][3]
+            idx = np.empty((len(entries), width), dtype=np.int64)
+            for i, (_t, _s, start, _w) in enumerate(entries):
+                idx[i] = np.arange(start, start + width)
+            self.derived_column_indices_by_name[name] = idx
 
 
 # ---------------------------------------------------------------------------
@@ -485,10 +497,12 @@ def _build_w_embed(vocab: TokenVocab) -> torch.Tensor:
                 idxs, dq_n
             )
 
-            for derived_name, fn in slot.derived.items():
-                col = layout.derived_columns[derived_name]
-                w[start:end, col] = _evaluate_derived(
-                    fn, slot_value_arrays[slot_name]
+            for derived_name, d in slot.derived.items():
+                span_start, width = layout.derived_columns[
+                    (t.name, slot_name, derived_name)
+                ]
+                w[start:end, span_start : span_start + width] = _evaluate_derived(
+                    d.fn, width, slot_value_arrays[slot_name]
                 )
 
     return torch.from_numpy(w)
@@ -545,31 +559,48 @@ def _normalized_slot_column(
 
 
 def _evaluate_derived(
-    fn: Callable[[int | float], float], slot_values: np.ndarray
+    fn: Callable[[int | float], object],
+    width: int,
+    slot_values: np.ndarray,
 ) -> np.ndarray:
-    """Evaluate ``fn`` elementwise over ``slot_values`` as fast as
-    possible.
+    """Evaluate a derived ``fn`` elementwise over ``slot_values``,
+    returning an ``(n_rows, width)`` float32 array.
 
-    First tries to call ``fn(slot_values)`` directly — many of our
-    derived helpers compose math ops that broadcast over numpy arrays
-    (the ``ANGLE_VALUE`` sin/cos chain is the load-bearing case at
-    ~2.6M scalar evals). Falls back to a tight ``fromiter`` loop when
-    the function isn't array-compatible (the ``_SCREEN_X_ONE_HOT_DERIVED``
-    lambdas use ``int(value) == column`` which raises on arrays).
+    For ``width == 1`` it first tries a vectorized ``fn(slot_values)``
+    (many derived helpers compose math ops that broadcast over numpy —
+    the ``ANGLE_VALUE`` sin/cos chain is the load-bearing ~M-eval case),
+    falling back to a tight scalar loop when the function isn't
+    array-compatible (the ``x_oh`` one-hot lambdas use
+    ``int(value) == column`` which raises on arrays). For ``width > 1``
+    each ``fn(value)`` returns a length-``width`` sequence (e.g. the
+    3-digit ``id_lifted_key`` or the per-column projection rays).
     """
-    try:
-        result = fn(slot_values)
-        arr = np.asarray(result, dtype=np.float32)
-        if arr.shape != slot_values.shape:
-            # ``fn`` produced a scalar from an array input — fall through.
-            raise ValueError("scalar-from-array")
-        return arr
-    except Exception:
-        return np.fromiter(
-            (float(fn(v)) for v in slot_values.tolist()),
-            dtype=np.float32,
-            count=slot_values.shape[0],
-        )
+    n = slot_values.shape[0]
+    if width == 1:
+        try:
+            result = fn(slot_values)
+            arr = np.asarray(result, dtype=np.float32)
+            if arr.shape != slot_values.shape:
+                # ``fn`` produced a scalar from an array input — fall through.
+                raise ValueError("scalar-from-array")
+            return arr.reshape(n, 1)
+        except Exception:
+            flat = np.fromiter(
+                (float(fn(v)) for v in slot_values.tolist()),
+                dtype=np.float32,
+                count=n,
+            )
+            return flat.reshape(n, 1)
+    out = np.empty((n, width), dtype=np.float32)
+    for i, v in enumerate(slot_values.tolist()):
+        row = np.asarray(fn(v), dtype=np.float32).reshape(-1)
+        if row.shape != (width,):
+            raise VocabLayoutError(
+                f"derived fn returned width {row.shape[0]} != declared "
+                f"width {width}"
+            )
+        out[i] = row
+    return out
 
 
 def _digit_quad_block(indices: np.ndarray, n_cols: int) -> np.ndarray:

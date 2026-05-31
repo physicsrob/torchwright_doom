@@ -354,7 +354,7 @@ def _emit_token_with_step_indices(
 
     # Derived columns: zero on the emit side (any non-zero value would
     # bias argmax toward rows that carry that derived value).
-    n_derived = len(layout.derived_columns)
+    n_derived = layout.n_derived_columns
     if n_derived:
         pieces.append(
             create_literal_value(

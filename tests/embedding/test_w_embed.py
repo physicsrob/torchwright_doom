@@ -216,10 +216,12 @@ def test_derived_column_round_trip_angle_value() -> None:
     test_angles = [-2048, -1024, 0, 256, 1024, 2048]
     for angle in test_angles:
         row = _angle_row(angle)
-        for derived_name, fn in angle_slot.derived.items():
-            col = layout.derived_columns[derived_name]
-            expected = float(fn(angle))
-            actual = row[col].item()
+        for derived_name, d in angle_slot.derived.items():
+            start, _w = layout.derived_columns[
+                (ANGLE_VALUE.name, "angle", derived_name)
+            ]
+            expected = float(d.fn(angle))
+            actual = row[start].item()
             assert math.isclose(actual, expected, abs_tol=1e-6), (
                 f"angle={angle} derived={derived_name}: "
                 f"actual={actual} expected={expected}"
@@ -233,10 +235,10 @@ def test_derived_column_round_trip_value() -> None:
     test_values = [-1024.0, -1.0, 0.0, 1.0, 100.0, 1024.0]
     for v in test_values:
         row, quantized = _value_row_for(v)
-        for derived_name, fn in v_slot.derived.items():
-            col = layout.derived_columns[derived_name]
-            expected = float(fn(quantized))
-            actual = row[col].item()
+        for derived_name, d in v_slot.derived.items():
+            start, _w = layout.derived_columns[(VALUE.name, "v", derived_name)]
+            expected = float(d.fn(quantized))
+            actual = row[start].item()
             assert math.isclose(actual, expected, rel_tol=1e-6, abs_tol=1e-6), (
                 f"v={quantized} derived={derived_name}: "
                 f"actual={actual} expected={expected}"
@@ -252,10 +254,10 @@ def test_derived_column_round_trip_one_hot_emit_x1() -> None:
     for x in test_xs:
         row = W_EMBED[emit_start + x]
         for col_name in (f"x_oh_{c:03d}" for c in range(SCREEN_WIDTH)):
-            col = layout.derived_columns[col_name]
+            start, _w = layout.derived_columns[(EMIT_X1.name, "x", col_name)]
             target = int(col_name.split("_")[-1])
             expected = 1.0 if x == target else 0.0
-            actual = row[col].item()
+            actual = row[start].item()
             assert actual == expected, (
                 f"EMIT_X1.x={x} derived={col_name}: {actual} != {expected}"
             )
@@ -318,8 +320,10 @@ def test_cross_check_against_sandbox() -> None:
                 (sb_angle_value.name, "angle", derived_name)
             ]
             sb_value = float(sb_row[sb_col_start])
-            our_col = layout.derived_columns[derived_name]
-            our_value = our_row[our_col].item()
+            our_start, _w = layout.derived_columns[
+                (ANGLE_VALUE.name, "angle", derived_name)
+            ]
+            our_value = our_row[our_start].item()
             assert math.isclose(sb_value, our_value, abs_tol=1e-6), (
                 f"angle={angle} derived={derived_name}: "
                 f"sandbox={sb_value} ours={our_value}"
