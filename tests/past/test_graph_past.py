@@ -5,8 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from torchwright.graph import PosEncoding
-from torchwright.ops.inout_nodes import create_input
+from torchwright.ops.inout_nodes import create_input, create_pos_encoding
 
 from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
 from torchwright_doom.extract import type_code
@@ -17,7 +16,7 @@ from torchwright_doom.vocab import NODE, SEG, VALUE
 def _dummy_past() -> GraphPast:
     return GraphPast(
         input_vec=create_input("iv", TOKEN_VOCAB.layout.d_embed),
-        pos_encoding=PosEncoding(16),
+        pos_encoding=create_pos_encoding(),
     )
 
 
@@ -265,9 +264,9 @@ def test_pick_argmin_above_synthetic_threshold() -> None:
 
 
 def test_wide_attend_to_offset_direct_path() -> None:
-    d_pos = 16
-    width = 2 * d_pos + 3
-    past = GraphPast(input_vec=create_input("iv", 1), pos_encoding=PosEncoding(d_pos))
+    pos_encoding = create_pos_encoding()
+    width = 2 * pos_encoding.trig_width + 3
+    past = GraphPast(input_vec=create_input("iv", 1), pos_encoding=pos_encoding)
     handle = past.publish("value", create_input("value", width))
     out = past.attend_to_offset(handle, delta_pos=-2)
 
@@ -287,7 +286,7 @@ def test_attend_to_offset_rejects_positive_delta() -> None:
 
 def test_input_type_e8_round_trip_through_attend_to_offset() -> None:
     input_vec = create_input("iv", TOKEN_VOCAB.layout.d_embed)
-    past = GraphPast(input_vec=input_vec, pos_encoding=PosEncoding(16))
+    past = GraphPast(input_vec=input_vec, pos_encoding=create_pos_encoding())
     out = past.attend_to_offset(past.input_type(), delta_pos=-1)
 
     rows = torch.cat(
