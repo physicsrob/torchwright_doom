@@ -151,6 +151,11 @@ class DispatchTransition:
 
 @dataclass(frozen=True)
 class TokenCheckPredicate:
+    """A dispatch predicate that matches exactly one token type, so its
+    implementation is precisely ``token.check(input_vec)`` (one E8 is_type
+    test). Predicates shared by several token types are excluded —
+    :func:`_build_token_check_predicates` keeps only the single-type groups."""
+
     predicate: str
     token: TokenType
 
@@ -778,6 +783,10 @@ def _build_prefill_replay_predicates() -> tuple[str, ...]:
             input_predicates.setdefault(entry.predicate, None)
             continue
         if entry.prefill_replay == "scene_payload":
+            # Carriers (VALUE / ANGLE_VALUE) dispatch on a broad predicate
+            # (is_value / is_angle_value), but only payloads read in a *scene*
+            # context replay — so replay keys on the narrower is_scene_*_payload
+            # predicate, not the carrier's own dispatch predicate.
             if entry.token == VALUE:
                 scene_payload_predicates.setdefault("is_scene_value_payload", None)
             elif entry.token == ANGLE_VALUE:

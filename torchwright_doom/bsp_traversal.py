@@ -17,10 +17,11 @@ Ported from ``doom_sandbox/implementation/forward/bsp_traversal.py``. Changes
 from the sandbox source: the import block (``Vec`` -> ``Node``; ``Past`` ->
 ``GraphPast``; std helpers / ``make_token`` -> ``emit_token`` / the side ops
 from the real-side shim); ``ZERO`` is created inline as ``constant(0.0)`` (no
-import-time nodes); and ``BBoxPruner`` / ``SolidIntervals`` are Plan-E deferred
-stubs (their branches emit NO_OP, uncompared by the traversal oracle). The
-``SideTable``, ``_think_side_compute`` cross product, the ENTER/SIDE/RETURN
-emitters, and the child dispatch are a line-for-line port.
+import-time nodes); and R_CheckBBox pruning (``between`` + the bbox sub-protocol)
+is deferred to the projection/visibility phase — those branches collapse into the
+shared NO_OP head, so this owner builds no candidate for them. The ``SideTable``,
+``_think_side_compute`` cross product, the ENTER/SIDE/RETURN emitters, and the
+child dispatch are a line-for-line port.
 """
 
 from __future__ import annotations
@@ -30,12 +31,10 @@ from dataclasses import dataclass
 from torchwright.graph import Node
 
 from .attention_handles import LiftedKeyValueHandle
-from .bbox_pruning import BBoxPruner
-from .past import PastHandle, PastHandleScope
+from .past import PastHandleScope
 from .protocol_tokens import ProtocolTokenView
 from .render_ops import IS_SUBSECTOR, SIDE_POSITIVE, add_const, mul_side, sub
 from .scene_index import SceneIndex
-from .solid_intervals import SolidIntervals
 from .std import bool_to_01, constant, indicator_to_bool, make_token_head, select
 from .traversal_edges import TraversalEdges
 from .vocab import (
@@ -94,34 +93,19 @@ class BspTraversal:
     edges: TraversalEdges
     enter_child: Node
     between_child: Node
-    bbox: BBoxPruner
 
     @classmethod
     def publish(
         cls,
         past: PastHandleScope,
-        input_vec: Node,
         inp: ProtocolTokenView,
         scene: SceneIndex,
-        solids: SolidIntervals,
-        input_angle_or_zero: PastHandle,
     ) -> "BspTraversal":
         """Publish traversal channels and recover child choices for this row."""
         side_table = SideTable.publish(past, inp)
         enter_child = _node_first_child(scene, side_table, inp.enter_node)
         between_child = _node_second_child(scene, side_table, inp.between_node)
         edges = TraversalEdges.publish(past, inp, enter_child, between_child)
-        between_side = side_table.pick(inp.between_node)
-        bbox = BBoxPruner.publish(
-            past,
-            input_vec,
-            inp,
-            scene,
-            solids,
-            input_angle_or_zero,
-            between_side,
-            between_child,
-        )
         return cls(
             past=past,
             inp=inp,
@@ -129,7 +113,6 @@ class BspTraversal:
             edges=edges,
             enter_child=enter_child,
             between_child=between_child,
-            bbox=bbox,
         )
 
     def after_set_cursor_direction_y(self) -> Node:
@@ -164,10 +147,6 @@ class BspTraversal:
         """
         return node_child_out(self.enter_child, self.inp.enter_depth)
 
-    def after_between(self) -> Node:
-        """Run R_CheckBBox-style pruning before the second/back child."""
-        return self.bbox.after_between()
-
     def after_return(self) -> Node:
         """Pop the dynamic traversal stack after a child/subsector returns."""
         return self.edges.after_return(
@@ -176,35 +155,12 @@ class BspTraversal:
             self.inp.return_depth,
         )
 
-    def after_bbox_world_angle_mark_a(self) -> Node:
-        return self.bbox.after_world_angle_mark_a()
-
-    def after_bbox_boxpos(self) -> Node:
-        return self.bbox.after_boxpos()
-
-    def after_bbox_corner_x_mark_a(self) -> Node:
-        return self.bbox.after_corner_x_mark_a()
-
-    def after_bbox_corner_y_mark_a(self) -> Node:
-        return self.bbox.after_corner_y_mark_a()
-
-    def after_bbox_corner_x_mark_b(self) -> Node:
-        return self.bbox.after_corner_x_mark_b()
-
-    def after_bbox_corner_y_mark_b(self) -> Node:
-        return self.bbox.after_corner_y_mark_b()
-
-    def after_bbox_theta_mark_a(self) -> Node:
-        return self.bbox.after_theta_mark_a()
-
-    def after_bbox_world_angle_mark_b(self) -> Node:
-        return self.bbox.after_world_angle_mark_b()
-
-    def after_bbox_theta_mark_b(self) -> Node:
-        return self.bbox.after_theta_mark_b()
-
-    def after_bbox_scan(self) -> Node:
-        return self.bbox.after_scan()
+    # TRAVERSE_BETWEEN ("between") and the bbox sub-protocol (R_CheckBBox: box
+    # corners, world/theta angles, the occlusion scan) are owned by the deferred
+    # projection/visibility phase. Until it lands, those branches collapse into
+    # the shared NO_OP head in `render_main.build_branch_outputs`, so this owner
+    # builds no candidate for them — the bbox owner adds them back with real
+    # heads when it arrives.
 
 
 def _think_side_compute(scene: SceneIndex, node: Node) -> Node:

@@ -46,9 +46,8 @@ from .past import GraphPast, PastHandleScope
 from .protocol_registry import DISPATCH_TRANSITIONS
 from .protocol_tokens import ProtocolTokenView
 from .scene_index import SceneIndex
-from .solid_intervals import SolidIntervals
 from .std import bool_or, concat, make_token_head, type_switch
-from .vocab import ANGLE_VALUE, DONE, NO_OP, SET_CURSOR_DIRECTION_Y
+from .vocab import DONE, NO_OP, SET_CURSOR_DIRECTION_Y
 
 BranchOutputs = Mapping[str, Node]
 
@@ -70,22 +69,13 @@ def publish_runtime_protocols(
 ) -> RuntimeProtocols:
     """Publish runtime protocol channels before branch candidates consume them.
 
-    Reduced to the traversal owner: ``SegProjection`` (and the seven projection
-    owners) are deferred, so the projection branches are NO_OP-stubbed below.
+    Reduced to the traversal owner: ``SegProjection``, the seven projection
+    owners, and R_CheckBBox visibility pruning are deferred, so their branches
+    collapse into the shared NO_OP head in :func:`build_branch_outputs`.
+    (``input_vec`` / ``pos`` are accepted for the full-renderer signature; the
+    projection owners will consume them.)
     """
-    input_angle_or_zero = past.publish(
-        "input_angle_or_zero",
-        ANGLE_VALUE.extract(input_vec, "angle"),
-    )
-    solids = SolidIntervals.publish(past, inp, scene)
-    traversal = BspTraversal.publish(
-        past,
-        input_vec,
-        inp,
-        scene,
-        solids,
-        input_angle_or_zero,
-    )
+    traversal = BspTraversal.publish(past, inp, scene)
     return RuntimeProtocols(traversal=traversal)
 
 

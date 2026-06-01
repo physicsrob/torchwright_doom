@@ -13,27 +13,34 @@ Each row carries:
                                  ``TokenType``. All rows of a given type
                                  share the same code; the slot / derived
                                  columns disambiguate within a type.
-  per-(type, slot) raw col    — one column per (type, slot). The row's
-                                 slot value is written normalized:
+  per-position raw col        — one column per slot *position*, shared
+                                 across all types: every type's j-th slot
+                                 writes the same column. The row's slot
+                                 value is written normalized:
                                  ``(v - lo) / (hi - lo)`` for ``IntSlot``,
                                  ``(2k + 1) / (2 * levels)`` for the
-                                 ``k``-th ``FloatSlot`` level. Columns
-                                 for slots the row's type doesn't carry
-                                 stay 0.
-  per-(type, slot) digit-quad — 2- or 4-wide block carrying a digit-
-                                 quadratic payload of the slot's integer
-                                 step index ``k``. The block lets the
-                                 producer query ``[2·hi_q_c, 1,
-                                 2·lo_q_c, 1]`` (the centered base-256
-                                 digits of the predicted ``q``) and have
-                                 the dot product against any candidate
-                                 row equal
+                                 ``k``-th ``FloatSlot`` level. A token
+                                 ``(T, v)`` and ``(U, v)`` collide in
+                                 this shared column; the E8 code breaks
+                                 the tie. Positions past a row's slot
+                                 count stay 0. (See ``Layout`` for the
+                                 full sharing contract.)
+  per-position digit-quad     — 2- or 4-wide block per slot position,
+                                 also shared across types and sized for
+                                 the *widest* slot at that position. It
+                                 carries a digit-quadratic payload of the
+                                 slot's integer step index ``k``. The
+                                 block lets the producer query
+                                 ``[2·hi_q_c, 1, 2·lo_q_c, 1]`` (the
+                                 centered base-256 digits of the predicted
+                                 ``q``) and have the dot product against
+                                 any candidate row equal
                                  ``-(hi - hi_q)² - (lo - lo_q)² +
                                  const`` — argmax over a type's rows
                                  picks the nearest byte pair to the
-                                 query. One digit (2 cols) for slots
-                                 with cardinality ≤ 256, two digits
-                                 (4 cols) for cardinality 257..65536.
+                                 query. One digit (2 cols) for positions
+                                 whose widest slot has cardinality ≤ 256,
+                                 two digits (4 cols) for 257..65536.
   per-derived-name cols       — one column per distinct ``derived_name``
                                  declared on any slot in the vocab.
                                  Token types are mutually exclusive at
@@ -213,11 +220,21 @@ class Layout:
     * ``e8_indices`` — map ``type_name -> int E8 index`` (the row at
       ``type_name`` writes ``index_to_vector(e8_indices[type_name])``
       into the category block).
-    * ``slot_columns`` — map ``(type_name, slot_name) -> int column``
-      (the raw normalized slot column).
+    * ``slot_columns`` — map ``(type_name, slot_name) -> int column`` (the raw
+      normalized slot column). **Shared by position**: every type's j-th slot
+      maps to the same column, so many keys point at one column. The E8 code
+      distinguishes types (see the constructor comment for the full sharing
+      contract).
     * ``digit_quad_columns`` — map
-      ``(type_name, slot_name) -> (start_col, n_cols)`` for the
-      per-slot digit-quad block (2 or 4 columns).
+      ``(type_name, slot_name) -> (start_col, n_cols)`` for the digit-quad block
+      (2 or 4 cols). Also shared by position and sized for the *widest* slot at
+      that position, so a narrow slot may get a wider block (its high byte is
+      then a constant 0).
+    * ``n_slot_positions`` / ``shared_raw_col`` / ``shared_dq_col`` /
+      ``shared_position_cardinality`` / ``shared_position_dq_width`` — the
+      per-position sharing cluster: the number of slot positions (= the widest
+      type's slot count), the shared raw / digit-quad column for each position,
+      and each position's cardinality and digit-quad width.
     * ``derived_columns`` — map
       ``(type_name, slot_name, derived_name) -> (start_col, width)``.
       Each declaration owns its own ``width``-wide span (no cross-type
@@ -285,12 +302,10 @@ class Layout:
         # own slots (never all types at once), so the sharing is transparent to
         # them — `_build_w_embed` / `extract` need no change.
         self.slot_columns: dict[tuple[str, str], int] = {}
-        self.slot_kinds: dict[tuple[str, str], IntSlot | FloatSlot] = {}
         self.digit_quad_columns: dict[tuple[str, str], tuple[int, int]] = {}
         for t in types:
             for j, (slot_name, slot) in enumerate(t.slots.items()):
                 self.slot_columns[(t.name, slot_name)] = self.shared_raw_col[j]
-                self.slot_kinds[(t.name, slot_name)] = slot
                 self.digit_quad_columns[(t.name, slot_name)] = (
                     self.shared_dq_col[j],
                     self.shared_position_dq_width[j],
