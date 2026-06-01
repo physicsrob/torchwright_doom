@@ -155,8 +155,12 @@ _SCAN_X_DERIVED = {
     "x_square": (lambda x: float(x * x)),
 }
 
+# Public name of the lifted scalar-id key derived column (producer key
+# ``[id, -id**2, 1]``), referenced by the renderer read-side (Plan D).
+ID_LIFTED_KEY_DERIVED_NAME = "id_lifted_key"
+
 _ID_LIFTED_KEY_DERIVED = {
-    "id_lifted_key": Derived(_id_lifted_key, width=3),
+    ID_LIFTED_KEY_DERIVED_NAME: Derived(_id_lifted_key, width=3),
 }
 
 _TEX_ID_DERIVED = {"present": _tex_id_present}
