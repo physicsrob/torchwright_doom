@@ -31,11 +31,13 @@ from torchwright_doom.vocab import SET_CURSOR_DIRECTION_Y
 
 from ..prefill_fixture import TINY_BSP_SCENE, pad_iv, row_index, tokens_to_input
 
-# The reduced forward's residual fits at d=5120: ~8 distinct emit heads (236
-# each) float together, plus the 820-wide input and the 584-wide shared tail.
-# d_head=160 covers the widest attention key (the traversal-edge lookup keys on
-# a one-hot of width N_ENTITY_MAX + N_DEPTH_MAX = 145).
-_D = 5120
+# With the shared-slot-column embedding the unforced residual peak is ~1432:
+# the 603-wide input + the 584-wide shared derived tail dominate; the ~8 distinct
+# emit heads are only ~19 cols each now (8 E8 + the shared slot columns), so the
+# dispatch fan-out is no longer the driver. d=2400 leaves comfortable margin;
+# d_head=160 covers the widest attention key (the traversal-edge lookup keys on a
+# one-hot of width N_ENTITY_MAX + N_DEPTH_MAX = 145; d must be a multiple of it).
+_D = 2400
 _D_HEAD = 160
 # Deep op chains over values in the 10^3-10^6 range (digit-quad payloads); 50 is
 # comfortably above the compiled-vs-oracle PL noise here while still a real check.

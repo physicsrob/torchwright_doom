@@ -179,21 +179,27 @@ def test_extract_type_slot_int_round_trip(token_type, slot_name, test_values) ->
 
 
 def test_extract_type_slot_wrong_type_returns_zero_masked() -> None:
-    """Feeding a different-type row through ``extract_type_slot`` returns 0.
+    """Feeding a different-type row through the *masked* ``extract_type_slot``
+    returns 0.
 
-    The unmasked ``_raw`` form returns ``slot.lo`` (IntSlot) — that's
-    the inverse of a 0 raw column. The masked form zeros it out.
+    Under the shared-slot-column layout, a slot's raw column is shared by every
+    type's same-position slot, so the unmasked ``_raw`` read is type-agnostic —
+    it returns whatever sits at that shared position (here the VALUE row's own
+    value, rescaled through ``NODE.j``), not ``slot.lo``. Off-type masking is
+    therefore provided by the ``is_type`` gate in the masked form — the form the
+    renderer always uses (``TokenType.extract``).
     """
     inp = create_input("iv", TOKEN_VOCAB.layout.d_embed)
     raw_node = extract.extract_type_slot_raw(inp, NODE, "j")
     masked_node = extract.extract_type_slot(inp, NODE, "j")
 
-    # VALUE row through "NODE.j"
+    # VALUE row through "NODE.j": raw sees the shared column's value (type-
+    # agnostic); the masked form zeros it because is_type(NODE) is false here.
     row = _row_for(VALUE, {"v": 0.5})
-    raw_out = _eval_one(raw_node, row)
-    masked_out = _eval_one(masked_node, row)
-    assert raw_out == pytest.approx(float(NODE.slots["j"].lo), abs=1e-3)
-    assert masked_out == pytest.approx(0.0, abs=1e-3)
+    assert _eval_one(raw_node, row) != pytest.approx(
+        float(NODE.slots["j"].lo), abs=1e-3
+    )
+    assert _eval_one(masked_node, row) == pytest.approx(0.0, abs=1e-3)
 
 
 # ---------------------------------------------------------------------------
@@ -230,23 +236,16 @@ def test_extract_type_slot_float_round_trip_grid_aligned() -> None:
 
 
 def test_extract_type_slot_float_wrong_type_masked_zero() -> None:
-    """A non-VALUE row through ``extract_type_slot(VALUE, v)`` returns 0.
+    """A non-VALUE row through the masked ``extract_type_slot(VALUE, v)`` is 0.
 
-    The unmasked path returns ``lo - span / (2·(levels-1))`` ≈ -4096.0625
-    (the FloatSlot off-type residual).
+    As with the IntSlot case, the shared raw column makes the unmasked read
+    type-agnostic (it sees the NODE row's value rescaled through VALUE.v), so
+    the off-type guarantee lives in the ``is_type`` mask, not the columns.
     """
     inp = create_input("iv", TOKEN_VOCAB.layout.d_embed)
-    raw_node = extract.extract_type_slot_raw(inp, VALUE, "v")
     masked_node = extract.extract_type_slot(inp, VALUE, "v")
-
     row = _row_for(NODE, {"j": 5})
-    raw_out = _eval_one(raw_node, row)
-    masked_out = _eval_one(masked_node, row)
-    slot = _value_slot()
-    off_type_residual = (slot.hi - slot.lo) / (2.0 * (slot.levels - 1))
-    expected_raw = slot.lo - off_type_residual
-    assert raw_out == pytest.approx(expected_raw, abs=1e-3)
-    assert masked_out == pytest.approx(0.0, abs=1e-3)
+    assert _eval_one(masked_node, row) == pytest.approx(0.0, abs=1e-3)
 
 
 # ---------------------------------------------------------------------------
@@ -277,17 +276,13 @@ def test_extract_int_slot_flat_namespace_across_types() -> None:
 
 
 def test_extract_int_slot_off_name_masked_zero() -> None:
-    """A row of a type that doesn't declare 'flag' returns 0 from the
-    masked variant. The unmasked variant returns ``lo`` (= 0 for flag)."""
+    """A row of a type that doesn't declare 'flag' returns 0 from the masked
+    variant. (The unmasked variant is type-agnostic under shared columns: it
+    reads NODE's own slot value sharing that position, not ``lo``.)"""
     inp = create_input("iv", TOKEN_VOCAB.layout.d_embed)
-    raw_node = extract.extract_int_slot_raw(inp, "flag")
     masked_node = extract.extract_int_slot(inp, "flag")
-
     row = _row_for(NODE, {"j": 5})  # NODE has no 'flag'
-    raw_out = _eval_one(raw_node, row)
-    masked_out = _eval_one(masked_node, row)
-    assert raw_out == pytest.approx(0.0, abs=1e-3)
-    assert masked_out == pytest.approx(0.0, abs=1e-3)
+    assert _eval_one(masked_node, row) == pytest.approx(0.0, abs=1e-3)
 
 
 # ---------------------------------------------------------------------------

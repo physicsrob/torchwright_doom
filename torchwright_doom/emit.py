@@ -87,7 +87,6 @@ from .embedding import (
     D_CATEGORY,
     TOKEN_VOCAB,
     _digit_count_for_cardinality,
-    _slot_levels,
 )
 from .tokens import FloatSlot, IntSlot, TokenType
 
@@ -363,16 +362,19 @@ def _emit_token_with_step_indices(
 ) -> Node:
     """Build the residual row given step-index nodes for each slot.
 
-    Assembles the row by concatenating pieces in column order:
-    E8 code, per-(type, slot) raw cols, per-(type, slot) digit-quad
-    blocks, derived cols. Pieces that don't belong to ``token_type``
-    contribute zero literals at the right widths. With
+    Column order: E8 code, one shared raw column per slot *position*, one shared
+    digit-quad block per slot position, derived cols. The token writes its own
+    slots at their declaration order (slot 0 -> position 0, …) and zeros the
+    trailing positions it doesn't have. Because the columns are shared across
+    types and sized for the widest slot at each position, each slot is encoded
+    at its position's digit width (matching ``_build_w_embed``). With
     ``include_derived=False`` the trailing derived-zero block is omitted,
     yielding the head (the dispatch appends one shared
     :func:`emit_derived_zero` instead).
     """
     layout = TOKEN_VOCAB.layout
     type_name = token_type.name
+    type_slots = list(token_type.slots.items())  # declaration order == positions
 
     pieces: list[Node] = []
 
@@ -385,51 +387,49 @@ def _emit_token_with_step_indices(
         )
     )
 
-    # Per-(type, slot) raw cols in layout order
-    for (t_name, slot_name), _col in layout.slot_columns.items():
-        if t_name == type_name:
-            slot = token_type.slots[slot_name]
-            q_node = step_index_nodes[slot_name]
+    # One shared raw column per slot position (zero where this type has no slot).
+    for j in range(layout.n_slot_positions):
+        if j < len(type_slots):
+            slot_name, slot = type_slots[j]
             pieces.append(
                 _raw_col_from_step_index(
-                    q_node,
+                    step_index_nodes[slot_name],
                     slot,
-                    name=f"emit_raw_{type_name}_{slot_name}{suffix}",
+                    name=f"emit_raw_{type_name}_p{j}{suffix}",
                 )
             )
         else:
             pieces.append(
                 create_literal_value(
                     torch.zeros(1, dtype=torch.float32),
-                    name=f"emit_raw_zero_{t_name}_{slot_name}{suffix}",
+                    name=f"emit_raw_zero_p{j}{suffix}",
                 )
             )
 
-    # Per-(type, slot) digit-quad blocks in layout order
-    for (t_name, slot_name), (_dq_col, dq_n) in layout.digit_quad_columns.items():
-        if t_name == type_name:
-            slot = token_type.slots[slot_name]
-            q_node = step_index_nodes[slot_name]
+    # One shared digit-quad block per slot position, encoded at the position's
+    # width (the position cardinality, not the slot's own).
+    for j in range(layout.n_slot_positions):
+        width = layout.shared_position_dq_width[j]
+        if j < len(type_slots):
+            slot_name, slot = type_slots[j]
             pieces.append(
                 _digit_quad_payload(
-                    q_node,
-                    slot,
-                    name=f"emit_dq_{type_name}_{slot_name}{suffix}",
+                    step_index_nodes[slot_name],
+                    layout.shared_position_cardinality[j],
+                    name=f"emit_dq_{type_name}_p{j}{suffix}",
                 )
             )
         else:
             pieces.append(
                 create_literal_value(
-                    torch.zeros(dq_n, dtype=torch.float32),
-                    name=f"emit_dq_zero_{t_name}_{slot_name}{suffix}",
+                    torch.zeros(width, dtype=torch.float32),
+                    name=f"emit_dq_zero_p{j}{suffix}",
                 )
             )
 
     # Derived columns: zero on the emit side (any non-zero value would
     # bias argmax toward rows that carry that derived value). Omitted for the
     # head; the dispatch stamps one shared `emit_derived_zero` after selection.
-    # Built via the same helper so head + tail reconstitutes a full row by
-    # construction (one builder), not by a separately-maintained copy.
     if include_derived and layout.n_derived_columns:
         pieces.append(emit_derived_zero(suffix=f"_{type_name}{suffix}"))
 
@@ -472,23 +472,22 @@ def _raw_col_from_step_index(
     )
 
 
-def _digit_quad_payload(q_node: Node, slot: IntSlot | FloatSlot, *, name: str) -> Node:
+def _digit_quad_payload(q_node: Node, cardinality: int, *, name: str) -> Node:
     """Build the digit-quad payload ``[..., 2·d_c, 1, ...]`` from a
-    step-index node ``q``.
+    step-index node ``q``, at the width implied by ``cardinality``.
 
-    For 1-digit slots (cardinality ≤ 256): pure affine,
-    ``[2·(q - CENTER), 1.0]``. Two columns, depth-free
-    (the affine folds into the surrounding Concatenate consumer).
+    ``cardinality`` is the slot *position*'s cardinality (the widest slot at
+    this position across the vocab), not the emitting slot's own — the
+    digit-quad columns are shared by position, so a narrow slot is encoded at
+    its position's width (its high byte is then a constant 0). The matching
+    ``W_EMBED`` rows are built the same way via ``_digit_quad_block`` on the
+    block width, so emit and table stay consistent.
 
-    For 2-digit slots (257 ≤ cardinality ≤ 65,536): the high byte
-    comes from :func:`thermometer_floor_div` (``hi_q = floor((q + 0.5)
-    / BASE)`` — staircase PWL with transitions centred on the
-    half-integer byte thresholds 255.5, 511.5, …; one MLP sublayer)
-    and the low byte recovers via the affine ``lo_q = q - BASE·hi_q``
-    that folds into the surrounding Concatenate consumer.
-    Total depth: 1 MLP sublayer for the staircase, the rest is affine.
+    For 1 digit (cardinality ≤ 256): pure affine, ``[2·(q - CENTER), 1.0]``,
+    depth-free. For 2 digits (257 ≤ cardinality ≤ 65,536): the high byte comes
+    from :func:`thermometer_floor_div` (one MLP sublayer) and the low byte
+    recovers via an affine that folds into the surrounding Concatenate.
     """
-    cardinality = _slot_levels(slot)
     digits = _digit_count_for_cardinality(cardinality)
 
     one = create_literal_value(

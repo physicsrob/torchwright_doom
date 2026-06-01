@@ -253,25 +253,48 @@ class Layout:
 
         col = D_CATEGORY
 
-        # Per-(type, slot) raw columns.
+        # Shared-by-position slot columns. Every type's j-th slot reuses one
+        # shared raw column and one shared digit-quad block, each sized for the
+        # *widest* j-th slot in the vocab. The E8 category code distinguishes
+        # types, so the value columns need not be per-type — a token (T, v) and
+        # (U, v) collide only in their (identical) value columns, leaving the E8
+        # code to break the tie with a large margin. This is what lets the
+        # output head build one compact row instead of one near-all-zero
+        # candidate per token type (validated in test_shared_slot_layout).
+        self.n_slot_positions: int = max((len(t.slots) for t in types), default=0)
+        pos_card = [0] * self.n_slot_positions
+        for t in types:
+            for j, slot in enumerate(t.slots.values()):
+                pos_card[j] = max(pos_card[j], _slot_levels(slot))
+        self.shared_position_cardinality: list[int] = pos_card
+        pos_digits = [_digit_count_for_cardinality(c) for c in pos_card]
+        self.shared_position_dq_width: list[int] = [2 * d for d in pos_digits]
+
+        # One raw column per position, then one digit-quad block per position.
+        self.shared_raw_col: list[int] = []
+        for _ in range(self.n_slot_positions):
+            self.shared_raw_col.append(col)
+            col += 1
+        self.shared_dq_col: list[int] = []
+        for j in range(self.n_slot_positions):
+            self.shared_dq_col.append(col)
+            col += self.shared_position_dq_width[j]
+
+        # Map each (type, slot) onto its position's shared columns. Many keys
+        # point at the same column on purpose; consumers loop a single token's
+        # own slots (never all types at once), so the sharing is transparent to
+        # them — `_build_w_embed` / `extract` need no change.
         self.slot_columns: dict[tuple[str, str], int] = {}
         self.slot_kinds: dict[tuple[str, str], IntSlot | FloatSlot] = {}
-        for t in types:
-            for slot_name, slot in t.slots.items():
-                self.slot_columns[(t.name, slot_name)] = col
-                self.slot_kinds[(t.name, slot_name)] = slot
-                col += 1
-
-        # Per-(type, slot) digit-quadratic blocks. Each slot gets its
-        # own block — output-side emit only ever needs one type's
-        # columns; other types' digit-quad cols stay 0 in both the
-        # query and the rows of other types.
         self.digit_quad_columns: dict[tuple[str, str], tuple[int, int]] = {}
         for t in types:
-            for slot_name, slot in t.slots.items():
-                _, n_cols = digit_quad_query_columns_for(slot)
-                self.digit_quad_columns[(t.name, slot_name)] = (col, n_cols)
-                col += n_cols
+            for j, (slot_name, slot) in enumerate(t.slots.items()):
+                self.slot_columns[(t.name, slot_name)] = self.shared_raw_col[j]
+                self.slot_kinds[(t.name, slot_name)] = slot
+                self.digit_quad_columns[(t.name, slot_name)] = (
+                    self.shared_dq_col[j],
+                    self.shared_position_dq_width[j],
+                )
 
         # Derived columns: one width-N span per (type, slot, derived_name)
         # declaration. A name shared across types gets one span PER

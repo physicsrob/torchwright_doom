@@ -20,6 +20,7 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import cast
 
+import numpy as np
 import pytest
 import torch
 
@@ -30,6 +31,7 @@ from torchwright_doom.embedding import (
     DEFAULT_MAX_CARDINALITY,
     TOKEN_VOCAB,
     W_EMBED,
+    _digit_quad_block,
     digit_quad_query_columns_for,
     digit_quad_row,
 )
@@ -98,43 +100,28 @@ def test_raw_slot_columns_in_unit_interval() -> None:
         ), f"raw col for {type_name} exceeds 1.0: {values.max().item()}"
 
 
-def test_digit_quad_block_widths_match_cardinality() -> None:
-    """Every (type, slot) block width is 2 (cardinality ≤ 256) or 4
-    (cardinality 257..65536), matching ``digit_quad_query_columns_for``."""
+def test_digit_quad_block_widths_are_shared_by_position() -> None:
+    """Each (type, slot) digit-quad block is sized for its slot *position* — the
+    widest slot at that position across the vocab. So every block is 2 or 4 cols
+    and at least as wide as the slot's own need, and same-position slots of
+    different types map to the *same* shared block (the property that keeps the
+    output head compact). Columns are deliberately *not* per-type-isolated."""
     layout = TOKEN_VOCAB.layout
     for (type_name, slot_name), (_, n_cols) in layout.digit_quad_columns.items():
-        t = layout.types_by_name[type_name]
-        slot = t.slots[slot_name]
-        digits, expected_n = digit_quad_query_columns_for(slot)
-        assert n_cols == expected_n, (
-            f"{type_name}.{slot_name}: layout width {n_cols} != "
-            f"digit_quad_query_columns_for {expected_n}"
-        )
-        cardinality = slot.hi - slot.lo if isinstance(slot, IntSlot) else slot.levels
-        if cardinality <= 256:
-            assert n_cols == 2
-        else:
-            assert n_cols == 4
-        # Other types' rows should leave this block at 0.
-        start, _ = TOKEN_VOCAB.type_to_row_range[t]
-        col_start, _ = layout.digit_quad_columns[(type_name, slot_name)]
-        # Pick a non-empty foreign type to spot-check zeros (use the
-        # first type whose name differs).
-        for foreign in TOKEN_VOCAB.types:
-            if foreign.name == type_name:
-                continue
-            f_start, f_end = TOKEN_VOCAB.type_to_row_range[foreign]
-            if f_end == f_start:
-                continue
-            f_rows = W_EMBED[
-                f_start:f_end,
-                col_start : col_start + n_cols,
-            ]
-            assert torch.all(f_rows == 0), (
-                f"foreign type {foreign.name} has non-zero values in "
-                f"{type_name}.{slot_name} digit-quad block"
-            )
-            break
+        slot = layout.types_by_name[type_name].slots[slot_name]
+        _, slot_n = digit_quad_query_columns_for(slot)
+        assert n_cols in (2, 4)
+        assert (
+            n_cols >= slot_n
+        ), f"{type_name}.{slot_name}: shared block {n_cols} < slot need {slot_n}"
+
+    # Every type's first slot shares one digit-quad column block.
+    first_blocks = {
+        layout.digit_quad_columns[(t.name, next(iter(t.slots)))][0]
+        for t in TOKEN_VOCAB.types
+        if t.slots
+    }
+    assert len(first_blocks) == 1, f"first-slot blocks not shared: {first_blocks}"
 
 
 def _digit_quad_block_for(
@@ -183,24 +170,28 @@ def test_digit_quad_payload_angle_value_slot() -> None:
 
 
 def test_digit_quad_payload_small_int_slot() -> None:
-    """SEG has two IntSlots both with cardinality ≤ 256 → 2-wide
-    blocks."""
+    """SEG's two small IntSlots encode into their *shared-position* blocks: each
+    value's W_EMBED block matches ``_digit_quad_block`` at the position's width
+    (which may exceed the slot's own — the extra high byte is then a constant 0,
+    matching how the emit side encodes it)."""
     layout = TOKEN_VOCAB.layout
     seg_start, _ = TOKEN_VOCAB.type_to_row_range[SEG]
     seg_i_slot = _int_slot(SEG, "i")
-    seg_first_slot = _int_slot(SEG, "is_first_of_ss")
     n_i = seg_i_slot.hi - seg_i_slot.lo
+    _, i_ncols = layout.digit_quad_columns[("seg", "i")]
+    _, flag_ncols = layout.digit_quad_columns[("seg", "is_first_of_ss")]
     for i in [0, 1, 5, n_i - 1]:
         for flag in [0, 1]:
-            row_idx = seg_start + i * 2 + flag
-            row = W_EMBED[row_idx]
+            row = W_EMBED[seg_start + i * 2 + flag]
 
             actual_i = _digit_quad_block_for("seg", "i", row)
-            expected_i = digit_quad_row(seg_i_slot, i)
+            expected_i = torch.from_numpy(_digit_quad_block(np.array([i]), i_ncols)[0])
             assert torch.allclose(actual_i, expected_i)
 
             actual_flag = _digit_quad_block_for("seg", "is_first_of_ss", row)
-            expected_flag = digit_quad_row(seg_first_slot, flag)
+            expected_flag = torch.from_numpy(
+                _digit_quad_block(np.array([flag]), flag_ncols)[0]
+            )
             assert torch.allclose(actual_flag, expected_flag)
 
 

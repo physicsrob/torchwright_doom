@@ -6,15 +6,16 @@ the read-side ``SceneIndex`` + ``ProtocolTokenView``, publishes the runtime
 protocol owners, builds each branch's next-token, then dispatches by token type.
 
 **The output head (the fan-out fix).** The sandbox dispatch sums one type-gated
-*full* ``d_embed`` row per transition; at ~64 transitions × 820 cols that needs a
-~53k-wide residual and will not compile. The port replaces it (see
-``dispatch_next_token``): branches are built as emit *heads* (``head_width()`` ≈
-236 cols — the constant derived tail dropped), transitions that select the same
-head are grouped with their predicates OR-ed, the ~8 distinct gated heads are
-summed (``max_fanout=2`` so the gated copies free incrementally), and one shared
-``emit_derived_zero`` is concatenated at the end. That compiles whole at d=5120
-in ~22 layers, and the full row is byte-identical to the sandbox's, so the
-teacher-forced oracle is unchanged.
+*full* ``d_embed`` row per transition; at ~64 transitions that needs a huge
+residual and will not compile. The port replaces it (see ``dispatch_next_token``):
+branches are built as emit *heads* (``head_width()`` — the constant derived tail
+dropped, ≈ 19 cols under the shared-slot-column embedding), transitions that
+select the same head are grouped with their predicates OR-ed, the ~8 distinct
+gated heads are summed (``max_fanout=2`` so the gated copies free incrementally),
+and one shared ``emit_derived_zero`` is concatenated at the end. The full row is
+byte-identical to the sandbox's, so the teacher-forced oracle is unchanged. With
+the shared-slot-column layout the whole forward compiles at d≈1600 (peak ~1432);
+heads are ~19 cols each, so the dispatch width barely grows with token count.
 
 **Single-pass scoping (Plan E).** A literal port of ``main.py`` would drag in
 the whole renderer (``SegProjection`` and seven owners). This reduced spine
@@ -97,16 +98,17 @@ def dispatch_next_token(
 
     This is the transformer's output head. The sandbox's ``type_switch`` sums
     one type-gated *full* ``d_embed`` row **per transition** — at ~64
-    transitions × 820 cols that needs a ~53k-wide residual to compile. Two
-    changes shrink it to a handful of narrow columns while staying a single flat
-    sum (no deep ``select`` chain — that compiles to dozens of sequential layers
-    and overflows ``reference_eval``'s recursion):
+    transitions that needs a huge residual to compile. Two changes shrink it to
+    a handful of narrow columns while staying a single flat sum (no deep
+    ``select`` chain — that compiles to dozens of sequential layers and overflows
+    ``reference_eval``'s recursion):
 
     1. **Gate over heads, stamp the tail once.** Each branch is built at
-       ``head_width()`` ≈ 236 cols (the constant derived tail dropped); the sum
-       runs over heads and one shared :func:`emit_derived_zero` is concatenated
-       afterward. The result is byte-identical to the matching branch's full
-       ``make_token`` row, so the teacher-forced oracle is unchanged.
+       ``head_width()`` (the constant derived tail dropped — ≈ 19 cols under the
+       shared-slot-column embedding); the sum runs over heads and one shared
+       :func:`emit_derived_zero` is concatenated afterward. The result is
+       byte-identical to the matching branch's full ``make_token`` row, so the
+       teacher-forced oracle is unchanged.
     2. **One gated copy per *distinct* head, not per transition.** Every
        transition's predicate is read off ``inp``; transitions that select the
        *same* head node (all the deferred branches share one ``no_op`` head) are
