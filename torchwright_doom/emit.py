@@ -428,14 +428,10 @@ def _emit_token_with_step_indices(
     # Derived columns: zero on the emit side (any non-zero value would
     # bias argmax toward rows that carry that derived value). Omitted for the
     # head; the dispatch stamps one shared `emit_derived_zero` after selection.
-    n_derived = layout.n_derived_columns
-    if include_derived and n_derived:
-        pieces.append(
-            create_literal_value(
-                torch.zeros(n_derived, dtype=torch.float32),
-                name=f"emit_derived_zero_{type_name}{suffix}",
-            )
-        )
+    # Built via the same helper so head + tail reconstitutes a full row by
+    # construction (one builder), not by a separately-maintained copy.
+    if include_derived and layout.n_derived_columns:
+        pieces.append(emit_derived_zero(suffix=f"_{type_name}{suffix}"))
 
     out = Concatenate(pieces)
     expected = layout.d_embed if include_derived else head_width()

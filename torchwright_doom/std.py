@@ -175,16 +175,9 @@ def sum(*nodes: Node) -> Node:  # noqa: A001 - intentional sandbox-api shadow
     return sum_nodes(list(nodes))
 
 
-def select(
-    cond: Node, true_value: Node, false_value: Node, *, approximate: bool = True
-) -> Node:
-    """Two-way ±1-boolean branch (sandbox ``select``).
-
-    ``approximate=False`` uses the float-exact two-sublayer path (immune to the
-    additive-cancellation error of the default one-sublayer form) — used by the
-    dispatch fold, which chains many selects over high-dynamic-range emit rows.
-    """
-    return _select(cond, true_value, false_value, approximate=approximate)
+def select(cond: Node, true_value: Node, false_value: Node) -> Node:
+    """Two-way ±1-boolean branch (sandbox ``select``)."""
+    return _select(cond, true_value, false_value)
 
 
 def type_switch(*pairs: tuple[Node, Node], max_fanout: int | None = None) -> Node:

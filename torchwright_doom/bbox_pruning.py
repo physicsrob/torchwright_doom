@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 from torchwright.graph import Node
 
-from .emit import emit_token_head as make_token_head
+from .std import make_token_head
 from .past import PastHandle, PastHandleScope
 from .protocol_tokens import ProtocolTokenView
 from .scene_index import SceneIndex

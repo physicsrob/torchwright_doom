@@ -27,25 +27,9 @@ from torchwright.ops.inout_nodes import create_input, create_pos_encoding
 from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
 from torchwright_doom.past import GraphPast
 from torchwright_doom.render_main import forward
-from torchwright_doom.value_ranges import ValueRange
-from torchwright_doom.vocab import (
-    BEGIN,
-    NODE,
-    NODE_BACK_CHILD,
-    NODE_DX,
-    NODE_DY,
-    NODE_FRONT_CHILD,
-    NODE_PX,
-    NODE_PY,
-    PLAYER_X_MARK,
-    PLAYER_Y_MARK,
-    SEG,
-    SEG_AX,
-    SET_CURSOR_DIRECTION_Y,
-    SS,
-)
+from torchwright_doom.vocab import SET_CURSOR_DIRECTION_Y
 
-from ..prefill_fixture import row_index, tokens_to_input, value
+from ..prefill_fixture import TINY_BSP_SCENE, pad_iv, row_index, tokens_to_input
 
 # The reduced forward's residual fits at d=5120: ~8 distinct emit heads (236
 # each) float together, plus the 820-wide input and the 584-wide shared tail.
@@ -59,32 +43,9 @@ _ATOL = 50.0
 
 
 def test_forward_compiles_and_matches_oracle(device) -> None:
-    # Smallest scene that exercises the whole spine: one BSP node (both children
-    # subsectors) and one subsector/seg, ending at BEGIN — the AR seed position.
-    seq = [
-        (PLAYER_X_MARK, {}),
-        value(ValueRange.R1, 100.0),
-        (PLAYER_Y_MARK, {}),
-        value(ValueRange.R1, -30.0),
-        (NODE, {"j": 0}),
-        (NODE_PX, {}),
-        value(ValueRange.R1, 50.0),
-        (NODE_PY, {}),
-        value(ValueRange.R1, -20.0),
-        (NODE_DX, {}),
-        value(ValueRange.R2, 40.0),
-        (NODE_DY, {}),
-        value(ValueRange.R2, -30.0),
-        (NODE_FRONT_CHILD, {"child_u": 64}),
-        (NODE_BACK_CHILD, {"child_u": 65}),
-        (SS, {"s": 0}),
-        (SEG, {"i": 0, "is_first_of_ss": 1}),
-        (SEG_AX, {}),
-        value(ValueRange.R1, 10.0),
-        (BEGIN, {}),
-    ]
-    n_pos = len(seq)
-    inputs = {"iv": tokens_to_input(seq)}
+    n_pos = len(TINY_BSP_SCENE)
+    iv_input = tokens_to_input(TINY_BSP_SCENE)
+    inputs = {"iv": iv_input}
 
     d_embed = TOKEN_VOCAB.layout.d_embed
     pos = create_pos_encoding()
@@ -107,11 +68,7 @@ def test_forward_compiles_and_matches_oracle(device) -> None:
     assert report.first_divergent is None, report.format_short()
 
     # And the seed position emits the right next token: BEGIN -> SET_CURSOR_DIRECTION_Y.
-    d_in = max(start + w for _, start, w in compiled._input_specs)
-    start, width = next((s, w) for nm, s, w in compiled._input_specs if nm == "iv")
-    full = torch.zeros(n_pos, d_in)
-    full[:, start : start + width] = inputs["iv"]
-    out = compiled(full)
+    out = compiled(pad_iv(compiled, iv_input))
     begin = n_pos - 1
     emitted = int(torch.argmax(out[begin].cpu() @ W_EMBED.t()).item())
     assert emitted == row_index(SET_CURSOR_DIRECTION_Y, {}), (

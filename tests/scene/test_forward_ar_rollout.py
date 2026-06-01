@@ -36,53 +36,13 @@ from torchwright.ops.inout_nodes import create_input, create_pos_encoding
 from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED, build_doom_embedding
 from torchwright_doom.past import GraphPast
 from torchwright_doom.render_main import forward
-from torchwright_doom.value_ranges import ValueRange
-from torchwright_doom.vocab import (
-    BEGIN,
-    NODE,
-    NODE_BACK_CHILD,
-    NODE_DX,
-    NODE_DY,
-    NODE_FRONT_CHILD,
-    NODE_PX,
-    NODE_PY,
-    NO_OP,
-    PLAYER_X_MARK,
-    PLAYER_Y_MARK,
-    SEG,
-    SEG_AX,
-    SS,
-)
+from torchwright_doom.vocab import NO_OP
 
-from ..prefill_fixture import row_index, tokens_to_input, value
+from ..prefill_fixture import TINY_BSP_SCENE, row_index
 
 _D = 5120
 _D_HEAD = 160
 _MAX_STEPS = 8  # plenty for set_cursor + side precompute + descent on a 1-node scene
-
-# Tiny scene: one BSP node (root=0) with two subsector children, one subsector/seg.
-_PREFILL = [
-    (PLAYER_X_MARK, {}),
-    value(ValueRange.R1, 100.0),
-    (PLAYER_Y_MARK, {}),
-    value(ValueRange.R1, -30.0),
-    (NODE, {"j": 0}),
-    (NODE_PX, {}),
-    value(ValueRange.R1, 50.0),
-    (NODE_PY, {}),
-    value(ValueRange.R1, -20.0),
-    (NODE_DX, {}),
-    value(ValueRange.R2, 40.0),
-    (NODE_DY, {}),
-    value(ValueRange.R2, -30.0),
-    (NODE_FRONT_CHILD, {"child_u": 64}),
-    (NODE_BACK_CHILD, {"child_u": 65}),
-    (SS, {"s": 0}),
-    (SEG, {"i": 0, "is_first_of_ss": 1}),
-    (SEG_AX, {}),
-    value(ValueRange.R1, 10.0),
-    (BEGIN, {}),
-]
 
 
 def _decode_type(row: int) -> str:
@@ -139,7 +99,7 @@ def _compiled_rollout(prefill_ids: list[int], device) -> list[int]:
 
 
 def test_compiled_forward_free_runs_bsp_traversal(device) -> None:
-    prefill_ids = [row_index(t, s) for t, s in _PREFILL]
+    prefill_ids = [row_index(t, s) for t, s in TINY_BSP_SCENE]
 
     golden = _exact_math_rollout(prefill_ids)
     rollout = _compiled_rollout(prefill_ids, device)
