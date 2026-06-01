@@ -28,9 +28,12 @@ from torchwright.ops import (
     in_range,
     sum_nodes,
 )
+from torchwright.ops.arithmetic_ops import clamp as _clamp
 from torchwright.ops.inout_nodes import create_literal_value
+from torchwright.ops.map_select import select as _select, switch as _switch
 
 from .extract import extract_derived, indicator_to_bool
+from .tokens import FloatSlot, IntSlot, TokenType
 
 __all__ = [
     "concat",
@@ -42,6 +45,11 @@ __all__ = [
     "bool_and",
     "bool_or",
     "sum",
+    "select",
+    "type_switch",
+    "reduce_sum",
+    "make_token",
+    "bool_to_01",
     "extract_derived",
     "indicator_to_bool",
 ]
@@ -165,3 +173,92 @@ def sum(*nodes: Node) -> Node:  # noqa: A001 - intentional sandbox-api shadow
     exactly as the sandbox ``...api`` ``sum`` does.
     """
     return sum_nodes(list(nodes))
+
+
+def select(
+    cond: Node, true_value: Node, false_value: Node, *, approximate: bool = True
+) -> Node:
+    """Two-way ±1-boolean branch (sandbox ``select``).
+
+    ``approximate=False`` uses the float-exact two-sublayer path (immune to the
+    additive-cancellation error of the default one-sublayer form) — used by the
+    dispatch fold, which chains many selects over high-dynamic-range emit rows.
+    """
+    return _select(cond, true_value, false_value, approximate=approximate)
+
+
+def type_switch(*pairs: tuple[Node, Node], max_fanout: int | None = None) -> Node:
+    """Mutually-exclusive branch selection (sandbox ``type_switch``).
+
+    Each argument is a ``(condition, value)`` pair; exactly one condition is
+    +1. Lowers to a sum of type-gated values (``cond_gate``). ``max_fanout``
+    caps how many gated operands are summed at once: ``None`` is a single flat
+    ``Linear`` (shallow, but all gated copies live together); ``k >= 2`` chains
+    the reduction so at most ``k`` gated copies sit on the residual stream at a
+    time, trading depth for a lower peak width. The dispatch uses the dial
+    because each gated copy is a full emit head.
+    """
+    conditions = [c for c, _v in pairs]
+    values = [v for _c, v in pairs]
+    if max_fanout is None:
+        return _switch(conditions, values)
+    return sum_nodes([cond_gate(c, v) for c, v in pairs], max_fanout=max_fanout)
+
+
+def reduce_sum(node: Node) -> Node:
+    """Sum across a node's components to a 1-wide node (sandbox ``reduce_sum``).
+
+    A single ``Linear`` with an all-ones column vector.
+    """
+    weights = torch.ones((len(node), 1), dtype=torch.float32)
+    return Linear(node, weights, name="reduce_sum")
+
+
+def make_token(token_type: TokenType, **slot_value_nodes: Node) -> Node:
+    """Build a next-token residual row (sandbox ``make_token`` -> ``emit_token``).
+
+    The renderer builds every branch's next-token eagerly at every position and
+    masks by token type in ``dispatch``, so a branch's slot inputs are only
+    valid at the rows that branch actually fires on; elsewhere a computed slot
+    (e.g. ``child_u - N_NODES_MAX`` for a node child, or ``last_node + 1``) goes
+    out of the slot's range. The sandbox ``make_token`` tolerates that via the
+    clamping one-hot encoder; the real ``emit_token``'s digit-quad payload does
+    not, and an out-of-range value blows up the row (and the downstream
+    ``select`` / ``type_switch`` value-range guards). Clamping each slot value
+    to its declared range here restores that tolerance — it is a no-op at the
+    rows the branch is selected on, and bounds the discarded garbage rows.
+    """
+    from .emit import emit_token
+
+    return emit_token(token_type, **_clamp_slot_values(token_type, slot_value_nodes))
+
+
+def make_token_head(token_type: TokenType, **slot_value_nodes: Node) -> Node:
+    """Like :func:`make_token`, but returns only the emit *head* (no derived
+    tail). The renderer's dispatch folds over heads and stamps one shared
+    ``emit_derived_zero`` after selecting the winning branch — building each
+    candidate at head width instead of full ``d_embed`` is what keeps the
+    dispatch's live residual width small enough to compile. Slot-value clamping
+    is identical to :func:`make_token`.
+    """
+    from .emit import emit_token_head
+
+    return emit_token_head(
+        token_type, **_clamp_slot_values(token_type, slot_value_nodes)
+    )
+
+
+def _clamp_slot_values(
+    token_type: TokenType, slot_value_nodes: dict[str, Node]
+) -> dict[str, Node]:
+    """Clamp each slot value to its declared range (see :func:`make_token`)."""
+    clamped: dict[str, Node] = {}
+    for name, value_node in slot_value_nodes.items():
+        slot = token_type.slots[name]
+        if isinstance(slot, IntSlot):
+            lo, hi = float(slot.lo), float(slot.hi) - 1.0  # IntSlot is [lo, hi)
+        else:
+            assert isinstance(slot, FloatSlot)
+            lo, hi = float(slot.lo), float(slot.hi)
+        clamped[name] = _clamp(value_node, lo, hi)
+    return clamped

@@ -96,7 +96,58 @@ __all__ = [
     "emit_int_slot_token",
     "emit_float_slot_token",
     "emit_token",
+    "emit_token_head",
+    "emit_derived_zero",
+    "head_width",
 ]
+
+
+def head_width() -> int:
+    """Width of the emit *head* — the row minus the trailing derived region.
+
+    Every emit row is ``[E8 code | raw slot cols | digit-quad blocks |
+    derived zeros]``. The first three pieces (the *head*) are the only part
+    that varies between tokens; the derived region is a constant block of
+    zeros on the emit side (``n_derived_columns`` wide). The renderer's
+    dispatch selects over heads and stamps one shared derived-zero tail at the
+    end (see :func:`emit_derived_zero`), so the wide constant is built once
+    instead of once per branch candidate.
+    """
+    layout = TOKEN_VOCAB.layout
+    return layout.d_embed - layout.n_derived_columns
+
+
+def emit_derived_zero(suffix: str = "") -> Node:
+    """The shared trailing derived-region zeros (``n_derived_columns`` wide).
+
+    Concatenated once after the dispatch's head selection to reconstitute a
+    full ``d_embed``-wide emit row. Identical to the derived piece
+    :func:`emit_token` appends internally, so a head + this tail argmaxes
+    exactly as the full :func:`emit_token` would.
+    """
+    n_derived = TOKEN_VOCAB.layout.n_derived_columns
+    return create_literal_value(
+        torch.zeros(n_derived, dtype=torch.float32),
+        name=f"emit_derived_zero{suffix}",
+    )
+
+
+def emit_token_head(
+    token_type: TokenType,
+    *,
+    suffix: str = "",
+    **slot_value_nodes: Node,
+) -> Node:
+    """Like :func:`emit_token`, but returns only the head (no derived tail).
+
+    The dispatch folds over heads and appends one shared
+    :func:`emit_derived_zero`; building each candidate at ``head_width()``
+    instead of ``d_embed`` is what keeps the dispatch's live residual width
+    small enough to compile.
+    """
+    return emit_token(
+        token_type, suffix=suffix, include_derived=False, **slot_value_nodes
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -104,12 +155,16 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
-def emit_slotless(token_type: TokenType, suffix: str = "") -> Node:
+def emit_slotless(
+    token_type: TokenType, suffix: str = "", *, include_derived: bool = True
+) -> Node:
     """Build the residual row for a slotless token type.
 
     The row is fully determined by the type's E8 category code; every
     other column stays at zero. Returns a single :class:`LiteralValue`
-    so the compiler can keep this constant and lazy.
+    so the compiler can keep this constant and lazy. With
+    ``include_derived=False`` the row is truncated to the head (no derived
+    tail) — see :func:`emit_token_head`.
     """
     if token_type.slots:
         raise ValueError(
@@ -118,7 +173,8 @@ def emit_slotless(token_type: TokenType, suffix: str = "") -> Node:
             f"emit_float_slot_token instead."
         )
     layout = TOKEN_VOCAB.layout
-    row = torch.zeros(layout.d_embed, dtype=torch.float32)
+    width = layout.d_embed if include_derived else head_width()
+    row = torch.zeros(width, dtype=torch.float32)
     e8_idx = layout.e8_indices[token_type.name]
     row[0:D_CATEGORY] = index_to_vector(e8_idx)
     return create_literal_value(row, name=f"emit_{token_type.name}{suffix}")
@@ -128,6 +184,7 @@ def emit_int_slot_token(
     token_type: TokenType,
     *,
     suffix: str = "",
+    include_derived: bool = True,
     **slot_value_nodes: Node,
 ) -> Node:
     """Build the residual row for a token whose slots are all IntSlots.
@@ -152,6 +209,7 @@ def emit_int_slot_token(
         token_type,
         _value_to_step_index_nodes(token_type, slot_value_nodes),
         suffix=suffix,
+        include_derived=include_derived,
     )
 
 
@@ -159,6 +217,7 @@ def emit_float_slot_token(
     token_type: TokenType,
     *,
     suffix: str = "",
+    include_derived: bool = True,
     **slot_value_nodes: Node,
 ) -> Node:
     """Build the residual row for a token with one or more FloatSlots.
@@ -184,6 +243,7 @@ def emit_float_slot_token(
         token_type,
         _value_to_step_index_nodes(token_type, slot_value_nodes),
         suffix=suffix,
+        include_derived=include_derived,
     )
 
 
@@ -191,20 +251,32 @@ def emit_token(
     token_type: TokenType,
     *,
     suffix: str = "",
+    include_derived: bool = True,
     **slot_value_nodes: Node,
 ) -> Node:
-    """Dispatch to the right ``emit_*`` helper for ``token_type``."""
+    """Dispatch to the right ``emit_*`` helper for ``token_type``.
+
+    ``include_derived=False`` returns just the head (the row minus the
+    trailing derived zeros); :func:`emit_token_head` is the public shorthand.
+    """
     if not token_type.slots:
         if slot_value_nodes:
             raise ValueError(
                 f"emit_token: {token_type.name!r} is slotless but got "
                 f"slot kwargs {sorted(slot_value_nodes)}"
             )
-        return emit_slotless(token_type, suffix=suffix)
+        return emit_slotless(token_type, suffix=suffix, include_derived=include_derived)
     has_float = any(isinstance(slot, FloatSlot) for slot in token_type.slots.values())
     if has_float:
-        return emit_float_slot_token(token_type, suffix=suffix, **slot_value_nodes)
-    return emit_int_slot_token(token_type, suffix=suffix, **slot_value_nodes)
+        return emit_float_slot_token(
+            token_type,
+            suffix=suffix,
+            include_derived=include_derived,
+            **slot_value_nodes,
+        )
+    return emit_int_slot_token(
+        token_type, suffix=suffix, include_derived=include_derived, **slot_value_nodes
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -287,13 +359,17 @@ def _emit_token_with_step_indices(
     step_index_nodes: Mapping[str, Node],
     *,
     suffix: str,
+    include_derived: bool = True,
 ) -> Node:
     """Build the residual row given step-index nodes for each slot.
 
     Assembles the row by concatenating pieces in column order:
     E8 code, per-(type, slot) raw cols, per-(type, slot) digit-quad
     blocks, derived cols. Pieces that don't belong to ``token_type``
-    contribute zero literals at the right widths.
+    contribute zero literals at the right widths. With
+    ``include_derived=False`` the trailing derived-zero block is omitted,
+    yielding the head (the dispatch appends one shared
+    :func:`emit_derived_zero` instead).
     """
     layout = TOKEN_VOCAB.layout
     type_name = token_type.name
@@ -350,9 +426,10 @@ def _emit_token_with_step_indices(
             )
 
     # Derived columns: zero on the emit side (any non-zero value would
-    # bias argmax toward rows that carry that derived value).
+    # bias argmax toward rows that carry that derived value). Omitted for the
+    # head; the dispatch stamps one shared `emit_derived_zero` after selection.
     n_derived = layout.n_derived_columns
-    if n_derived:
+    if include_derived and n_derived:
         pieces.append(
             create_literal_value(
                 torch.zeros(n_derived, dtype=torch.float32),
@@ -361,10 +438,11 @@ def _emit_token_with_step_indices(
         )
 
     out = Concatenate(pieces)
-    if len(out) != layout.d_embed:
+    expected = layout.d_embed if include_derived else head_width()
+    if len(out) != expected:
         raise RuntimeError(
             f"emit_token({type_name}): assembled width {len(out)} != "
-            f"layout.d_embed {layout.d_embed}"
+            f"expected {expected} (include_derived={include_derived})"
         )
     return out
 
