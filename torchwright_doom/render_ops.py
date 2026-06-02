@@ -26,7 +26,6 @@ from torchwright.graph.value_type import NodeValueType, Range
 from torchwright.ops.arithmetic_ops import (
     clamp,
     compare,
-    low_rank_2d,
     multiply_2d,
     piecewise_linear,
 )
@@ -407,20 +406,24 @@ def _mul_grid(
 ) -> Node:
     """Sandbox ``multiply(input_range=((lo1,hi1),(lo2,hi2)), breakpoints=n)``.
 
-    A product is exactly rank-1 (``u·v`` is a separable outer product), so this
-    lowers to ``low_rank_2d(rank=1)`` — two 1D piecewise-linear interpolants of
-    the (linear) singular vectors — instead of ``multiply_2d``. Two reasons:
-    ``multiply_2d`` lowers to ``piecewise_linear_2d``'s O(n⁴) design-matrix SVD,
-    which is ~18 GB to *build* at the sandbox's 257-bp scale grids; and the
-    rank-1 form is exact for a product (the 1D PWL of a linear singular vector
-    is exact everywhere, not just at vertices) where ``multiply_2d`` carries the
-    fused-square residual. Out-of-grid operands clamp to the breakpoint range —
-    matching the sandbox ``multiply``'s clamp (the wrong-regime products are
-    discarded by ``select(near, …)`` downstream regardless).
+    Lowers to ``multiply_2d`` with explicit (asymmetric) breakpoints. Now that
+    ``multiply_2d`` builds in O(n) (the quarter-square fast path, torchwright
+    2066416) the prior ``low_rank_2d(rank=1)`` build-cost stopgap is gone. The
+    rank-1 form was *not* more precise: its SVD truncation is lossless for a
+    product, but it then multiplies the two (exact, linear) singular-vector
+    interpolants through an inner ``multiply_2d`` on a coarse 20-step grid, so it
+    carries a larger residual (~0.1 abs on these grids) than a direct
+    ``multiply_2d`` over the full 257-bp grid (~1e-3 abs). One behavioural note:
+    ``multiply_2d`` *extrapolates* out-of-grid operands (the sandbox ``multiply``
+    and ``low_rank_2d`` clamp) — fine here because every grid spans the operand
+    range and any wrong-regime product is discarded by ``select(near, …)``
+    downstream. Both validated by the projection gate.
     """
     bp1 = [lo1 + i * (hi1 - lo1) / (n - 1) for i in range(n)]
     bp2 = [lo2 + i * (hi2 - lo2) / (n - 1) for i in range(n)]
-    return low_rank_2d(a, b, bp1, bp2, lambda x, y: x * y, rank=1, name=name)
+    return multiply_2d(
+        a, b, max_abs1=hi1, max_abs2=hi2, breakpoints1=bp1, breakpoints2=bp2, name=name
+    )
 
 
 def mul_normal_coord(coef: Node, rel: Node) -> Node:
