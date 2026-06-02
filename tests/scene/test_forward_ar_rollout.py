@@ -17,6 +17,15 @@ Two things are proven:
    compiled autoregressive trajectory is the trajectory the graph defines, not an
    artifact of compilation.
 
+This is the one place a *compiled* doom forward is actually executed locally: it
+uses the in-process ``compile_headless`` on a tiny scene (fits at ~10 GB). The
+real token-I/O artifact's *compile* is validated separately by
+``test_forward_compiles`` (``compile_to_onnx``); running that artifact is
+memory-infeasible on a 30 GB box (its weights densify to >26 GB — onnxruntime
+``bad_alloc``s on load), so artifact-level inference belongs on a larger machine.
+The dispatch reduction is ``max_fanout=8`` (render_main), so the free-run compiles
+to ~44 layers rather than the ~66 of the old serial fold.
+
 Scope: the rollout walks ``BEGIN -> SET_CURSOR_DIRECTION_Y -> the side-bit
 precompute -> TRAVERSE_ENTER -> the descent to a leaf``. At the first subsector
 the projection owner would take over; it is deferred this phase (stubbed NO_OP),

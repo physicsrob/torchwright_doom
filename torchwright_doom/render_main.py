@@ -153,11 +153,16 @@ def dispatch_next_token(
     rollout and the oracle are unaffected (prefill emissions are discarded; the
     AR seed comes from the ``begin`` branch).
     """
-    # max_fanout=2 sums the gated heads through a running accumulator so at most
-    # ~2 gated copies sit on the residual stream at once, instead of all ~8 — the
-    # gated copies are full emit heads, so the peak-width saving is what lets the
-    # forward compile at a modest residual width.
-    head = type_switch(*_distinct_head_pairs(inp, branches), max_fanout=2)
+    # max_fanout bounds how many gated heads are summed per accumulator step:
+    # smaller = fewer copies live at once (narrower residual), larger = a shallower
+    # reduction tree (fewer layers). Measured on the e1m1 forward (scripts/
+    # analyze_forward_cost.py): the reduction is the dominant depth driver —
+    # fanout=2 (a serial accumulator) costs ~35 layers (66 total), fanout=8 a
+    # shallow tree ~22 (44 total), flat ~10 (32 total). The width cost is small
+    # (each head is ~19 cols + its inputs; +~3% peak from 2→8). 8 captures most of
+    # the depth win at a residual that still fits a modest d. The reassociation is
+    # output-identical (scripts/check_fanout_equivalence.py: 0 next-token diffs).
+    head = type_switch(*_distinct_head_pairs(inp, branches), max_fanout=8)
     return concat(head, emit_derived_zero())
 
 
