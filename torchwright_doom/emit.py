@@ -72,6 +72,7 @@ amplitude (256) and lets the affine recover ``lo_q`` exactly.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Mapping
 
 import torch
@@ -98,7 +99,65 @@ __all__ = [
     "emit_token_head",
     "emit_derived_zero",
     "head_width",
+    "ScalarEmit",
+    "value_scalar",
+    "angle_scalar",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Route-then-emit-once: deferred numeric-carrier emission
+# ---------------------------------------------------------------------------
+#
+# A numeric carrier (``VALUE`` / ``ANGLE_VALUE``) emits its value through a
+# ~255-wide ``floor_int`` digit-quad (see :func:`_digit_quad_payload`). Each
+# branch that emits one used to build its OWN ``make_token_head`` head eagerly,
+# so ~24 of these 255-wide staircases sat live on the residual at once — the
+# measured residual-width peak (``scripts/COST_NOTES.md``: ~39% of the d=6400
+# peak is digit-quad emit, all collapsible).
+#
+# Instead, an owner ``after_*`` returns just its 1-wide scalar wrapped in a
+# :class:`ScalarEmit`. The dispatch (``render_main._collapse_scalar_emits``)
+# gathers every branch sharing a carrier, picks the active branch's scalar by
+# its dispatch predicate (float-exact, exactly one predicate is +1), and runs
+# ONE shared digit-quad per carrier. 24 eager quads → 2. The emitted row is
+# byte-identical: the picked scalar is the winning branch's scalar bit-for-bit,
+# and the shared head clamps + quantizes it exactly as the per-branch head did.
+
+
+@dataclass(frozen=True)
+class ScalarEmit:
+    """A branch's deferred numeric-carrier emission: the carrier token type plus
+    the 1-wide scalar it carries (``VALUE``: range-encoded into [-1, 1];
+    ``ANGLE_VALUE``: the raw angle). Built by :func:`value_scalar` /
+    :func:`angle_scalar`; collapsed into one shared head per carrier by the
+    dispatch. See the module note above."""
+
+    carrier: TokenType
+    scalar: Node
+
+
+def value_scalar(range_id, value: Node) -> ScalarEmit:
+    """A ``VALUE``-carrier branch's scalar contribution: range-encode ``value``
+    into the shared slot's [-1, 1] space and defer the digit-quad.
+
+    Drop-in for ``make_value`` at a branch ``after_*`` emitter — the encode is
+    the same producer-side affine, but the head is built once at dispatch time
+    over the picked scalar instead of once per branch."""
+    from .value_ranges import encode_vec
+    from .vocab import VALUE
+
+    return ScalarEmit(VALUE, encode_vec(range_id, value))
+
+
+def angle_scalar(angle: Node) -> ScalarEmit:
+    """An ``ANGLE_VALUE``-carrier branch's scalar contribution (the raw angle).
+
+    Drop-in for ``make_token_head(ANGLE_VALUE, angle=...)`` at a branch
+    ``after_*`` emitter; see :func:`value_scalar`."""
+    from .vocab import ANGLE_VALUE
+
+    return ScalarEmit(ANGLE_VALUE, angle)
 
 
 def head_width() -> int:

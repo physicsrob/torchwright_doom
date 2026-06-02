@@ -52,10 +52,21 @@ from .render_ops import (
 )
 from .scene_index import SceneIndex
 from .solid_intervals import SolidIntervals
-from .std import bool_or, bool_to_01, concat, extract_derived, linear, make_token_head, select, split
+from .std import (
+    ScalarEmit,
+    angle_scalar,
+    bool_or,
+    bool_to_01,
+    concat,
+    extract_derived,
+    linear,
+    make_token_head,
+    select,
+    split,
+    value_scalar,
+)
 from .value_ranges import ValueRange
 from .vocab import (
-    ANGLE_VALUE,
     BBOX_BOXPOS,
     BBOX_CORNER_X_MARK_A,
     BBOX_CORNER_X_MARK_B,
@@ -67,9 +78,7 @@ from .vocab import (
     BBOX_WORLD_ANGLE_MARK_A,
     BBOX_WORLD_ANGLE_MARK_B,
     TRAVERSE_RETURN,
-    make_value,
 )
-
 
 # boxx/boxy each fold two sign bits into a 0/1/2 region; boxpos = 4·boxy + boxx
 # is the flat index into DOOM's nine-region checkcoord table.
@@ -318,40 +327,40 @@ class BBoxPruner:
             make_token_head(BBOX_CORNER_X_MARK_A, boxpos=boxpos),
         )
 
-    def after_corner_x_mark_a(self) -> Node:
-        return make_value(
+    def after_corner_x_mark_a(self) -> ScalarEmit:
+        return value_scalar(
             ValueRange.R0,
             self._corner_x(self.inp.boxpos_check_a_x_right),
         )
 
-    def after_corner_y_mark_a(self) -> Node:
-        return make_value(
+    def after_corner_y_mark_a(self) -> ScalarEmit:
+        return value_scalar(
             ValueRange.R0,
             self._corner_y(self.inp.boxpos_check_a_y_bottom),
         )
 
-    def after_world_angle_mark_a(self) -> Node:
+    def after_world_angle_mark_a(self) -> ScalarEmit:
         return self._world_angle_mark_out()
 
-    def after_theta_mark_a(self) -> Node:
+    def after_theta_mark_a(self) -> ScalarEmit:
         return self._theta_mark_out()
 
-    def after_corner_x_mark_b(self) -> Node:
-        return make_value(
+    def after_corner_x_mark_b(self) -> ScalarEmit:
+        return value_scalar(
             ValueRange.R0,
             self._corner_x(self.inp.boxpos_check_b_x_right),
         )
 
-    def after_corner_y_mark_b(self) -> Node:
-        return make_value(
+    def after_corner_y_mark_b(self) -> ScalarEmit:
+        return value_scalar(
             ValueRange.R0,
             self._corner_y(self.inp.boxpos_check_b_y_bottom),
         )
 
-    def after_world_angle_mark_b(self) -> Node:
+    def after_world_angle_mark_b(self) -> ScalarEmit:
         return self._world_angle_mark_out()
 
-    def after_theta_mark_b(self) -> Node:
+    def after_theta_mark_b(self) -> ScalarEmit:
         return self._theta_mark_out()
 
     def after_value(self, no_op_out: Node) -> Node:
@@ -439,14 +448,18 @@ class BBoxPruner:
     # DOOM: R_CheckBBox boxx/boxy region computation (r_bsp.c lines 404-418)
     def _boxpos(self) -> Node:
         boxx_gt_left = COORD_GT_ZERO(sub(self.scene.view.x, self.context.left))
-        boxx_ge_right = one_minus(COORD_GT_ZERO(sub(self.context.right, self.scene.view.x)))
+        boxx_ge_right = one_minus(
+            COORD_GT_ZERO(sub(self.context.right, self.scene.view.x))
+        )
         boxx = linear(
             concat(bool_to_01(boxx_gt_left), bool_to_01(boxx_ge_right)),
             _BOXX_LINEAR,
         )
 
         boxy_below_top = COORD_GT_ZERO(sub(self.context.top, self.scene.view.y))
-        boxy_le_bottom = one_minus(COORD_GT_ZERO(sub(self.scene.view.y, self.context.bottom)))
+        boxy_le_bottom = one_minus(
+            COORD_GT_ZERO(sub(self.scene.view.y, self.context.bottom))
+        )
         boxy = linear(
             concat(bool_to_01(boxy_below_top), bool_to_01(boxy_le_bottom)),
             _BOXY_LINEAR,
@@ -467,14 +480,14 @@ class BBoxPruner:
     def _recent_boxpos(self) -> Node:
         return self.boxpos_row.pick(self.past, self.input_boxpos_or_zero)
 
-    def _world_angle_mark_out(self) -> Node:
+    def _world_angle_mark_out(self) -> ScalarEmit:
         vx = self.corner_x_row.pick(self.past, self.input_bbox_coord_or_zero)
         vy = self.corner_y_row.pick(self.past, self.input_bbox_coord_or_zero)
         dx = sub(vx, self.scene.view.x)
         dy = sub(vy, self.scene.view.y)
-        return make_token_head(ANGLE_VALUE, angle=signed_world_angle(dx, dy))
+        return angle_scalar(signed_world_angle(dx, dy))
 
-    def _theta_mark_out(self) -> Node:
+    def _theta_mark_out(self) -> ScalarEmit:
         world_angle = self.world_angle_row.pick(self.past, self.input_angle_or_zero)
         theta = wrap_signed_angle(sub(world_angle, self.scene.view.angle))
-        return make_token_head(ANGLE_VALUE, angle=theta)
+        return angle_scalar(theta)

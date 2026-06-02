@@ -57,6 +57,8 @@ from .render_ops import (
     wrap_signed_angle,
 )
 from .std import (
+    ScalarEmit,
+    angle_scalar,
     bool_to_01,
     concat,
     constant,
@@ -64,11 +66,11 @@ from .std import (
     make_token_head,
     pick_by_one_hot,
     select,
+    value_scalar,
 )
 from .std import sum as vec_sum
 from .value_ranges import ValueRange
 from .vocab import (
-    ANGLE_VALUE,
     DRAWSEG_BSILHEIGHT,
     DRAWSEG_META,
     DRAWSEG_SCALE1,
@@ -84,7 +86,6 @@ from .vocab import (
     SEG_DC_TMID_MID,
     SEG_DC_TMID_UPPER,
     SEG_KPART,
-    make_value,
 )
 
 if TYPE_CHECKING:
@@ -174,70 +175,70 @@ class WallRangeBuilder:
             )
         raise ValueError(f"unknown dc_tmid part: {part!r}")
 
-    def after_seg_dc_tmid_mid(self) -> Node:
-        return make_value(ValueRange.R3, self.dc_tmid_compute("mid"))
+    def after_seg_dc_tmid_mid(self) -> ScalarEmit:
+        return value_scalar(ValueRange.R3, self.dc_tmid_compute("mid"))
 
-    def after_seg_dc_tmid_upper(self) -> Node:
-        return make_value(ValueRange.R4, self.dc_tmid_compute("upper"))
+    def after_seg_dc_tmid_upper(self) -> ScalarEmit:
+        return value_scalar(ValueRange.R4, self.dc_tmid_compute("upper"))
 
-    def after_seg_dc_tmid_lower(self) -> Node:
-        return make_value(ValueRange.R4, self.dc_tmid_compute("lower"))
+    def after_seg_dc_tmid_lower(self) -> ScalarEmit:
+        return value_scalar(ValueRange.R4, self.dc_tmid_compute("lower"))
 
     def after_drawseg_meta(self) -> Node:
         return make_token_head(DRAWSEG_SCALE1_DEN)
 
-    def after_drawseg_scale1_den(self) -> Node:
-        return make_value(
+    def after_drawseg_scale1_den(self) -> ScalarEmit:
+        return value_scalar(
             ValueRange.R6,
             self.scale_denominator_for_inverse(is_stop=False),
         )
 
-    def after_drawseg_scale1(self) -> Node:
-        return make_value(
+    def after_drawseg_scale1(self) -> ScalarEmit:
+        return value_scalar(
             ValueRange.R5,
             self.scale_from_recent_denominator(is_stop=False),
         )
 
-    def after_drawseg_scale2_den(self) -> Node:
-        return make_value(
+    def after_drawseg_scale2_den(self) -> ScalarEmit:
+        return value_scalar(
             ValueRange.R6,
             self.scale_denominator_for_inverse(is_stop=True),
         )
 
-    def after_drawseg_scale2(self) -> Node:
-        return make_value(
+    def after_drawseg_scale2(self) -> ScalarEmit:
+        return value_scalar(
             ValueRange.R5,
             self.scale_from_recent_denominator(is_stop=True),
         )
 
-    def after_drawseg_scalestep_den(self) -> Node:
+    def after_drawseg_scalestep_den(self) -> ScalarEmit:
         projection = self.projection
-        return make_value(
+        return value_scalar(
             ValueRange.R7,
             sub(projection.drawseg.stop_x, projection.drawseg.store_x1),
         )
 
-    def after_drawseg_scalestep(self) -> Node:
-        return make_value(ValueRange.R8, self.scale_step())
+    def after_drawseg_scalestep(self) -> ScalarEmit:
+        return value_scalar(ValueRange.R8, self.scale_step())
 
-    def after_drawseg_bsilheight(self) -> Node:
-        return make_value(
+    def after_drawseg_bsilheight(self) -> ScalarEmit:
+        return value_scalar(
             ValueRange.R9,
             self.bsilheight_value(self.projection.drawseg.store_i),
         )
 
-    def after_drawseg_tsilheight(self) -> Node:
-        return make_value(
+    def after_drawseg_tsilheight(self) -> ScalarEmit:
+        return value_scalar(
             ValueRange.R9,
             self.tsilheight_value(self.projection.drawseg.store_i),
         )
 
-    def after_drawseg_u_phase(self) -> Node:
+    def after_drawseg_u_phase(self) -> ScalarEmit:
         projection = self.projection
         scene = projection.core.scene
         normal_angle = scene.segs.normal_angle(projection.drawseg.store_i)
         u_phase_angle = wrap_signed_angle(sub(scene.view.angle, normal_angle))
-        return make_token_head(ANGLE_VALUE, angle=u_phase_angle)
+        return angle_scalar(u_phase_angle)
 
     def after_drawseg_u_angle_value(self) -> Node:
         # DEFERRED (Phase H): VisplaneMarker(projection).first_check_or_start_wall_columns().

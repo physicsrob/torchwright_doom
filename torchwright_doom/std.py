@@ -36,6 +36,7 @@ from torchwright.ops.map_select import (
     switch as _switch,
 )
 
+from .emit import ScalarEmit, angle_scalar, value_scalar
 from .extract import extract_derived, indicator_to_bool
 from .tokens import FloatSlot, IntSlot, TokenType
 
@@ -57,6 +58,10 @@ __all__ = [
     "extract_derived",
     "indicator_to_bool",
     "pick_by_one_hot",
+    "clamp_to_slot",
+    "ScalarEmit",
+    "value_scalar",
+    "angle_scalar",
 ]
 
 
@@ -278,6 +283,21 @@ def make_token_head(token_type: TokenType, **slot_value_nodes: Node) -> Node:
     return emit_token_head(
         token_type, **_clamp_slot_values(token_type, slot_value_nodes)
     )
+
+
+def clamp_to_slot(token_type: TokenType, slot_name: str, value: Node) -> Node:
+    """Clamp ``value`` to ``token_type.slots[slot_name]``'s declared range — the
+    same clamp :func:`make_token_head` applies internally.
+
+    The dispatch's numeric-carrier collapse uses this to bound each candidate
+    scalar *before* the float-exact pick (``pick_by_one_hot``): the pick's
+    ``broadcast_select`` derives its additive offset ``M`` from the union of
+    candidate value ranges, so an un-clamped intermediate (e.g. a raw angle whose
+    value_type is ±millions) would blow the offset past its sanity bound. Pinning
+    each candidate to the slot range first keeps ``M`` at the slot's magnitude;
+    it is byte-identical at the winning row (the per-branch head clamped there
+    too, and the clamp is idempotent under the shared head's re-clamp)."""
+    return _clamp_slot_values(token_type, {slot_name: value})[slot_name]
 
 
 def _clamp_slot_values(

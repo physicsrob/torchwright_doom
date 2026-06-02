@@ -35,6 +35,7 @@ and the prefill-replay ``select`` is deferred (see ``dispatch_next_token``).
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -50,7 +51,16 @@ from .scene_index import SceneIndex
 from .seg_projection import SegProjection
 from .seg_scanner import SegScanner
 from .solid_intervals import SolidIntervals
-from .std import bool_or, concat, make_token_head, type_switch
+from .std import (
+    ScalarEmit,
+    bool_or,
+    bool_to_01,
+    clamp_to_slot,
+    concat,
+    make_token_head,
+    pick_by_one_hot,
+    type_switch,
+)
 from .vocab import ANGLE_VALUE, DONE, NO_OP, SET_CURSOR_DIRECTION_Y
 from .wall_range_builder import WallRangeBuilder
 
@@ -206,11 +216,13 @@ def forward(input_vec: Node, past: GraphPast, pos: PosEncoding) -> Node:
     )
 
     protocols = publish_runtime_protocols(input_vec, scope, inp, scene, pos)
-    branches = build_branch_outputs(protocols)
+    branches = build_branch_outputs(inp, protocols)
     return dispatch_next_token(input_vec, inp, branches)
 
 
-def build_branch_outputs(protocols: RuntimeProtocols) -> dict[str, Node]:
+def build_branch_outputs(
+    inp: ProtocolTokenView, protocols: RuntimeProtocols
+) -> dict[str, Node]:
     """Build the traversal + Phase-F branch heads for real; stub the rest.
 
     The dict's keys equal ``{t.branch for t in DISPATCH_TRANSITIONS}`` (so the
@@ -225,7 +237,11 @@ def build_branch_outputs(protocols: RuntimeProtocols) -> dict[str, Node]:
     H/J).
 
     Values are emit *heads* (``make_token_head`` / ``after_*``), not full rows;
-    the dispatch stamps the shared derived tail after selection.
+    the dispatch stamps the shared derived tail after selection. Numeric-carrier
+    branches (``VALUE`` / ``ANGLE_VALUE``) instead return a :class:`ScalarEmit`
+    (just their 1-wide scalar); :func:`_collapse_scalar_emits` folds all branches
+    of a carrier into ONE shared digit-quad head before returning, so the dict
+    handed to the dispatch is again ``branch -> head Node`` everywhere.
     """
     no_op_out = make_token_head(NO_OP)
     traversal = protocols.traversal
@@ -233,7 +249,7 @@ def build_branch_outputs(protocols: RuntimeProtocols) -> dict[str, Node]:
     payload_router = protocols.payload_router
     seg_scan = SegScanner(projection)
     wall_range = WallRangeBuilder(projection)
-    branches: dict[str, Node] = {
+    branches: dict[str, "Node | ScalarEmit"] = {
         # Inert / begin.
         "no_op": no_op_out,
         "done": make_token_head(DONE),
@@ -291,4 +307,64 @@ def build_branch_outputs(protocols: RuntimeProtocols) -> dict[str, Node]:
     # the one NO_OP head.
     for transition in DISPATCH_TRANSITIONS:
         branches.setdefault(transition.branch, no_op_out)
-    return branches
+    return _collapse_scalar_emits(inp, branches)
+
+
+def _collapse_scalar_emits(
+    inp: ProtocolTokenView,
+    branches: Mapping[str, "Node | ScalarEmit"],
+) -> dict[str, Node]:
+    """Collapse every numeric-carrier branch into ONE shared digit-quad head per
+    carrier — the residual-width keystone (see ``scripts/COST_NOTES.md``).
+
+    Each numeric-carrier branch (``VALUE`` / ``ANGLE_VALUE``) returns a
+    :class:`ScalarEmit` carrying only its 1-wide scalar, not a full
+    ~255-wide-quad head. Here, for each carrier, the active branch's own
+    dispatch predicate (exactly one is +1 at any position) picks that branch's
+    scalar from the carrier's candidates (``pick_by_one_hot`` — a flat
+    ``broadcast_select`` that is float-exact at the winning row), and ONE
+    :func:`make_token_head` emits it. Pointing all of a carrier's branch keys at
+    that single head node means :func:`_distinct_head_pairs` groups them into one
+    OR-ed dispatch term. ~24 eager 255-wide quads collapse to 2.
+
+    Byte-identical to building each branch's head eagerly: the picked scalar is
+    the winning branch's scalar bit-for-bit (``approximate=False``), and the
+    shared head clamps + quantizes it exactly as the per-branch head did — the
+    gate that used to mask the *quantized bytes* now picks the *scalar* before
+    the single shared quantization, on a row where exactly one predicate fires.
+    """
+    # branch -> its dispatch predicate(s), read exactly as _distinct_head_pairs.
+    branch_preds: dict[str, list[Node]] = defaultdict(list)
+    for transition in DISPATCH_TRANSITIONS:
+        branch_preds[transition.branch].append(getattr(inp, transition.predicate))
+
+    # Group the ScalarEmit branches by carrier, in first-seen branch order.
+    by_carrier: dict[int, list[tuple[str, ScalarEmit]]] = {}
+    for name, out in branches.items():
+        if isinstance(out, ScalarEmit):
+            by_carrier.setdefault(id(out.carrier), []).append((name, out))
+
+    shared_head: dict[str, Node] = {}
+    for members in by_carrier.values():
+        carrier = members[0][1].carrier
+        (slot_name,) = carrier.slots  # VALUE -> "v"; ANGLE_VALUE -> "angle"
+        preds: list[Node] = []
+        for name, _emit in members:
+            conds = branch_preds[name]
+            assert conds, f"branch {name!r} has no dispatch-transition predicate"
+            preds.append(conds[0] if len(conds) == 1 else bool_or(*conds))
+        mask = concat(*[bool_to_01(p) for p in preds])
+        # Clamp each candidate to the slot range BEFORE the pick so the
+        # broadcast_select offset stays the slot's magnitude (an un-clamped
+        # angle's value_type is ±millions); byte-identical at the winning row.
+        table = concat(
+            *[clamp_to_slot(carrier, slot_name, emit.scalar) for _name, emit in members]
+        )
+        picked = pick_by_one_hot(mask, table, d_fill=1)
+        head = make_token_head(carrier, **{slot_name: picked})
+        for name, _emit in members:
+            shared_head[name] = head
+
+    # ScalarEmit branches now point at their shared head; everything else (a
+    # Node already) passes through unchanged.
+    return {name: shared_head.get(name, out) for name, out in branches.items()}

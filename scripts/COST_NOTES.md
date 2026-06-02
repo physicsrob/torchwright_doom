@@ -1,5 +1,80 @@
 # Depth/width cost investigation — running log
 
+## ★★ DISPATCH/EMIT RESTRUCTURE — design panel + co-residency gate (2026-06-02)
+**Design panel (11 agents) converged unanimously**: the one structural win is
+**"route-the-scalar-first, then emit ONE shared digit-quad per carrier type"** —
+collapse the eager per-branch digit-quads to 2. Code-verified corrections to the
+panel's own framing:
+- The eager quads are **15 VALUE + 9 ANGLE = ~24** distinct top-level dispatch
+  branches (wall_range_builder 11 + bbox_pruning 4 VALUE; seg_scanner/bbox/
+  wall_range 9 ANGLE), each keyed on its OWN marker predicate. NOT inside the
+  after_value/after_angle_value select-towers (those emit MARKERS only).
+- **ANGLE_VALUE is NOT cheap**: ANGLE_VALUE.angle (IntSlot card 8192) shares slot
+  position 0 with VALUE.v (FloatSlot levels 65536) → shared_position_cardinality
+  =65536 → BOTH emit the full 2-digit 255-wide floor_int. ANGLE collapse saves the
+  same per-site as VALUE. So target = 24→2, not 16→1.
+- Mechanism = flat **pick_by_one_hot** (std.py:215-246, broadcast_select
+  approximate=False) over clamped 1-wide candidate scalars, masked by the branch's
+  own registry predicates. _distinct_head_pairs groups by id(head) + OR-s
+  predicates → mapping all 15 VALUE keys to one shared head auto-collapses. NOT a
+  nested select chain (deep-serial trap). Clamp EACH candidate to its slot range
+  BEFORE the fold so the union M into broadcast_select stays ~2 (fp32 sharp-step).
+
+**CO-RESIDENCY GATE (the panel's #1 "measure-first", schedule-only, memory-safe):**
+Peak-layer live-set by subsystem, fanout=8:
+| subsystem      | d=6400 (COMPILE width) | d=12000 (unconstrained) |
+|----------------|------------------------|--------------------------|
+| **digit-quad** | **2523 (39% of 6400)** | 2818                     |
+| affine glue    | 1180                   | 2235                     |
+| geometry PWL   | 1094                   | **4463**                 |
+| emit other     | 850                    | 945                      |
+| E8 type-code   | 400                    | 456                      |
+| select/dispatch| 330                    | 362                      |
+
+### IMPLEMENTED + MEASURED (committed) — output-identical, the win is in SERIALIZABILITY not peak
+The collapse landed (ScalarEmit + value_scalar/angle_scalar in emit.py; the 24
+VALUE/ANGLE owner `after_*` methods return their 1-wide scalar; render_main
+`_collapse_scalar_emits` picks the active scalar by predicate via the float-exact
+`pick_by_one_hot` and emits ONE shared digit-quad per carrier). Distinct dispatch
+`type_switch` terms: **45 → 23** (15 VALUE branches share one head, 9 ANGLE share
+one). All gates green: 4 oracle byte-identity gates, dispatch-dedup, compile_to_onnx,
+compiled AR free-run — **byte-identical**.
+
+**The headline prediction (peak drop) did NOT materialize; the real win did.**
+Measured (schedule-only, fanout=8), BEFORE → AFTER:
+| d (residual) | BEFORE layers | AFTER layers |  note |
+|--------------|---------------|--------------|-------|
+| 12000 (unconstr.) | 37 | 34 | natural peak 11337 → **11273 (≈unchanged)** |
+| 6400 (compile)    | 44 | 42 | both saturated at d |
+| 4800              | 56 | 51 | |
+| 3600              | 91 | **69** | −24% layers |
+| 3000              | **DEADLOCK** | **102 (fits)** | min-d crossed here |
+| min compilable d  | **~3500** (ok 3600, deadlock 3400) | **~2800** (ok 3000, deadlock 2600) |
+
+- **Natural (unconstrained) peak is ≈unchanged** (11337→11273). The digit-quad
+  bucket DID fall (2818→1869 at d=12000) but the machinery to converge 24 scalars
+  at one pick (concat masks + clamps + broadcast_select + sum) raised "affine glue"
+  2235→3245 — a near wash on the *parallel* width. So the d=6400 "39% digit-quad"
+  co-residency was the scheduler's CHOICE under saturation, not a removable peak.
+- **The win is SERIALIZABILITY → lower min-d → quadratic memory.** 24 thin scalars +
+  1 quad thread through a narrow residual where 24 wide 255-col quads jammed: min
+  compilable d dropped ~3500 → ~2800 (−20%), and layers fall at *every* d (more so
+  the tighter d is: 91→69 at d=3600). Since streaming-compile peak RSS and the
+  densified-ONNX size both scale ~4·d²·(resident), a lower min-d is a quadratic
+  memory cut at the floor — and d≈2800 vs 6400 is ~4.7× less densified weight,
+  which is the lever that could make the >26GB local inference (Phase K) feasible.
+- Honest: this is NOT the 10–15× the proposers hyped, and NOT a peak-width cut. It
+  is an output-identical depth + min-d improvement in exactly the dimensions that
+  matter for the memory wall. The fp32 mandate held: each candidate must be clamped
+  to its slot range BEFORE the pick (std.clamp_to_slot) or broadcast_select's M
+  offset blows the 1e6 sanity bound (a raw angle's value_type is ±2.6M).
+
+PRE-EXISTING (NOT caused by this change; fails identically on HEAD via git-stash):
+`tests/embedding/test_emit_near_miss.py` 3 byte-boundary tests (e.g. ANGLE_VALUE
+angle=-3840.4 → argmax 65791 vs expected 65792) — an off-by-one in the digit-quad
+quantizer at a byte boundary, orthogonal to the dispatch. Flagged for a separate
+numerical follow-up.
+
 ## ★ SYNTHESIS (validated, overnight 2026-06-02)
 1. **Depth was the dispatch fold, not geometry.** `type_switch(max_fanout=2)` builds a
    ~35-layer SERIAL Linear→Concat accumulator. Raising max_fanout: 67→44 (=4), →37 (=8),

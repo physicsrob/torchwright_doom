@@ -257,7 +257,7 @@ def main():
             scope.attend_to_offset(scope.input_type(), delta_pos=-2),
         )
         protocols = publish_runtime_protocols(emb, scope, inp, scene, pos)
-        branches = build_branch_outputs(protocols)
+        branches = build_branch_outputs(inp, protocols)
         head = _ts(*_distinct_head_pairs(inp, branches), max_fanout=fanout)
         nt = _concat(head, emit_derived_zero())
         print(f"[dispatch rebuilt with max_fanout={fanout}]")

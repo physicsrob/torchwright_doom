@@ -36,10 +36,9 @@ from .render_ops import (
     wrap_signed_angle,
 )
 from .seg_cycle import dispatch_projection_angle_phase
-from .std import make_token_head, select
+from .std import ScalarEmit, angle_scalar, make_token_head, select
 from .vocab import (
     ADVANCE_SEG,
-    ANGLE_VALUE,
     EMIT_X2,
     FIND_RUN,
     N_NODES_MAX,
@@ -94,19 +93,19 @@ class SegScanner:
             self.advance_after_current_process_seg(),
         )
 
-    def after_world_angle_mark_a(self) -> Node:
+    def after_world_angle_mark_a(self) -> ScalarEmit:
         """Emit ANGLE_VALUE(world_a) for endpoint A."""
         return self.world_angle_mark_out(is_b_side=False)
 
-    def after_theta_mark_a(self) -> Node:
+    def after_theta_mark_a(self) -> ScalarEmit:
         """Emit ANGLE_VALUE(theta_a) from the previous world angle."""
         return self.theta_mark_out()
 
-    def after_world_angle_mark_b(self) -> Node:
+    def after_world_angle_mark_b(self) -> ScalarEmit:
         """Emit ANGLE_VALUE(world_b) for endpoint B."""
         return self.world_angle_mark_out(is_b_side=True)
 
-    def after_theta_mark_b(self) -> Node:
+    def after_theta_mark_b(self) -> ScalarEmit:
         """Emit ANGLE_VALUE(theta_b) from the previous world angle."""
         return self.theta_mark_out()
 
@@ -204,7 +203,7 @@ class SegScanner:
         )
 
     # DOOM: R_AddLine endpoint angle computation (r_bsp.c line 271-272, R_PointToAngle calls)
-    def world_angle_mark_out(self, is_b_side: bool) -> Node:
+    def world_angle_mark_out(self, is_b_side: bool) -> ScalarEmit:
         """Run one endpoint's atan2 chain and emit ANGLE_VALUE(world_*)."""
         projection = self.projection
         scene = projection.core.scene
@@ -216,15 +215,15 @@ class SegScanner:
         dx = sub(vx, scene.view.x)
         dy = sub(vy, scene.view.y)
         world_angle = signed_world_angle(dx, dy)
-        return make_token_head(ANGLE_VALUE, angle=world_angle)
+        return angle_scalar(world_angle)
 
     # DOOM: player-relative angle conversion (r_bsp.c:R_AddLine lines 284-285)
-    def theta_mark_out(self) -> Node:
+    def theta_mark_out(self) -> ScalarEmit:
         """Wrap the previous ANGLE_VALUE world angle into player-relative theta."""
         projection = self.projection
         world_angle = projection.rows.pick_world_angle()
         theta = wrap_signed_angle(sub(world_angle, projection.core.scene.view.angle))
-        return make_token_head(ANGLE_VALUE, angle=theta)
+        return angle_scalar(theta)
 
     def advance_after_seg(
         self,

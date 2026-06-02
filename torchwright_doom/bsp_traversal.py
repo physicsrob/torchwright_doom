@@ -37,7 +37,14 @@ from .protocol_tokens import ProtocolTokenView
 from .render_ops import IS_SUBSECTOR, SIDE_POSITIVE, add_const, mul_side, sub
 from .scene_index import SceneIndex
 from .solid_intervals import SolidIntervals
-from .std import bool_to_01, constant, indicator_to_bool, make_token_head, select
+from .std import (
+    ScalarEmit,
+    bool_to_01,
+    constant,
+    indicator_to_bool,
+    make_token_head,
+    select,
+)
 from .traversal_edges import TraversalEdges
 from .vocab import (
     N_NODES_MAX,
@@ -183,28 +190,28 @@ class BspTraversal:
     def after_bbox_boxpos(self) -> Node:
         return self.bbox.after_boxpos()
 
-    def after_bbox_corner_x_mark_a(self) -> Node:
+    def after_bbox_corner_x_mark_a(self) -> ScalarEmit:
         return self.bbox.after_corner_x_mark_a()
 
-    def after_bbox_corner_y_mark_a(self) -> Node:
+    def after_bbox_corner_y_mark_a(self) -> ScalarEmit:
         return self.bbox.after_corner_y_mark_a()
 
-    def after_bbox_corner_x_mark_b(self) -> Node:
+    def after_bbox_corner_x_mark_b(self) -> ScalarEmit:
         return self.bbox.after_corner_x_mark_b()
 
-    def after_bbox_corner_y_mark_b(self) -> Node:
+    def after_bbox_corner_y_mark_b(self) -> ScalarEmit:
         return self.bbox.after_corner_y_mark_b()
 
-    def after_bbox_world_angle_mark_a(self) -> Node:
+    def after_bbox_world_angle_mark_a(self) -> ScalarEmit:
         return self.bbox.after_world_angle_mark_a()
 
-    def after_bbox_theta_mark_a(self) -> Node:
+    def after_bbox_theta_mark_a(self) -> ScalarEmit:
         return self.bbox.after_theta_mark_a()
 
-    def after_bbox_world_angle_mark_b(self) -> Node:
+    def after_bbox_world_angle_mark_b(self) -> ScalarEmit:
         return self.bbox.after_world_angle_mark_b()
 
-    def after_bbox_theta_mark_b(self) -> Node:
+    def after_bbox_theta_mark_b(self) -> ScalarEmit:
         return self.bbox.after_theta_mark_b()
 
     def after_bbox_scan(self) -> Node:
