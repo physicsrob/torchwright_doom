@@ -30,14 +30,40 @@ out_path = os.environ.get("OUT", "/tmp/doom_forward.onnx")
 
 emb = build_doom_embedding("token_ids")
 pos = create_pos_encoding()
-nt = forward(emb, GraphPast(input_vec=emb, pos_encoding=pos), pos)
+fanout_env = os.environ.get("FANOUT")
+if fanout_env is None:
+    nt = forward(emb, GraphPast(input_vec=emb, pos_encoding=pos), pos)
+else:
+    # Rebuild dispatch with a custom max_fanout (mirrors render_main.forward).
+    from torchwright_doom.protocol_tokens import ProtocolTokenView
+    from torchwright_doom.scene_index import SceneIndex
+    from torchwright_doom.render_main import (
+        publish_runtime_protocols, build_branch_outputs, _distinct_head_pairs,
+    )
+    from torchwright_doom.emit import emit_derived_zero
+    from torchwright_doom.std import concat as _C, type_switch as _TS
+    from torchwright_doom.past import PastHandleScope
+    fanout = None if fanout_env.lower() in ("none", "0", "full") else int(fanout_env)
+    gp = GraphPast(input_vec=emb, pos_encoding=pos)
+    scene = SceneIndex.build(emb, gp, pos)
+    scope = PastHandleScope(gp)
+    inp = ProtocolTokenView(
+        emb,
+        scope.attend_to_offset(scope.input_type(), delta_pos=-1),
+        scope.attend_to_offset(scope.input_type(), delta_pos=-2),
+    )
+    protocols = publish_runtime_protocols(emb, scope, inp, scene, pos)
+    branches = build_branch_outputs(protocols)
+    nt = _C(_TS(*_distinct_head_pairs(inp, branches), max_fanout=fanout),
+            emit_derived_zero())
 
-print(f"=== compile_to_onnx (token-I/O, streaming+sparse): d={D} d_head={D_HEAD} ===")
-t0 = time.perf_counter()
+opt = int(os.environ.get("OPT", "0"))
 trim = os.environ.get("TRIM", "1") == "1"
-print(f"[trim_heads={trim}]")
+print(f"=== compile_to_onnx token-I/O: d={D} d_head={D_HEAD} fanout={fanout_env} "
+      f"optimize={opt} trim_heads={trim} ===")
+t0 = time.perf_counter()
 compile_to_onnx(nt, pos, embedding=emb, output_path=out_path, d=D, d_head=D_HEAD,
-                max_layers=400, verbose=True, trim_heads=trim)
+                max_layers=400, verbose=True, trim_heads=trim, optimize=opt)
 print(f"compile wall time: {time.perf_counter()-t0:.1f}s")
 if os.path.exists(out_path):
     print(f"onnx size: {os.path.getsize(out_path)/1e6:.1f} MB")

@@ -25,6 +25,24 @@
    non-streaming path unaffected (test_d_hidden_decoupling green). NOT committed — needs the
    full Modal `make test` before landing a compiler change.
 
+### CROSS: {fanout} × {optimize} via compile_to_onnx (d=6400, streaming, token-I/O)
+| fanout | optimize     | layers | compile | peak RSS | ONNX  |
+|--------|--------------|--------|---------|----------|-------|
+| 2      | 0 heuristic  | 66     | 76s     | 2.19GB   | 55.2MB|
+| 2      | 2 CP-SAT     | **66** | 265s    | 4.35GB   | 55.2MB|
+| 8      | 0 heuristic  | 44     | 54s     | 2.19GB   | 55.1MB|
+| 8      | 2 CP-SAT     | **44** | 244s    | 4.16GB   | 55.1MB|
+
+**CP-SAT (optimize=2) gives ZERO depth win at either fanout** — it only confirms the
+heuristic warm-start count (66, 44), at 3.5-4.5x compile time + ~2x memory. The
+HEURISTIC IS ALREADY OPTIMAL-DEPTH for this graph (CP-SAT bounded to warm-start+1 can't
+beat it). The only depth lever is the GRAPH-SIDE max_fanout (66→44); CP-SAT can't
+reassociate the dispatch sum. Memory is solved by streaming regardless (2.2GB heuristic /
+4.2-4.4GB CP-SAT — the +2GB is the CP-SAT model). ONNX ~55MB regardless. Threaded
+`optimize` through compile_to_onnx (export.py) to run this; it's API-completeness, NOT a
+doom win. Earlier inconclusive optimize results (compile_headless opt=2 @d4800=77;
+deadlock @d3200) now resolved: CP-SAT == heuristic; the heuristic is optimal.
+
 ---
 
 
