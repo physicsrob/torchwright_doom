@@ -43,21 +43,32 @@ from torchwright.graph import Node, PosEncoding
 from .bsp_traversal import BspTraversal
 from .emit import emit_derived_zero
 from .past import GraphPast, PastHandleScope
+from .payload_router import PayloadRouter
 from .protocol_registry import DISPATCH_TRANSITIONS
 from .protocol_tokens import ProtocolTokenView
 from .scene_index import SceneIndex
+from .seg_projection import SegProjection
+from .seg_scanner import SegScanner
+from .solid_intervals import SolidIntervals
 from .std import bool_or, concat, make_token_head, type_switch
-from .vocab import DONE, NO_OP, SET_CURSOR_DIRECTION_Y
+from .vocab import ANGLE_VALUE, DONE, NO_OP, SET_CURSOR_DIRECTION_Y
+from .wall_range_builder import WallRangeBuilder
 
 BranchOutputs = Mapping[str, Node]
 
 
 @dataclass(frozen=True)
 class RuntimeProtocols:
-    """Published protocol owners needed by branch construction (traversal only
-    this phase)."""
+    """Published protocol owners needed by branch construction.
+
+    Plan F grows this from traversal-only to traversal + the reduced
+    seg-projection owner + the payload router. R_CheckBBox visibility pruning
+    (Phase G) and the wall-column / visplane / flat owners (Phase H/J) are still
+    deferred, so their branches collapse into the shared NO_OP head."""
 
     traversal: BspTraversal
+    projection: SegProjection
+    payload_router: PayloadRouter
 
 
 def publish_runtime_protocols(
@@ -69,14 +80,31 @@ def publish_runtime_protocols(
 ) -> RuntimeProtocols:
     """Publish runtime protocol channels before branch candidates consume them.
 
-    Reduced to the traversal owner: ``SegProjection``, the seven projection
-    owners, and R_CheckBBox visibility pruning are deferred, so their branches
-    collapse into the shared NO_OP head in :func:`build_branch_outputs`.
-    (``input_vec`` / ``pos`` are accepted for the full-renderer signature; the
-    projection owners will consume them.)
-    """
+    Order matters: ``input_angle_or_zero`` and ``SolidIntervals`` are published
+    before the projection owner that reads them; ``BspTraversal`` stays the
+    Plan-E reduced owner (bbox deferred to Phase G), so the payload router is
+    built without a bbox arm (Phase F routes ``is_bbox_angle`` to NO_OP)."""
+    input_angle_or_zero = past.publish(
+        "input_angle_or_zero",
+        ANGLE_VALUE.extract(input_vec, "angle"),
+    )
+    solids = SolidIntervals.publish(past, inp, scene)
     traversal = BspTraversal.publish(past, inp, scene)
-    return RuntimeProtocols(traversal=traversal)
+    projection = SegProjection.publish(
+        past,
+        input_vec,
+        inp,
+        scene,
+        solids,
+        input_angle_or_zero,
+        pos,
+    )
+    payload_router = PayloadRouter(projection=projection)
+    return RuntimeProtocols(
+        traversal=traversal,
+        projection=projection,
+        payload_router=payload_router,
+    )
 
 
 def dispatch_next_token(
@@ -168,36 +196,70 @@ def forward(input_vec: Node, past: GraphPast, pos: PosEncoding) -> Node:
 
 
 def build_branch_outputs(protocols: RuntimeProtocols) -> dict[str, Node]:
-    """Build the traversal/begin/no_op/done branch heads for real; stub the rest.
+    """Build the traversal + Phase-F branch heads for real; stub the rest.
 
     The dict's keys equal ``{t.branch for t in DISPATCH_TRANSITIONS}`` (so the
-    dispatch is well-formed). Only the branches this phase implements get their
-    own head; every deferred branch — ``R_CheckBBox`` (``between`` + the
-    ``bbox_*`` sub-protocol) and the projection / wall / flat / payload owners —
-    maps to the *one shared* ``no_op`` head via the ``setdefault`` loop. Sharing
-    that node is what lets the dispatch collapse ~56 deferred transitions into a
-    single gated term (see :func:`dispatch_next_token`). When an owner lands, its
-    branches get real heads here and split back out of the shared term.
+    dispatch is well-formed). Plan F splits the seg-projection / drawseg branches
+    out of the shared ``no_op`` head: the seg-scan loop (``visit`` … ``emit_x2``),
+    the drawseg-scalar chain (``store_wall_range`` … ``drawseg_u_phase``), and the
+    ``value`` / ``angle`` carriers route to the ``SegScanner`` / ``WallRangeBuilder``
+    / ``PayloadRouter`` owners. Still deferred to the *one shared* ``no_op`` head
+    via the ``setdefault`` loop: ``R_CheckBBox`` (``between`` + ``bbox_*`` — Phase
+    G) and the wall-column / visplane / flat / pixel owners (Phase H/J).
 
     Values are emit *heads* (``make_token_head`` / ``after_*``), not full rows;
     the dispatch stamps the shared derived tail after selection.
     """
     no_op_out = make_token_head(NO_OP)
     traversal = protocols.traversal
+    projection = protocols.projection
+    payload_router = protocols.payload_router
+    seg_scan = SegScanner(projection)
+    wall_range = WallRangeBuilder(projection)
     branches: dict[str, Node] = {
         # Inert / begin.
         "no_op": no_op_out,
         "done": make_token_head(DONE),
         "begin": make_token_head(SET_CURSOR_DIRECTION_Y),
-        # BSP traversal (BspTraversal) — the real Plan E branches.
+        # BSP traversal (BspTraversal) — the Plan E branches.
         "think": traversal.after_think_side(),
         "side_record": traversal.after_side_record(),
         "enter": traversal.after_enter(),
         "return_": traversal.after_return(),
         "set_cursor_direction_y": traversal.after_set_cursor_direction_y(),
+        # Payload carriers (PayloadRouter, routed by previous marker).
+        "value": payload_router.after_value(no_op_out),
+        "angle": payload_router.after_angle_value(no_op_out),
+        # Seg scan + endpoint projection (SegScanner).
+        "visit": seg_scan.after_visit_subsector(),
+        "process": seg_scan.after_process_seg(),
+        "find_run": seg_scan.after_find_run(),
+        "world_a": seg_scan.after_world_angle_mark_a(),
+        "theta_a": seg_scan.after_theta_mark_a(),
+        "world_b": seg_scan.after_world_angle_mark_b(),
+        "theta_b": seg_scan.after_theta_mark_b(),
+        "advance_seg": seg_scan.after_advance_seg(),
+        "emit_x2": seg_scan.after_emit_x2(),
+        # Drawseg / wall-range setup (WallRangeBuilder).
+        "store_wall_range": wall_range.after_store_wall_range(),
+        "seg_kpart": wall_range.after_seg_kpart(),
+        "seg_dc_tmid_mid": wall_range.after_seg_dc_tmid_mid(),
+        "seg_dc_tmid_upper": wall_range.after_seg_dc_tmid_upper(),
+        "seg_dc_tmid_lower": wall_range.after_seg_dc_tmid_lower(),
+        "drawseg_meta": wall_range.after_drawseg_meta(),
+        "drawseg_scale1_den": wall_range.after_drawseg_scale1_den(),
+        "drawseg_scale1": wall_range.after_drawseg_scale1(),
+        "drawseg_scale2_den": wall_range.after_drawseg_scale2_den(),
+        "drawseg_scale2": wall_range.after_drawseg_scale2(),
+        "drawseg_scalestep_den": wall_range.after_drawseg_scalestep_den(),
+        "drawseg_scalestep": wall_range.after_drawseg_scalestep(),
+        "drawseg_bsilheight": wall_range.after_drawseg_bsilheight(),
+        "drawseg_tsilheight": wall_range.after_drawseg_tsilheight(),
+        "drawseg_u_phase": wall_range.after_drawseg_u_phase(),
     }
-    # Every remaining registry branch — the deferred bbox sub-protocol and the
-    # projection / wall / flat / payload owners — shares the one NO_OP head.
+    # Every remaining registry branch — the deferred bbox sub-protocol (Phase G)
+    # and the wall-column / visplane / flat / pixel owners (Phase H/J) — shares
+    # the one NO_OP head.
     for transition in DISPATCH_TRANSITIONS:
         branches.setdefault(transition.branch, no_op_out)
     return branches

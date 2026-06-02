@@ -1,4 +1,4 @@
-"""Forward/render PWL-adjacent ops (Plan D / D0, extended for Plan E).
+"""Forward/render PWL-adjacent ops (Plan D / D0, extended for Plan E / F).
 
 Real-side mirror of the read-side + traversal subset of
 ``doom_sandbox/implementation/forward/constants.py`` / ``forward/ops.py``.
@@ -7,21 +7,34 @@ Real-side mirror of the read-side + traversal subset of
 - Plan E (BSP traversal): ``sub`` / ``neg`` / ``add_const`` (affine glue),
   ``mul_side`` (the ``R_PointOnSide`` cross-product multiply), and the
   ``SIDE_POSITIVE`` / ``IS_SUBSECTOR`` / ``DEPTH_NONZERO`` comparators.
+- Plan F (projection): ``signed_world_angle`` / ``wrap_signed_angle`` (the
+  R_PointToAngle BAM-atan2 octant builder, deferred by Plan E's E5).
 
-The projection/visplane/flat write-side of ``forward/ops.py`` (the atan2
-octant tables, the y-clamp staircases, the scale products) stays out of
-scope until the projection phase.
+The visplane/flat write-side of ``forward/ops.py`` (the y-clamp staircases,
+the scale products) stays out of scope until Phase H.
 """
 
 from __future__ import annotations
 
+import math
+
 import torch
 
 from torchwright.graph import Linear, Node
-from torchwright.ops.arithmetic_ops import compare, multiply_2d
-from torchwright.ops.logic_ops import bool_all_true, bool_not
+from torchwright.graph.asserts import assert_matches_value_type
+from torchwright.graph.value_type import NodeValueType, Range
+from torchwright.ops.arithmetic_ops import (
+    clamp,
+    compare,
+    low_rank_2d,
+    multiply_2d,
+    piecewise_linear,
+)
+from torchwright.ops.linear_relu_linear import linear_relu_linear
+from torchwright.ops.logic_ops import bool_all_true, bool_any_true, bool_not
 
-from .std import concat
+from .constants import SCREEN_WIDTH
+from .std import concat, constant, linear, reduce_sum, select
 from .vocab import N_NODES_MAX
 
 
@@ -42,6 +55,21 @@ def and_(a: Node, b: Node) -> Node:
 def one_minus(a: Node) -> Node:
     """Boolean negation of a ±1 predicate (sandbox ``one_minus``)."""
     return bool_not(a)
+
+
+def or_(a: Node, b: Node) -> Node:
+    """Boolean disjunction over two ±1 predicates (sandbox ``or_``)."""
+    return bool_any_true([a, b])
+
+
+def SCREEN_X_CLAMP(x: Node) -> Node:
+    """Clamp a screen column into ``[0, SCREEN_WIDTH-1]`` (sandbox
+    ``SCREEN_X_CLAMP``).
+
+    Guards an ``IntSlot(0, SCREEN_WIDTH)`` deembed when a pick falls through to
+    pure recency (no FIND_RUN match in past) and would otherwise return the
+    SCREEN_WIDTH sentinel."""
+    return clamp(x, 0.0, float(SCREEN_WIDTH - 1))
 
 
 # ---------------------------------------------------------------------------
@@ -111,3 +139,397 @@ def IS_SUBSECTOR(child_u: Node) -> Node:
 def DEPTH_NONZERO(depth: Node) -> Node:
     """±1: is the BSP tree depth nonzero? (sandbox ``DEPTH_NONZERO``)."""
     return compare(depth, 0.5)
+
+
+# ---------------------------------------------------------------------------
+# Plan F: R_PointToAngle BAM-atan2 octant + one-turn angle wrap
+# ---------------------------------------------------------------------------
+#
+# Mirrors ``forward/ops.py:signed_world_angle`` / ``wrap_signed_angle``. The
+# sandbox keeps two near-duplicate octant builders — ``ops.signed_world_angle``
+# (clamp 2048, seg endpoints) and ``bbox_pruning._signed_world_angle_bbox``
+# (clamp 3072, bbox corners). They are unified here on the **wider 3072 clamp**:
+# e1m1_subset bbox corners reach |dx|,|dy| ≈ 2752 (vs ≈ 308 for seg endpoints),
+# which overruns 2048 and would clip to a wrong BAM angle, but sits comfortably
+# inside 3072. One helper serves both the seg-projection (F) and bbox (G) sides.
+#
+# The angle of (|dx|, |dy|) in the first octant-pair [0, ANGLE_BAM/4) is read
+# as a *count* of ray-threshold crossings: for each candidate BAM angle k the
+# ray test ``|dy| - tan(k)·|dx| > 0`` (low half, 0..1024) or
+# ``cot(k)·|dy| - |dx| > 0`` (high half, 1024..2048) is +1 while the true angle
+# exceeds k, so the booleans form a thermometer whose sum is the first-quadrant
+# angle. Quadrant placement then folds in the signs of dx, dy.
+
+ANGLE_BAM = 8192
+
+# Coordinate deltas entering the ray classifier clamp to this square before the
+# abs PWL. 3072 covers every committed-fixture corner with headroom (see above).
+_ATAN_ABS_RANGE = 3072.0
+_ABS_BREAKPOINTS = [-_ATAN_ABS_RANGE, 0.0, _ATAN_ABS_RANGE]
+
+# Ray thresholds at the half-integer BAM angles k + 0.5 (so an integer-valued
+# true angle never lands inside a ramp): low half spans the first 1/8 turn
+# [0, ANGLE_BAM/8); high half the second [ANGLE_BAM/8, ANGLE_BAM/4).
+_N8 = ANGLE_BAM // 8
+_LOW_THRESHOLDS = [float(k) + 0.5 for k in range(_N8)]
+_HIGH_THRESHOLDS = [float(k) + 0.5 for k in range(_N8, ANGLE_BAM // 4)]
+_LOW_SLOPES = [math.tan(t * 2.0 * math.pi / ANGLE_BAM) for t in _LOW_THRESHOLDS]
+_HIGH_COTS = [1.0 / math.tan(t * 2.0 * math.pi / ANGLE_BAM) for t in _HIGH_THRESHOLDS]
+# Applied to ``concat(abs_dy, abs_dx)`` (row 0 weights abs_dy, row 1 abs_dx):
+#   low  col k = abs_dy - slope_k·abs_dx
+#   high col k = cot_k·abs_dy - abs_dx
+_LOW_RAY_MATRIX = [[1.0] * len(_LOW_SLOPES), [-slope for slope in _LOW_SLOPES]]
+_HIGH_RAY_MATRIX = [list(_HIGH_COTS), [-1.0] * len(_HIGH_COTS)]
+
+# Q2/Q3 reflections of the first-quadrant base angle, as affine maps over
+# ``concat(base, 1)``.
+_HALF_BAM = float(ANGLE_BAM // 2)
+_Q2_AFFINE = [[-1.0], [_HALF_BAM]]  # ANGLE_BAM/2 - base
+_Q3_AFFINE = [[1.0], [-_HALF_BAM]]  # -ANGLE_BAM/2 + base
+
+# The minimum non-zero ray magnitude is bounded below by the BAM granularity
+# (2π/8192) times the slope; sharpness 32000 (ramp width 3.125e-5 input units)
+# sits well inside that bound, so an integer-angle ray never lands in a ramp.
+# Mirrors the sandbox ``RAY_GT_ZERO`` deadband.
+_RAY_SHARPNESS = 32000.0
+
+# Player-relative angles normalize to the signed BAM interval [-4096, 4096);
+# one-turn deltas outside it wrap by ANGLE_BAM (sandbox SIGNED_ANGLE_ABOVE_*).
+_SIGNED_ANGLE_ABOVE_MAX = 4095.5
+_SIGNED_ANGLE_ABOVE_MIN = -4096.5
+
+
+def _abs_coord(x: Node) -> Node:
+    """``|x|`` clamped to the atan2 square (sandbox ``ABS_COORD``).
+
+    3 breakpoints with the kink at 0 make ``abs`` exact in-range; out-of-range
+    inputs clamp to ±``_ATAN_ABS_RANGE`` (``piecewise_linear``'s default).
+    """
+    return piecewise_linear(x, _ABS_BREAKPOINTS, lambda v: abs(v), name="abs_coord")
+
+
+def _ray_count(rays: Node) -> Node:
+    """Count the +1 (positive) components of a ray vector.
+
+    The sandbox spells this ``reduce_sum(bool_to_01(RAY_GT_ZERO(rays)))`` — an
+    elementwise ±1 ``compare`` (sharpness 32000), a 0/1 cast, then a sum — and
+    runs it in float64. The real graph is float32 and ``compare`` is
+    scalar-only, so the elementwise 0/1 step is built directly, in the
+    **cancellation-free** form ``step(v) = min(relu(s·v), 1) = 1 − relu(1 −
+    relu(s·v))``. The naive ``relu(s·v) − relu(s·v − 1)`` would subtract two
+    near-equal large numbers — a ray reaches ~6000, ``s·v`` ~2e8, and the
+    ``−1`` is lost to fp32 ulp (~16 at that magnitude; even ~0.004 at the
+    saturated ~32000 scale accumulates to ~0.2 over 1024 rays). The ``min``
+    form instead computes ``relu(1 − big) = 0`` exactly for a saturated ray
+    (no subtraction of two big numbers), so each step is exactly 1 or 0 and the
+    sum is an exact integer — matching the sandbox on any ray outside the ±1/s
+    ramp (the smallest nonzero fixture ray ≈1.5e-4 clears the 3.1e-5 ramp).
+
+    Two sublayers: ``a = relu(s·v)`` then ``count = n − Σ_i relu(1 − a_i)``.
+    """
+    n = len(rays)
+    s = _RAY_SHARPNESS
+
+    # Stage 1: a_i = relu(s·v_i).
+    a = linear_relu_linear(
+        rays,
+        s * torch.eye(n, dtype=torch.float32),
+        torch.zeros(n, dtype=torch.float32),
+        torch.eye(n, dtype=torch.float32),
+        torch.zeros(n, dtype=torch.float32),
+        name="ray_scaled",
+    )
+    # Stage 2: count = n − Σ_i relu(1 − a_i). relu(1 − a_i) is 0 for a
+    # saturated ray (relu of a large negative), 1 − a_i in the ramp, 1 for a
+    # negative ray — so count adds exactly 1 per positive ray.
+    count = linear_relu_linear(
+        a,
+        -torch.eye(n, dtype=torch.float32),  # hidden_i = relu(−a_i + 1)
+        torch.ones(n, dtype=torch.float32),
+        -torch.ones((n, 1), dtype=torch.float32),  # −Σ hidden_i
+        torch.tensor([float(n)], dtype=torch.float32),  # + n
+        name="ray_count",
+    )
+    # Pin the true [0, n] range so the downstream quadrant ``select`` sees a
+    # bounded gated input (stage 1's relu range is otherwise ~s·rays).
+    return assert_matches_value_type(
+        count, NodeValueType(value_range=Range(0.0, float(n)))
+    )
+
+
+# ---------------------------------------------------------------------------
+# Plan F: screen-coordinate product (solid-interval coverage key)
+# ---------------------------------------------------------------------------
+
+
+def MUL_SCREEN(a: Node, b: Node) -> Node:
+    """Product of two screen-column operands (sandbox ``MUL_SCREEN``).
+
+    Sandbox grid: ``multiply(input_range=((-2, SW+2), (-2, SW+2)),
+    breakpoints=65)`` — step 1.0, so integer columns land on grid lines and the
+    product is exact there. The operands (``x1-1`` / ``x2+1``) stay within
+    ``[-2, SW+2]``; a symmetric ``max_abs = SW+2`` over-covers the sandbox's
+    asymmetric range at the same step (real ``multiply_2d`` extrapolates
+    out-of-grid, so sizing to the full operand range is the safe choice — same
+    extrapolation-trap note as ``mul_side``).
+    """
+    bound = float(SCREEN_WIDTH + 2)
+    return multiply_2d(
+        a, b, max_abs1=bound, max_abs2=bound, step1=1.0, step2=1.0, name="mul_screen"
+    )
+
+
+# DOOM: R_PointToAngle (r_main.c) — BAM angle of (dx, dy) via atan2 octant count.
+def signed_world_angle(dx: Node, dy: Node) -> Node:
+    """Signed BAM angle in [-ANGLE_BAM/2, ANGLE_BAM/2) of the vector (dx, dy)
+    (sandbox ``signed_world_angle``, unified on the 3072 clamp)."""
+    abs_dx = _abs_coord(dx)
+    abs_dy = _abs_coord(dy)
+    abs_pair = concat(abs_dy, abs_dx)
+    low_count = _ray_count(linear(abs_pair, _LOW_RAY_MATRIX))
+    high_count = _ray_count(linear(abs_pair, _HIGH_RAY_MATRIX))
+    base = Linear(
+        concat(low_count, high_count),
+        torch.tensor([[1.0], [1.0]], dtype=torch.float32),
+        name="atan_base",
+    )
+
+    one = constant(1.0)
+    q1 = base
+    q2 = linear(concat(base, one), _Q2_AFFINE)  # ANGLE_BAM/2 - base
+    q3 = linear(concat(base, one), _Q3_AFFINE)  # -ANGLE_BAM/2 + base
+    q4 = neg(base)
+
+    dx_positive = compare(dx, 0.0)
+    dy_positive = compare(dy, 0.0)
+    upper = select(dx_positive, q1, q2)
+    lower = select(dx_positive, q4, q3)
+    return select(dy_positive, upper, lower)
+
+
+# DOOM: angle wrapping / FOV clipping (r_bsp.c:R_AddLine — clip to ±clipangle).
+def wrap_signed_angle(delta: Node) -> Node:
+    """Wrap one-turn signed BAM deltas back into [-4096, 4096)
+    (sandbox ``wrap_signed_angle``)."""
+    minus_full = add_const(delta, -float(ANGLE_BAM))
+    plus_full = add_const(delta, float(ANGLE_BAM))
+    over = compare(delta, _SIGNED_ANGLE_ABOVE_MAX)
+    under = one_minus(compare(delta, _SIGNED_ANGLE_ABOVE_MIN))
+    return select(over, minus_full, select(under, plus_full, delta))
+
+
+# ---------------------------------------------------------------------------
+# Plan F: screen comparators, integer-equality, and the backface cross product
+# ---------------------------------------------------------------------------
+#
+# Mirror of the corresponding ``forward/ops.py`` helpers. The sandbox
+# ``compare_const(c, input_range=...)`` drops to the real ``compare(node, c)``
+# (default sharpness 10, deadband 0.1 — the ``input_range`` has no real-graph
+# counterpart). The thresholds are half-integers, so integer-valued inputs land
+# squarely in a flat zone.
+
+
+def ABS_SMALL_INT(x: Node) -> Node:
+    """``|x|`` over the small-integer range (sandbox ``ABS_SMALL_INT``).
+
+    Only used for equality / pixel-width decisions, where clamping large
+    differences is fine (zero vs nonzero is all that matters)."""
+    return piecewise_linear(x, [-64.0, 0.0, 64.0], lambda v: abs(v), name="abs_small_int")
+
+
+def HAS_PIXEL_WIDTH(x_diff: Node) -> Node:
+    """±1: does an absolute screen-x difference exceed 0.5 (>= 1 pixel wide)?
+    (sandbox ``HAS_PIXEL_WIDTH``)."""
+    return compare(x_diff, 0.5)
+
+
+def gt_screen(a: Node, b: Node) -> Node:
+    """±1: is integer screen column ``a`` greater than ``b``? (sandbox
+    ``gt_screen`` -> ``SCREEN_GT_ZERO(sub(a, b))``)."""
+    return compare(sub(a, b), 0.5)
+
+
+def min_screen(a: Node, b: Node) -> Node:
+    """Smaller of two screen columns (sandbox ``min_screen``)."""
+    return select(gt_screen(a, b), b, a)
+
+
+def max_screen(a: Node, b: Node) -> Node:
+    """Larger of two screen columns (sandbox ``max_screen``)."""
+    return select(gt_screen(a, b), a, b)
+
+
+def same_int(a: Node, b: Node) -> Node:
+    """±1: are two integer-valued nodes equal? (sandbox ``same_int``)."""
+    diff_abs = ABS_SMALL_INT(sub(a, b))
+    return one_minus(compare(diff_abs, 0.5))  # not (|a-b| > 0.5)
+
+
+# DOOM: backface-cull sign test (r_bsp.c:R_AddLine, r_main.c:R_PointOnSegSide)
+def is_negative_cross(cross_z: Node) -> Node:
+    """±1: is the seg-vs-player cross product < 0? (sandbox ``is_negative_cross``
+    -> ``CROSS_GT_ZERO(neg(cross_z))``)."""
+    return compare(neg(cross_z), 0.0)
+
+
+def MUL_CROSS(a: Node, b: Node) -> Node:
+    """Cross-product term for the seg backface cull (sandbox ``MUL_CROSS``).
+
+    Sandbox grid ``multiply(input_range=((-256, 256), (-600, 600)),
+    breakpoints=65)`` — step 8.0 on the seg-vector axis, 18.75 on the
+    view-relative axis. e1m1 seg vectors reach |256| (a grid vertex) and
+    relative coords |308| (< 600), so the operands stay in-grid; only the sign
+    feeds ``is_negative_cross``.
+    """
+    return multiply_2d(
+        a, b, max_abs1=256.0, max_abs2=600.0, step1=8.0, step2=18.75, name="mul_cross"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Plan F (F5): the drawseg perspective-scale chain — products, clamps, and
+# comparators feeding the DRAWSEG_SCALE* / DRAWSEG_*SILHEIGHT VALUE carriers.
+# ---------------------------------------------------------------------------
+#
+# Projection / scale constants mirror ``reference.py``. FOV_HALF_BAM =
+# ANGLE_BAM/8 = 45°, so the focal length is (SCREEN_WIDTH-1)/(2·tan 45°);
+# _PROJ_RATIO normalises it to the width-60 tuning (= 1.0 at 60×50).
+_TAN_FOV_HALF = math.tan((ANGLE_BAM // 8) * 2.0 * math.pi / ANGLE_BAM)
+_PROJECTION = (SCREEN_WIDTH - 1) / (2.0 * _TAN_FOV_HALF)
+_PROJ_RATIO = (SCREEN_WIDTH - 1) / 59.0
+_MIN_SCALE = 1.0 / 256.0
+_MAX_SCALE = 64.0
+NEAR_DEN_SCALE_FACTOR = 1024.0
+
+
+def _mul_grid(
+    a: Node, b: Node, *, lo1: float, hi1: float, lo2: float, hi2: float, n: int, name: str
+) -> Node:
+    """Sandbox ``multiply(input_range=((lo1,hi1),(lo2,hi2)), breakpoints=n)``.
+
+    A product is exactly rank-1 (``u·v`` is a separable outer product), so this
+    lowers to ``low_rank_2d(rank=1)`` — two 1D piecewise-linear interpolants of
+    the (linear) singular vectors — instead of ``multiply_2d``. Two reasons:
+    ``multiply_2d`` lowers to ``piecewise_linear_2d``'s O(n⁴) design-matrix SVD,
+    which is ~18 GB to *build* at the sandbox's 257-bp scale grids; and the
+    rank-1 form is exact for a product (the 1D PWL of a linear singular vector
+    is exact everywhere, not just at vertices) where ``multiply_2d`` carries the
+    fused-square residual. Out-of-grid operands clamp to the breakpoint range —
+    matching the sandbox ``multiply``'s clamp (the wrong-regime products are
+    discarded by ``select(near, …)`` downstream regardless).
+    """
+    bp1 = [lo1 + i * (hi1 - lo1) / (n - 1) for i in range(n)]
+    bp2 = [lo2 + i * (hi2 - lo2) / (n - 1) for i in range(n)]
+    return low_rank_2d(a, b, bp1, bp2, lambda x, y: x * y, rank=1, name=name)
+
+
+def mul_normal_coord(coef: Node, rel: Node) -> Node:
+    """Unit-normal coefficient × view-relative coordinate (sandbox
+    ``MUL_NORMAL_COORD``, ``((-1,1),(-1200,1200))``, 65 bp)."""
+    return _mul_grid(coef, rel, lo1=-1.0, hi1=1.0, lo2=-1200.0, hi2=1200.0, n=65,
+                     name="mul_normal_coord")
+
+
+def MUL_UNIT(a: Node, b: Node) -> Node:
+    """Unit × unit product (sandbox ``MUL_UNIT``, ``((-1,1),(-1,1))``, 33 bp)."""
+    return _mul_grid(a, b, lo1=-1.0, hi1=1.0, lo2=-1.0, hi2=1.0, n=33, name="mul_unit")
+
+
+def MUL_FAR_DEN(distance: Node, xtova_cos: Node) -> Node:
+    """Far scale denominator: distance × view-angle cosine (sandbox
+    ``MUL_FAR_DEN``, ``((1,1500),(0.7,1.01))``, 257 bp)."""
+    return _mul_grid(distance, xtova_cos, lo1=1.0, hi1=1500.0, lo2=0.7, hi2=1.01,
+                     n=257, name="mul_far_den")
+
+
+def MUL_NEAR_DEN(distance: Node, xtova_cos: Node) -> Node:
+    """Near scale denominator (sandbox ``MUL_NEAR_DEN``, ``((0.001,1),(0.7,1.01))``,
+    257 bp)."""
+    return _mul_grid(distance, xtova_cos, lo1=0.001, hi1=1.0, lo2=0.7, hi2=1.01,
+                     n=257, name="mul_near_den")
+
+
+def mul_far_scale(numerator: Node, inverse_denominator: Node) -> Node:
+    """Far scale = numerator × (1/denominator) (sandbox ``MUL_FAR_SCALE``,
+    ``((0, 32·ratio),(0, 0.1))``, 257 bp)."""
+    return _mul_grid(numerator, inverse_denominator, lo1=0.0, hi1=32.0 * _PROJ_RATIO,
+                     lo2=0.0, hi2=0.1, n=257, name="mul_far_scale")
+
+
+def MUL_NEAR_FLOOR_SCALE(numerator: Node, inverse_denominator: Node) -> Node:
+    """Near-floor scale (sandbox ``MUL_NEAR_FLOOR_SCALE``, ``((0, 0.1·ratio),(0, 2))``,
+    257 bp)."""
+    return _mul_grid(numerator, inverse_denominator, lo1=0.0, hi1=0.1 * _PROJ_RATIO,
+                     lo2=0.0, hi2=2.0, n=257, name="mul_near_floor_scale")
+
+
+def mul_scalestep(diff: Node, inverse_width: Node) -> Node:
+    """Per-column scale step = (scale2-scale1) × (1/width) (sandbox
+    ``MUL_SCALESTEP``, ``((-2.5·ratio, 2.5·ratio),(0, 1))``, 257 bp)."""
+    return _mul_grid(diff, inverse_width, lo1=-2.5 * _PROJ_RATIO, hi1=2.5 * _PROJ_RATIO,
+                     lo2=0.0, hi2=1.0, n=257, name="mul_scalestep")
+
+
+def FAR_DEN_CLAMP(x: Node) -> Node:
+    """Clamp the far denominator to ``[0.7, 1500]`` (sandbox ``FAR_DEN_CLAMP``)."""
+    return clamp(x, 0.7, 1500.0)
+
+
+def NEAR_DEN_CLAMP(x: Node) -> Node:
+    """Clamp the near denominator to ``[0.0007, 1]`` (sandbox ``NEAR_DEN_CLAMP``)."""
+    return clamp(x, 0.0007, 1.0)
+
+
+def RW_DISTANCE_CLAMP(x: Node) -> Node:
+    """Clamp the perpendicular seg distance to ``[0.001, 1500]`` (sandbox
+    ``RW_DISTANCE_CLAMP`` — covers e1m1 far walls)."""
+    return clamp(x, 0.001, 1500.0)
+
+
+def SCALE_CLAMP(x: Node) -> Node:
+    """Clamp wall scale to ``[1/256, 64]`` (sandbox ``SCALE_CLAMP``)."""
+    return clamp(x, _MIN_SCALE, _MAX_SCALE)
+
+
+def SINEB_CLAMP(x: Node) -> Node:
+    """Clamp the sine-basis to ``[1e-6, 1]`` (sandbox ``SINEB_CLAMP``)."""
+    return clamp(x, 1.0e-6, 1.0)
+
+
+def DIST_GT_ONE(distance: Node) -> Node:
+    """±1: is the distance past the near plane (> 1)? (sandbox ``DIST_GT_ONE``)."""
+    return compare(distance, 1.0)
+
+
+def SINEB_ABOVE_FLOOR(sineb: Node) -> Node:
+    """±1: is the sine-basis above the near-floor threshold 1/256? (sandbox
+    ``SINEB_ABOVE_FLOOR`` — sharpness 32000 for a ~0.001 deadband)."""
+    return compare(sineb, 1.0 / 256.0, sharpness=32000.0)
+
+
+def gt_height(a: Node, b: Node) -> Node:
+    """±1: is height ``a`` greater than ``b``? (sandbox ``gt_height`` ->
+    ``HEIGHT_GT_HALF(sub(a, b))``)."""
+    return compare(sub(a, b), 0.5)
+
+
+def NEAR_DEN_SCALE_UP(near_den: Node) -> Node:
+    """Scale the near denominator up by 1024 before reciprocal (sandbox
+    ``NEAR_DEN_SCALE_UP``)."""
+    return linear(near_den, [[NEAR_DEN_SCALE_FACTOR]])
+
+
+def PROJECT_SCALE(sineb: Node) -> Node:
+    """Multiply the sine-basis by the projection focal length (sandbox
+    ``PROJECT_SCALE``)."""
+    return linear(sineb, [[_PROJECTION]])
+
+
+def NEAR_FLOOR_NUMERATOR(_: Node) -> Node:
+    """The constant near-floor scale numerator (sandbox ``NEAR_FLOOR_NUMERATOR``)."""
+    return constant(_PROJECTION * 1.0e-6 * NEAR_DEN_SCALE_FACTOR)
+
+
+def MAX_SCALE_VALUE(_: Node) -> Node:
+    """The max-scale sentinel (sandbox ``MAX_SCALE_VALUE``)."""
+    return constant(_MAX_SCALE)

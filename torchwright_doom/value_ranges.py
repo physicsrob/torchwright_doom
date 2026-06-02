@@ -22,9 +22,13 @@ Scope and layering:
   ``reference_drafter._emit_value`` / ``_quantize_value``; it is not
   re-implemented here.
 * The graph-construction helpers the sandbox keeps here (``encode_vec``
-  building a ``Vec`` via ``linear``; ``make_value`` via ``make_token``)
-  are forward-path and are deferred to the forward-renderer port; the
-  prefill contract does not use them.
+  building a graph ``Node`` via ``linear``; ``make_value`` via
+  ``make_token``) are the forward-path runtime ``VALUE`` emitter (Plan F /
+  F2). They turn a *computed* node — not an embed-time derived column — into
+  an emitted ``VALUE`` row at run time. They lazy-import the graph helpers
+  (``std`` / ``emit``) inside the function bodies so the module-load
+  dependency stays one-way (``value_ranges`` is imported by ``vocab``, so it
+  must not import ``vocab`` / ``embedding`` at module scope).
 """
 
 from __future__ import annotations
@@ -131,6 +135,37 @@ def prefill_value(value_type: TokenType, range_id: ValueRange, value: float) -> 
     ``vocab``.
     """
     return Token(value_type, {"v": encode_float(range_id, value)})
+
+
+def encode_vec(range_id: ValueRange, value: "Node") -> "Node":
+    """Runtime encoder: affine-map a computed node into the range's [-1, 1]
+    space (sandbox ``encode_vec``).
+
+    ``encoded = scale·value + bias`` as one fused ``Linear`` over
+    ``concat(value, 1)`` — the producer-side mirror of :func:`encode_float`.
+    The ``1.0`` constant is built inside the call (no import-time graph nodes;
+    see ``render_constants`` / the project node-id-reset rule).
+    """
+    from .std import concat, constant, linear
+
+    spec = VALUE_RANGES[ValueRange(range_id)]
+    return linear(concat(value, constant(1.0)), [[spec.scale], [spec.bias]])
+
+
+def make_value(value_type: TokenType, range_id: ValueRange, value: "Node") -> "Node":
+    """3-arg core: emit a ``value_type`` ``VALUE`` token carrying ``value``,
+    range-encoded (sandbox ``make_value``).
+
+    Returns an emit **head** (``make_token_head``): the renderer's dispatch
+    folds over heads and stamps one shared derived-zero tail after selecting
+    the winning branch, so every owner ``after_*`` emitter — including the
+    ``VALUE`` carriers this builds — must produce a head, not a full row. The
+    2-arg ``VALUE``-bound wrapper lives in ``vocab.py`` next to the ``VALUE``
+    type (where the type is available), mirroring :func:`prefill_value`.
+    """
+    from .std import make_token_head
+
+    return make_token_head(value_type, v=encode_vec(range_id, value))
 
 
 def derived_name(kind: str, range_id: ValueRange) -> str:

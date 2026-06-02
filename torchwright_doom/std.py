@@ -30,7 +30,11 @@ from torchwright.ops import (
 )
 from torchwright.ops.arithmetic_ops import clamp as _clamp
 from torchwright.ops.inout_nodes import create_literal_value
-from torchwright.ops.map_select import select as _select, switch as _switch
+from torchwright.ops.map_select import (
+    broadcast_select as _broadcast_select,
+    select as _select,
+    switch as _switch,
+)
 
 from .extract import extract_derived, indicator_to_bool
 from .tokens import FloatSlot, IntSlot, TokenType
@@ -52,6 +56,7 @@ __all__ = [
     "bool_to_01",
     "extract_derived",
     "indicator_to_bool",
+    "pick_by_one_hot",
 ]
 
 
@@ -205,6 +210,40 @@ def reduce_sum(node: Node) -> Node:
     """
     weights = torch.ones((len(node), 1), dtype=torch.float32)
     return Linear(node, weights, name="reduce_sum")
+
+
+def pick_by_one_hot(mask: Node, table: Node, d_fill: int = 1) -> Node:
+    """Select slot value(s) from a slot-major runtime table by a one-hot mask
+    (sandbox ``pick_by_one_hot``).
+
+    ``mask`` is a width-``n_slots`` 0/1 one-hot; ``table`` is width
+    ``n_slots * d_fill`` (slot-major). Lowers to ``broadcast_select`` (each
+    slot picks its ``table`` value where the ±1 mask is +1, else 0) followed by
+    a fixed ``Linear`` that sums across slots — the porting target named in
+    ``docs/sandbox/translation_table.md``. Result width is ``d_fill``.
+    """
+    n_slots = len(mask)
+    if len(table) != n_slots * d_fill:
+        raise ValueError(
+            f"pick_by_one_hot: table width {len(table)} != n_slots {n_slots} "
+            f"* d_fill {d_fill}"
+        )
+    mask_pm1 = indicator_to_bool(mask)
+    zero = create_literal_value(torch.zeros(d_fill, dtype=torch.float32))
+    # approximate=False drops the ±1 c_tol assert: this helper is built eagerly
+    # at every position (the renderer builds all branch candidates and masks by
+    # token type), so a recovered one-hot mask can be fractional at the
+    # *discarded* rows. The winning branch (active row) carries a clean one-hot,
+    # where approximate=False is float-exact.
+    selected = _broadcast_select(
+        mask_pm1, table, zero, n_slots, d_fill, approximate=False
+    )
+    # Sum slot-major selected[s*d_fill + c] over s, into channel c.
+    weights = torch.zeros((n_slots * d_fill, d_fill), dtype=torch.float32)
+    for s in range(n_slots):
+        for c in range(d_fill):
+            weights[s * d_fill + c, c] = 1.0
+    return Linear(selected, weights, name="pick_by_one_hot_sum")
 
 
 def make_token(token_type: TokenType, **slot_value_nodes: Node) -> Node:

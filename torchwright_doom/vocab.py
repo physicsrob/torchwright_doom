@@ -32,6 +32,7 @@ from .doom_lighting import doom_flat_startmap
 from .tokens import Derived, FloatSlot, IntSlot, Token, TokenType
 from .value_ranges import (
     ValueRange,
+    make_value as _make_value,
     prefill_value as _prefill_value,
     value_derived_columns,
 )
@@ -235,6 +236,15 @@ def prefill_value(range_id: ValueRange, value: float) -> Token:
     VALUE payload is encoded into its range's ``[-1, 1]`` space.
     """
     return _prefill_value(VALUE, range_id, value)
+
+
+def make_value(range_id: ValueRange, value):
+    """2-arg ``VALUE``-bound wrapper over the ``value_ranges`` 3-arg core:
+    emit a ``VALUE`` carrier (an emit head) for a computed node, range-encoded.
+    Mirrors the sandbox ``protocol_tokens_decl.make_value``; the forward
+    renderer's projection / drawseg owners call it to emit ``VALUE`` payloads.
+    """
+    return _make_value(VALUE, range_id, value)
 
 
 ANGLE_VALUE = TokenType(
