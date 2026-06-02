@@ -250,24 +250,11 @@ def _scan_next_tokens(projection_eval) -> dict:
     }
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "precise root cause: the 2-byte VALUE digit-quad's high byte floors a "
-        "continuous 16-bit q (e.g. ~62196 for v=0.898) into a 256-block, but the "
-        "floor is unreliable at this magnitude. thermometer_floor_div places ramps "
-        "at half-integer thresholds (built for integer inputs) and interpolates "
-        "junk (->272); floor_int's 255-step staircase is imprecise at the top of "
-        "[0,255] (->240 for 242.95, which is exact only on a tight-range literal) "
-        "and a value_type pin has no effect. The raw value column is exact; only "
-        "the digit-quad argmaxes to the wrong block. Fix deferred pending a "
-        "digit-quad design decision (round-q-first / nibble-decompose / fewer VALUE "
-        "levels / floor_int precision). See plan_fgh_writeside_geometry.md."
-    ),
-)
 def test_projection_carriers_within_tolerance(projection_eval) -> None:
     """Numeric VALUE / ANGLE_VALUE carriers within tolerance (octant ±BAM,
-    multiply noise). KNOWN-RED on the 2-byte VALUE carriers — see xfail reason."""
+    multiply noise). The 2-byte VALUE-carrier digit-quad high byte now floors a
+    continuous 16-bit q with the cancellation-free ``floor_int`` (was the
+    integer-only ``thermometer_floor_div``, which interpolated junk)."""
     scan = _scan_next_tokens(projection_eval)
     assert not scan["carrier_mismatches"], (
         "projection CARRIER value mismatches:\n"

@@ -78,7 +78,7 @@ import torch
 
 from torchwright.graph import Concatenate, Linear, Node
 from torchwright.graph.spherical_codes import index_to_vector
-from torchwright.ops.arithmetic_ops import thermometer_floor_div
+from torchwright.ops.arithmetic_ops import floor_int
 from torchwright.ops.inout_nodes import create_literal_value
 
 from .embedding import (
@@ -485,8 +485,8 @@ def _digit_quad_payload(q_node: Node, cardinality: int, *, name: str) -> Node:
 
     For 1 digit (cardinality ≤ 256): pure affine, ``[2·(q - CENTER), 1.0]``,
     depth-free. For 2 digits (257 ≤ cardinality ≤ 65,536): the high byte comes
-    from :func:`thermometer_floor_div` (one MLP sublayer) and the low byte
-    recovers via an affine that folds into the surrounding Concatenate.
+    from :func:`floor_int` (``floor(q / BASE)``, exact on a continuous q) and the
+    low byte recovers via an affine that folds into the surrounding Concatenate.
     """
     digits = _digit_count_for_cardinality(cardinality)
 
@@ -501,10 +501,15 @@ def _digit_quad_payload(q_node: Node, cardinality: int, *, name: str) -> Node:
         return Concatenate([scaled, one])
 
     max_q = cardinality - 1
-    # thermometer_floor_div places transitions at k·BASE − 0.5 for
-    # k = 1..max_q//BASE; that's exactly the half-integer byte
-    # threshold we want. Integer-step q never lands inside the ramp.
-    hi_q = thermometer_floor_div(q_node, BASE, max_q)
+    # hi_q = floor(q / BASE). q is a *continuous* FloatSlot step index (e.g.
+    # ~62196 for v=0.898), so use floor_int — ramps at integer boundaries, exact
+    # mid-bin — over the high-byte range [0, max_q // BASE]. thermometer_floor_div
+    # is integer-inputs-only (half-integer thresholds) and interpolates junk on a
+    # continuous q. floor_int is cancellation-free at this magnitude (the
+    # saturating-step staircase); sharpness=1000 keeps the ramp well clear of the
+    # value's fractional part.
+    q_over_base = _affine_1d(q_node, 1.0 / float(BASE), 0.0, name=f"{name}_hi_div")
+    hi_q = floor_int(q_over_base, 0, max_q // BASE, sharpness=1000)
     hi_c_2 = _affine_1d(hi_q, 2.0, -2.0 * CENTER, name=f"{name}_hi_c2")
     # lo_q = q − BASE·hi_q realised as a single Linear over the
     # concat of (q, hi_q). The ``subtract(q, multiply_const(hi_q,
