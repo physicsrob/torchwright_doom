@@ -61,6 +61,21 @@ def or_(a: Node, b: Node) -> Node:
     return bool_any_true([a, b])
 
 
+def snap_bool(x: Node) -> Node:
+    """Snap a recovered near-±1 boolean back to a clean ±1 by its sign.
+
+    A ``pick_argmax`` over ±1 keys (e.g. ``SolidIntervals``' ``solid_emit``)
+    recovers the matched value as ≈±1 but with fp32 softmax noise (e.g.
+    ``-1.0000080``). When that value is then used as a ``select`` *cond*, the
+    noise scales the kept branch and leaks a sliver of the discarded branch's
+    emit *head* into the result — and against the renderer's razor-thin
+    integer-slot argmax margins (a descend ``VISIT_SUBSECTOR`` head beats its
+    depth±1 neighbour by ~0.97 out of ~46000) that sliver is enough to flip the
+    next token. The float64 sandbox kept the cond exact, so this snap is the
+    fp32-fidelity counterpart (cf. the float64->fp32 sharp-step discipline)."""
+    return compare(x, 0.0)
+
+
 def SCREEN_X_CLAMP(x: Node) -> Node:
     """Clamp a screen column into ``[0, SCREEN_WIDTH-1]`` (sandbox
     ``SCREEN_X_CLAMP``).
@@ -362,6 +377,21 @@ def same_int(a: Node, b: Node) -> Node:
     """±1: are two integer-valued nodes equal? (sandbox ``same_int``)."""
     diff_abs = ABS_SMALL_INT(sub(a, b))
     return one_minus(compare(diff_abs, 0.5))  # not (|a-b| > 0.5)
+
+
+# ---------------------------------------------------------------------------
+# Plan G: R_CheckBBox region classifier
+# ---------------------------------------------------------------------------
+#
+# DOOM: R_CheckBBox boxx/boxy region computation (r_bsp.c lines 404-418) — the
+# player-vs-bbox-edge sign tests that index into the 9-region ``checkcoord``
+# table. The sandbox spells this ``compare_const(0.0, input_range=(-3000, 3000))``;
+# the real-side default-sharpness ``compare`` has the same 0.1 deadband at the
+# zero threshold (mirrors the ``dx``/``dy`` sign test inside ``signed_world_angle``).
+def COORD_GT_ZERO(x: Node) -> Node:
+    """±1: is a map-coordinate / player-vs-bbox-edge delta > 0? (sandbox
+    ``COORD_GT_ZERO``)."""
+    return compare(x, 0.0)
 
 
 # DOOM: backface-cull sign test (r_bsp.c:R_AddLine, r_main.c:R_PointOnSegSide)

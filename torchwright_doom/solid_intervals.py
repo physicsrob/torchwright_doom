@@ -27,7 +27,7 @@ from .attention_handles import RecentMarkerHandle
 from .constants import SCREEN_WIDTH
 from .past import PastHandle, PastHandleScope
 from .protocol_tokens import ProtocolTokenView
-from .render_ops import MUL_SCREEN, add_const, and_, one_minus
+from .render_ops import MUL_SCREEN, add_const, and_, one_minus, snap_bool
 from .scene_index import SceneIndex
 from .std import concat, constant, linear, one_hot, select, split
 
@@ -135,7 +135,12 @@ class SolidIntervals:
             ),
             [1, 1],
         )
-        return covered, end
+        # ``covered`` is the matched key's ±1 ``solid_emit``; the fp32 softmax
+        # recovers it as ≈±1 with ~1e-5 noise. Both consumers use it only as a
+        # ``select`` cond, so snap it to a clean ±1 — the noise would otherwise
+        # leak the discarded branch's head and flip a thin integer-slot argmax
+        # (see ``render_ops.snap_bool``). ``end`` stays raw (a screen column).
+        return snap_bool(covered), end
 
     def next_start_after(self, column: Node) -> Node:
         """Return the nearest solid interval start strictly after `column`."""

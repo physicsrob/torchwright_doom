@@ -40,7 +40,12 @@ from torchwright_doom.vocab import NO_OP
 
 from ..prefill_fixture import TINY_BSP_SCENE, row_index
 
-_D = 2400  # shared-slot layout shrank the residual peak to ~1432 (was ~4655)
+# Plan E's shared-slot layout shrank the residual peak to ~1432 (was ~4655); Plan
+# F's projection branches still fit in 2400. Plan G's BBoxPruner adds four more
+# signed_world_angle call sites (each carrying a 2x1024-wide ray-count
+# intermediate) plus its published occlusion/context recovery state, pushing the
+# peak past 2400 — 4800 restores margin.
+_D = 4800
 _D_HEAD = 160
 _MAX_STEPS = 8  # plenty for set_cursor + side precompute + descent on a 1-node scene
 

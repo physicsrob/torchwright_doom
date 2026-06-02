@@ -62,9 +62,11 @@ class RuntimeProtocols:
     """Published protocol owners needed by branch construction.
 
     Plan F grows this from traversal-only to traversal + the reduced
-    seg-projection owner + the payload router. R_CheckBBox visibility pruning
-    (Phase G) and the wall-column / visplane / flat owners (Phase H/J) are still
-    deferred, so their branches collapse into the shared NO_OP head."""
+    seg-projection owner + the payload router. Plan G restores R_CheckBBox
+    visibility pruning: ``BspTraversal`` now publishes the ``BBoxPruner`` over the
+    populated occlusion state, and the payload router routes the bbox ANGLE arm to
+    it. The wall-column / visplane / flat owners (Phase H/J) are still deferred, so
+    their branches collapse into the shared NO_OP head."""
 
     traversal: BspTraversal
     projection: SegProjection
@@ -81,15 +83,23 @@ def publish_runtime_protocols(
     """Publish runtime protocol channels before branch candidates consume them.
 
     Order matters: ``input_angle_or_zero`` and ``SolidIntervals`` are published
-    before the projection owner that reads them; ``BspTraversal`` stays the
-    Plan-E reduced owner (bbox deferred to Phase G), so the payload router is
-    built without a bbox arm (Phase F routes ``is_bbox_angle`` to NO_OP)."""
+    before the owners that read them. Plan G threads both (plus ``input_vec``)
+    into ``BspTraversal.publish`` so its ``BBoxPruner`` can scan the occlusion
+    state, and the payload router is built with the bbox arm
+    (``is_bbox_angle`` -> ``BBoxPruner.after_bbox_angle_value``)."""
     input_angle_or_zero = past.publish(
         "input_angle_or_zero",
         ANGLE_VALUE.extract(input_vec, "angle"),
     )
     solids = SolidIntervals.publish(past, inp, scene)
-    traversal = BspTraversal.publish(past, inp, scene)
+    traversal = BspTraversal.publish(
+        past,
+        input_vec,
+        inp,
+        scene,
+        solids,
+        input_angle_or_zero,
+    )
     projection = SegProjection.publish(
         past,
         input_vec,
@@ -99,7 +109,7 @@ def publish_runtime_protocols(
         input_angle_or_zero,
         pos,
     )
-    payload_router = PayloadRouter(projection=projection)
+    payload_router = PayloadRouter(projection=projection, bbox=traversal.bbox)
     return RuntimeProtocols(
         traversal=traversal,
         projection=projection,
@@ -199,13 +209,15 @@ def build_branch_outputs(protocols: RuntimeProtocols) -> dict[str, Node]:
     """Build the traversal + Phase-F branch heads for real; stub the rest.
 
     The dict's keys equal ``{t.branch for t in DISPATCH_TRANSITIONS}`` (so the
-    dispatch is well-formed). Plan F splits the seg-projection / drawseg branches
+    dispatch is well-formed). Plan F split the seg-projection / drawseg branches
     out of the shared ``no_op`` head: the seg-scan loop (``visit`` … ``emit_x2``),
     the drawseg-scalar chain (``store_wall_range`` … ``drawseg_u_phase``), and the
     ``value`` / ``angle`` carriers route to the ``SegScanner`` / ``WallRangeBuilder``
-    / ``PayloadRouter`` owners. Still deferred to the *one shared* ``no_op`` head
-    via the ``setdefault`` loop: ``R_CheckBBox`` (``between`` + ``bbox_*`` — Phase
-    G) and the wall-column / visplane / flat / pixel owners (Phase H/J).
+    / ``PayloadRouter`` owners. Plan G splits the R_CheckBBox sub-protocol
+    (``between`` + ``bbox_*``) out to the ``BBoxPruner`` (via the ``BspTraversal``
+    delegators). Still deferred to the *one shared* ``no_op`` head via the
+    ``setdefault`` loop: the wall-column / visplane / flat / pixel owners (Phase
+    H/J).
 
     Values are emit *heads* (``make_token_head`` / ``after_*``), not full rows;
     the dispatch stamps the shared derived tail after selection.
@@ -225,8 +237,20 @@ def build_branch_outputs(protocols: RuntimeProtocols) -> dict[str, Node]:
         "think": traversal.after_think_side(),
         "side_record": traversal.after_side_record(),
         "enter": traversal.after_enter(),
+        "between": traversal.after_between(),
         "return_": traversal.after_return(),
         "set_cursor_direction_y": traversal.after_set_cursor_direction_y(),
+        # R_CheckBBox visibility pruning (BBoxPruner via BspTraversal) — Plan G.
+        "bbox_boxpos": traversal.after_bbox_boxpos(),
+        "bbox_corner_x_a": traversal.after_bbox_corner_x_mark_a(),
+        "bbox_corner_y_a": traversal.after_bbox_corner_y_mark_a(),
+        "bbox_corner_x_b": traversal.after_bbox_corner_x_mark_b(),
+        "bbox_corner_y_b": traversal.after_bbox_corner_y_mark_b(),
+        "bbox_world_a": traversal.after_bbox_world_angle_mark_a(),
+        "bbox_theta_a": traversal.after_bbox_theta_mark_a(),
+        "bbox_world_b": traversal.after_bbox_world_angle_mark_b(),
+        "bbox_theta_b": traversal.after_bbox_theta_mark_b(),
+        "bbox_scan": traversal.after_bbox_scan(),
         # Payload carriers (PayloadRouter, routed by previous marker).
         "value": payload_router.after_value(no_op_out),
         "angle": payload_router.after_angle_value(no_op_out),
