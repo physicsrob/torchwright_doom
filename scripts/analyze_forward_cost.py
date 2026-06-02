@@ -124,7 +124,8 @@ def compile_capture(output_node, pos, d: int, d_head: int, optimize: int,
 
 
 def schedule_only_capture(output_node, pos, d: int, d_head: int,
-                          run_optimize_graph: bool = False, max_layers: int = 600):
+                          run_optimize_graph: bool = False, max_layers: int = 600,
+                          d_hidden=None):
     """Memory-safe: run ONLY the heuristic scheduler (no weight tensors, no
     HeadlessTransformer) and return (n_layers, node_to_layer, id_to_node,
     peak_width, live_at_peak, n_fused).
@@ -174,7 +175,8 @@ def schedule_only_capture(output_node, pos, d: int, d_head: int,
     _rm.ResidualStreamMap.allocate = _alloc
     try:
         layers, _routing, cancel, n_layers = _run_heuristic_warm_start(
-            graph=graph, d=d, d_head=d_head, pos_encoding=pos, d_hidden=d,
+            graph=graph, d=d, d_head=d_head, pos_encoding=pos,
+            d_hidden=(d_hidden if d_hidden else d),
             residual_map=rmap, computed=computed, clusters=None,
             admission_budget_fraction=0.4, policy=policy,
             overlay_pinned_inputs=set(), output_node=output_node,
@@ -267,7 +269,8 @@ def main():
         import time as _t
         t0 = _t.perf_counter()
         n_layers, n2l, id_to_node, peak_used, live, n_fused, pk_layer = (
-            schedule_only_capture(nt, pos, d, d_head, run_optimize_graph=run_og))
+            schedule_only_capture(nt, pos, d, d_head, run_optimize_graph=run_og,
+                                  d_hidden=d_hidden))
         t = _t.perf_counter() - t0
         peak = {"used": peak_used, "live": live}
         print(f"=== SCHEDULE-ONLY (no weights): d={d} d_head={d_head} "

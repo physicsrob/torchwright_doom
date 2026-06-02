@@ -43,6 +43,35 @@ reassociate the dispatch sum. Memory is solved by streaming regardless (2.2GB he
 doom win. Earlier inconclusive optimize results (compile_headless opt=2 @d4800=77;
 deadlock @d3200) now resolved: CP-SAT == heuristic; the heuristic is optimal.
 
+### d_hidden × fanout sweep (schedule-only) — d_hidden saturates at d_hidden=d
+Fixed d, varying d_hidden (MLP intermediate width) × fanout. layers / peak_width:
+
+d=6400:                                  d=4096:
+| fanout | d_hidden | layers | peak |    | fanout | d_hidden | layers | peak |
+|--------|----------|--------|------|    |--------|----------|--------|------|
+| 2      | 2048     | 116    | 4955 |    | 2      | 2048     | 119    | 4096 |
+| 2      | 4096     | 76     | 6192 |    | 2      | 4096=d   | 90     | 4096 |
+| 2      | 6400=d   | 66     | 6400 |    | 2      | 6400     | 89     | 4096 |
+| 2      | 12000    | 66     | 6400 |    | 2      | 12000    | 89     | 4096 |
+| 8      | 2048     | 96     | 5387 |    | 8      | 2048     | 98     | 4096 |
+| 8      | 4096     | 53     | 6051 |    | 8      | 4096=d   | 69     | 4096 |
+| 8      | 6400=d   | 44     | 6400 |    | 8      | 6400     | 69     | 4096 |
+| 8      | 12000    | 43     | 6400 |    | 8      | 12000    | 69     | 4096 |
+
+Conclusions:
+- **d_hidden cuts layers BELOW d_hidden=d, saturates AT d_hidden=d, useless ABOVE.** The
+  knee tracks d (6400 @ d=6400; 4096 @ d=4096). Mechanism: a layer's MLP outputs must land
+  in the d residual columns, so once d_hidden ≥ d the residual width d caps per-layer
+  parallelism, not the hidden pool.
+- **Smaller d ⇒ more layers, uncompensable by d_hidden.** At d_hidden=d: d=6400→66/44 vs
+  d=4096→90/69 (fanout 2/8). Cranking d_hidden→12000 at d=4096 doesn't recover it (89/69).
+- **So larger d_hidden does NOT enable a smaller d — the opposite:** smaller d_hidden →
+  smaller residual peak (via serialization, +layers); larger d_hidden → wider peak. d and
+  d_hidden are coupled (useful range d_hidden ≤ d); d_hidden=d is depth-optimal.
+- Net levers for this graph: **d (residual width ↔ depth) + max_fanout (the fold)**.
+  d_hidden is not an independent lever; below d it only trades layers for less MLP-weight
+  memory (moot under streaming/sparse compile_to_onnx).
+
 ---
 
 
