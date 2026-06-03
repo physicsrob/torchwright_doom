@@ -47,6 +47,7 @@ from torchwright.compiler.forward.cpsat_scheduler import (
 from torchwright.compiler.forward.graph_analysis import GraphAnalyzer
 from torchwright.compiler.forward.residual_map import ResidualStreamMap
 from torchwright.compiler.forward.scheduling_policy import SchedulingPolicy
+import torchwright.compiler.forward.scheduler as _scheduler_mod
 from torchwright.ops.inout_nodes import create_pos_encoding
 from torchwright_doom.embedding import build_doom_embedding
 from torchwright_doom.past import GraphPast
@@ -163,9 +164,13 @@ def _fix_schedule(built, hint_layers, hint_routing, hint_cancel):
                 model.Add(ia[nid] == (1 if route == ATTN else 0))
                 nrf += 1
     if hint_cancel:
+        ica = built.input_cancel_layer
         for nid, L in hint_cancel.items():
             if nid in ca:
                 model.Add(ca[nid] == L)
+                ncf += 1
+            elif nid in ica:
+                model.Add(ica[nid] == L)
                 ncf += 1
     return nlf, nrf, ncf, len(lv)
 
@@ -275,6 +280,96 @@ def localize(output_node, pos, d, d_head, time_budget_s):
         s = _solve_status(bb.model, time_budget_s)
         flag = " <== RESTORES FEASIBILITY" if s in ("OPTIMAL", "FEASIBLE") else ""
         print(f"    disable {fam:<20} -> {s}{flag}")
+
+
+def noeager(output_node, pos, d, d_head, time_budget_s):
+    """Run the heuristic warm-start with EAGER (within-layer) FREEING DISABLED.
+
+    The eager-free gap is why CP-SAT falls back at the residual floor: the
+    heuristic frees a node within its consumer's layer and reuses the columns
+    the same layer, a density the layer-granular model cannot represent, so the
+    heuristic's schedule is INFEASIBLE in the model and CP-SAT has no real
+    incumbent to start from. Disabling eager freeing (exactly what
+    DirectedLayerScheduler does) yields a deeper but model-VALID schedule.
+
+    Reports, per d: (1) does the no-eager heuristic terminate at all (i.e. does
+    a model-valid schedule exist at this width, or does it deadlock because it
+    needs the within-layer trick), and (2) if so, does feeding it to CP-SAT as
+    a feasible hint let the solver find an incumbent."""
+    graph, output_node, rmap, computed = _setup(output_node, pos, d)
+    orig = _scheduler_mod.LayerScheduler._freshly_dead_inputs
+    _scheduler_mod.LayerScheduler._freshly_dead_inputs = lambda self, n, c, r: []
+    try:
+        hint_layers, hint_routing, hint_cancel, hint_n_layers = _warm_start(
+            graph, output_node, pos, d, d_head, rmap, computed, max_layers=400
+        )
+    finally:
+        _scheduler_mod.LayerScheduler._freshly_dead_inputs = orig
+
+    if hint_n_layers == 0:
+        print(
+            f"  d={d:>6}: NO-EAGER heuristic DEADLOCKED -> no model-valid "
+            f"schedule at this width (needs the within-layer trick). The "
+            f"warm-start lever cannot help here; only a sublayer model would."
+        )
+        return
+    print(
+        f"  d={d:>6}: NO-EAGER heuristic terminated at {hint_n_layers} layers "
+        f"(model-valid, deeper than the eager heuristic). Feeding as CP-SAT hint:"
+    )
+    solver_max_layers = min(400, hint_n_layers + 1)
+
+    # Diagnostic: is the no-eager schedule actually FEASIBLE when hard-fixed?
+    # If INFEASIBLE, CP-SAT correctly discards the hint and cold-searches; bisect
+    # to find which family rejects it. If FEASIBLE, the hint is valid and the
+    # problem is purely that CP-SAT isn't seeding from it (a solver-param issue).
+    def _mk(disabled=frozenset()):
+        return build_cpsat_model(
+            output_node, pos, d=d, d_head=d_head, d_hidden=d,
+            max_layers=solver_max_layers, assume_zero_init=True,
+            _disabled_families=disabled,
+        )
+
+    # (1) fix layer+routing, cancel FREE -> is the LAYER ASSIGNMENT feasible?
+    b1 = _mk(); c1 = _fix_schedule(b1, hint_layers, hint_routing, None)
+    s1 = _solve_status(b1.model, 30.0)
+    print(f"            fix layer+routing, cancel FREE -> {s1} "
+          f"(L={c1[0]} route={c1[1]})")
+    # (2) also fix cancel
+    b2 = _mk(); c2 = _fix_schedule(b2, hint_layers, hint_routing, hint_cancel)
+    s2 = _solve_status(b2.model, 30.0)
+    print(f"            fix layer+routing+cancel={c2[2]} -> {s2}")
+    # (3) ALL families off, fix layer+routing -> sanity (must be feasible)
+    allf = frozenset(CONSTRAINT_FAMILIES)
+    b3 = _mk(allf); _fix_schedule(b3, hint_layers, hint_routing, None)
+    s3 = _solve_status(b3.model, 30.0)
+    print(f"            [ALL families OFF] fix layer+routing -> {s3}")
+    # (4) dual: enable only one family (cancel free) -> which independently rejects
+    if s1 == "INFEASIBLE":
+        for fam in sorted(CONSTRAINT_FAMILIES):
+            bb = _mk(allf - {fam}); _fix_schedule(bb, hint_layers, hint_routing, None)
+            s = _solve_status(bb.model, 30.0)
+            flag = " <== REJECTS" if s == "INFEASIBLE" else ""
+            print(f"              only {fam:<20} -> {s}{flag}")
+    assignment, stats = solve_schedule(
+        output_node,
+        pos,
+        d=d,
+        d_head=d_head,
+        d_hidden=d,
+        time_budget_s=time_budget_s,
+        max_layers=solver_max_layers,
+        hint_layers=hint_layers,
+        hint_routing=hint_routing,
+        hint_cancel=hint_cancel,
+        assume_zero_init=True,
+    )
+    cp = getattr(assignment, "n_layers", None)
+    tag = ">>> SOLVED <<<" if assignment is not None else ">>> still no incumbent <<<"
+    print(
+        f"            with NO-EAGER hint -> status={stats.status_name}, "
+        f"cpsat_layers={cp} ({stats.wall_time_s:.0f}s)  {tag}"
+    )
 
 
 def measure(output_node, pos, d, d_head):
@@ -452,7 +547,9 @@ def measure(output_node, pos, d, d_head):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument(
-        "--mode", choices=["status", "localize", "measure"], default="status"
+        "--mode",
+        choices=["status", "localize", "measure", "noeager"],
+        default="status",
     )
     ap.add_argument("--d", type=int, nargs="+", default=[11200, 2560])
     ap.add_argument("--d-head", type=int, default=160)
@@ -478,6 +575,12 @@ def main():
                 print(f"  d={d}  skipped (not a multiple of d_head={args.d_head})")
                 continue
             localize(nt, pos, d, args.d_head, args.time_budget)
+    elif args.mode == "noeager":
+        for d in args.d:
+            if d % args.d_head != 0:
+                print(f"  d={d}  skipped (not a multiple of d_head={args.d_head})")
+                continue
+            noeager(nt, pos, d, args.d_head, args.time_budget)
     else:
         for d in args.d:
             if d % args.d_head != 0:
