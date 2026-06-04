@@ -232,6 +232,8 @@ class NodeIndex:
     dy: LiftedKeyValueLookup
     front_child: LiftedKeyValueLookup
     back_child: LiftedKeyValueLookup
+    front_child_lifted: LiftedKeyValueLookup
+    back_child_lifted: LiftedKeyValueLookup
     bbox_top_front: LiftedKeyValueLookup
     bbox_bottom_front: LiftedKeyValueLookup
     bbox_left_front: LiftedKeyValueLookup
@@ -298,6 +300,20 @@ class NodeIndex:
                 "node_back_child",
                 token.is_back_child,
                 token.back_child_u,
+            ),
+            front_child_lifted=_node_child_lookup(
+                past,
+                node_context,
+                "node_front_child_lifted",
+                token.is_front_child,
+                token.front_child_lifted_key,
+            ),
+            back_child_lifted=_node_child_lookup(
+                past,
+                node_context,
+                "node_back_child_lifted",
+                token.is_back_child,
+                token.back_child_lifted_key,
             ),
             bbox_top_front=_node_value_lookup(
                 past,

@@ -118,7 +118,20 @@ class BspTraversal:
         side_table = SideTable.publish(past, inp)
         enter_child = _node_first_child(scene, side_table, inp.enter_node)
         between_child = _node_second_child(scene, side_table, inp.between_node)
-        edges = TraversalEdges.publish(past, inp, enter_child, between_child)
+        enter_child_lifted = _node_first_child_lifted(
+            scene, side_table, inp.enter_node
+        )
+        between_child_lifted = _node_second_child_lifted(
+            scene, side_table, inp.between_node
+        )
+        edges = TraversalEdges.publish(
+            past,
+            inp,
+            enter_child,
+            between_child,
+            enter_child_lifted,
+            between_child_lifted,
+        )
         between_side = side_table.pick(inp.between_node)
         bbox = BBoxPruner.publish(
             past,
@@ -273,4 +286,29 @@ def _node_second_child(scene: SceneIndex, side_table: SideTable, node: Node) -> 
     side = side_table.pick(node)
     front_child = scene.nodes.front_child(node)
     back_child = scene.nodes.back_child(node)
+    return select(side, back_child, front_child)
+
+
+def _node_first_child_lifted(
+    scene: SceneIndex, side_table: SideTable, node: Node
+) -> Node:
+    """The first child's width-3 lifted key, mirroring `_node_first_child`.
+
+    The scalar `_node_first_child` chooses the child id by player side; this
+    chooses the same child's `[id, -id^2, 1]` producer key so the traversal
+    edge can publish it without re-deriving the square from a computed id.
+    """
+    side = side_table.pick(node)
+    front_child = scene.nodes.front_child_lifted(node)
+    back_child = scene.nodes.back_child_lifted(node)
+    return select(side, front_child, back_child)
+
+
+def _node_second_child_lifted(
+    scene: SceneIndex, side_table: SideTable, node: Node
+) -> Node:
+    """The second child's width-3 lifted key, mirroring `_node_second_child`."""
+    side = side_table.pick(node)
+    front_child = scene.nodes.front_child_lifted(node)
+    back_child = scene.nodes.back_child_lifted(node)
     return select(side, back_child, front_child)

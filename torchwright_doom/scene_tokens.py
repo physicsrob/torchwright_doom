@@ -271,6 +271,29 @@ class SceneTokenView:
         """The encoded back-child entity from a NODE_BACK_CHILD token."""
         return NODE_BACK_CHILD.extract(self.input_vec, "child_u")
 
+    @cached_property
+    def front_child_lifted_key(self) -> Node:
+        """The front child's lifted equality key ``[child, -child^2, 1]``.
+
+        The ``id_lifted_key`` derived span is declared on both NODE child
+        slots (and the structural id slots). Each ``(type, slot, name)``
+        declaration owns its own span, so on a NODE_FRONT_CHILD row only the
+        front-child span is non-zero and this read recovers that key; on any
+        other row it is the off-type zero. Mirrors ``front_child_u`` but in
+        the width-3 lifted form used as a producer key.
+        """
+        return extract_derived(self.input_vec, ID_LIFTED_KEY_DERIVED_NAME)
+
+    @cached_property
+    def back_child_lifted_key(self) -> Node:
+        """The back child's lifted equality key ``[child, -child^2, 1]``.
+
+        See ``front_child_lifted_key``: on a NODE_BACK_CHILD row only the
+        back-child span carries the value, so this read recovers the back
+        child's key. Mirrors ``back_child_u`` in the width-3 lifted form.
+        """
+        return extract_derived(self.input_vec, ID_LIFTED_KEY_DERIVED_NAME)
+
     def value_after(self, marker_type: TokenType) -> Node:
         """Mask scalar VALUE payloads that immediately follow `marker_type`.
 

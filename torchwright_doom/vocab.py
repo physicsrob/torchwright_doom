@@ -303,8 +303,14 @@ NODE_PY = TokenType("node.y")
 NODE_DX = TokenType("node.dx")
 NODE_DY = TokenType("node.dy")
 
-NODE_FRONT_CHILD = TokenType("node.child1", slots={"child_u": IntSlot(0, N_ENTITY_MAX)})
-NODE_BACK_CHILD = TokenType("node.child0", slots={"child_u": IntSlot(0, N_ENTITY_MAX)})
+NODE_FRONT_CHILD = TokenType(
+    "node.child1",
+    slots={"child_u": IntSlot(0, N_ENTITY_MAX, derived=_ID_LIFTED_KEY_DERIVED)},
+)
+NODE_BACK_CHILD = TokenType(
+    "node.child0",
+    slots={"child_u": IntSlot(0, N_ENTITY_MAX, derived=_ID_LIFTED_KEY_DERIVED)},
+)
 
 BBOX_TOP_FRONT = TokenType("node.bbox1.top")
 BBOX_BOT_FRONT = TokenType("node.bbox1.bottom")
