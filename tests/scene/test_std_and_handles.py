@@ -17,6 +17,7 @@ from torchwright_doom.attention_handles import (
     KeyMarkerHandle,
     KeyPresenceLookup,
     KeyValueHandle,
+    LiftedKeyPresenceHandle,
     LiftedKeyValueHandle,
     OptionalKeyValueHandle,
     OptionalKeyValueLookup,
@@ -196,3 +197,47 @@ def test_optional_lookup_value_and_presence() -> None:
     assert _val(lookup.present(std.constant(4.0)), n, inputs)[
         -1
     ].item() == pytest.approx(-1.0, abs=1e-2)
+
+
+def test_lifted_presence_detects_present_and_absent() -> None:
+    """Lifted presence: an exact id reads PRESENT (+1); an absent id (whose
+    nearest published neighbour is returned) reads ABSENT (-1)."""
+    past = _fresh_past()
+    active = create_input("active", 1)
+    lkey = create_input("lkey", 3)
+    idn = create_input("id", 1)
+    handle = LiftedKeyPresenceHandle.publish(past, "lp", active, lkey, idn)
+    present_2 = handle.present(past, std.constant(2.0))
+    present_4 = handle.present(past, std.constant(4.0))
+    n = 4
+    inputs = {
+        "active": torch.tensor([[1.0], [1.0], [1.0], [-1.0]]),
+        # lifted keys [id, -id^2, 1] for ids 0, 1, 2; row 3 inactive.
+        "lkey": torch.tensor(
+            [[0.0, 0.0, 1.0], [1.0, -1.0, 1.0], [2.0, -4.0, 1.0], [0.0, 0.0, 1.0]]
+        ),
+        "id": torch.tensor([[0.0], [1.0], [2.0], [0.0]]),
+    }
+    assert _val(present_2, n, inputs)[-1].item() == pytest.approx(1.0, abs=1e-2)
+    assert _val(present_4, n, inputs)[-1].item() == pytest.approx(-1.0, abs=1e-2)
+
+
+def test_lifted_presence_empty_publishers_q0_reads_absent() -> None:
+    """Hardening regression (from the Codex review of 724c48a): with NO active
+    publisher, a q=0 probe must read ABSENT. Inactive rows publish a sentinel id,
+    so the blended recovery over the zero-key rows is the sentinel (not 0) and
+    ``same_int(sentinel, 0)`` is -1. Without the sentinel this would blend to 0
+    and falsely read PRESENT."""
+    past = _fresh_past()
+    active = create_input("active", 1)
+    lkey = create_input("lkey", 3)
+    idn = create_input("id", 1)
+    handle = LiftedKeyPresenceHandle.publish(past, "lp0", active, lkey, idn)
+    present_0 = handle.present(past, std.constant(0.0))
+    n = 4
+    inputs = {
+        "active": torch.tensor([[-1.0], [-1.0], [-1.0], [-1.0]]),  # no publishers
+        "lkey": torch.zeros(4, 3),
+        "id": torch.zeros(4, 1),  # raw id 0; the sentinel is applied in publish()
+    }
+    assert _val(present_0, n, inputs)[-1].item() == pytest.approx(-1.0, abs=1e-2)

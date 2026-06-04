@@ -29,7 +29,7 @@ from torchwright.graph import Node
 from .past import GraphPast, PastHandle, PastHandleScope
 from .render_constants import MATCH_GAIN_LONG
 from .render_ops import MARKER_PRESENT, same_int
-from .std import concat, constant, gate, linear, one_hot
+from .std import concat, constant, gate, linear, one_hot, select
 
 PastLike: TypeAlias = GraphPast | PastHandleScope
 
@@ -348,6 +348,13 @@ class KeyPresenceLookup:
 _PRESENCE_OFFSET = 20000.0
 _LIFTED_PRESENCE_QUERY = [[2.0, 0.0, 0.0], [0.0, 1.0, _PRESENCE_OFFSET]]
 
+# Sentinel id published on INACTIVE rows of a lifted presence lookup. Any value
+# that can never equal a valid (non-negative) query id works. It keeps the
+# degenerate empty-publisher case correct: if no active producer exists, every
+# key scores 0, the softmax blends the inactive rows, and the recovered id must
+# read ABSENT rather than blending to 0 and falsely matching a q=0 probe.
+_ABSENT_ID_SENTINEL = -1.0
+
 
 def lifted_presence_query(query_id: Node) -> Node:
     """Query ``[2q, 1, K]`` for lifted-equality presence detection.
@@ -382,7 +389,15 @@ class LiftedKeyPresenceHandle:
     ) -> "LiftedKeyPresenceHandle":
         return cls(
             key=past.publish(f"{name}_key", gate(active, lifted_key)),
-            id_value=past.publish(f"{name}_id", id_scalar),
+            # Active rows publish the real id; inactive rows publish a sentinel
+            # (not 0) so a degenerate query against an empty publisher set
+            # recovers the sentinel and reads ABSENT -- never a false PRESENT at
+            # q == 0. (q=0 is unreachable from current call sites, but this makes
+            # presence correct by construction, not by call-site luck.)
+            id_value=past.publish(
+                f"{name}_id",
+                select(active, id_scalar, constant(_ABSENT_ID_SENTINEL)),
+            ),
         )
 
     def present(self, past: PastLike, query_id: Node) -> Node:
