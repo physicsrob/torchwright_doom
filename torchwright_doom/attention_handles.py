@@ -28,7 +28,7 @@ from torchwright.graph import Node
 
 from .past import GraphPast, PastHandle, PastHandleScope
 from .render_constants import MATCH_GAIN_LONG
-from .render_ops import MARKER_PRESENT
+from .render_ops import MARKER_PRESENT, same_int
 from .std import concat, constant, gate, linear, one_hot
 
 PastLike: TypeAlias = GraphPast | PastHandleScope
@@ -331,3 +331,74 @@ class KeyPresenceLookup:
         """Read whether a marker was published at ``query_id``."""
         marker = self.handle.pick(self.past, query_id, self.width)
         return MARKER_PRESENT(marker)
+
+
+# Presence query offset. A one-hot presence key detects absence cleanly (an
+# absent query scores 0 against every key). A lifted-equality key has no
+# "no-match" state -- it always returns the NEAREST id, scoring positive -- so
+# absence is detected by recovering the matched row's id and testing equality
+# to the query. For that recovery to be robust the winning row must always be a
+# real (active) producer, never a gated-zero inactive row: an inactive row
+# scores 0, while an active row scores ``K + q^2 - (id-q)^2``. The offset ``K``
+# must exceed the largest ``(id-q)^2`` gap (max id ~128 -> 128^2 = 16384) so the
+# nearest present id always outscores inactive rows even at q=0 (where the bare
+# 1 + q^2 ~ 1 would tie them and blend the recovered id). K is common-mode
+# across rows, so it leaves the match-vs-nearest margin at the >=1 logit unit of
+# the (id-q)^2 term.
+_PRESENCE_OFFSET = 20000.0
+_LIFTED_PRESENCE_QUERY = [[2.0, 0.0, 0.0], [0.0, 1.0, _PRESENCE_OFFSET]]
+
+
+def lifted_presence_query(query_id: Node) -> Node:
+    """Query ``[2q, 1, K]`` for lifted-equality presence detection.
+
+    Paired with a producer key ``[id, -id^2, 1]`` (the shared ``id_lifted_key``
+    derived) it scores ``K + q^2 - (id-q)^2``; see ``_PRESENCE_OFFSET``.
+    """
+    return linear(concat(query_id, constant(1.0)), _LIFTED_PRESENCE_QUERY)
+
+
+@dataclass(frozen=True)
+class LiftedKeyPresenceHandle:
+    """Lifted-equality presence test: recover the matched id, compare to query.
+
+    Replaces a width-``N`` ``one_hot`` presence key with the width-3 lifted key
+    ``[id, -id^2, 1]``. The recoverable ``id_value`` is the id itself; a lookup
+    recovers the nearest published id and the caller tests equality to the
+    query, so a missing id (whose nearest neighbour is returned) reads absent.
+    """
+
+    key: PastHandle
+    id_value: PastHandle
+
+    @classmethod
+    def publish(
+        cls,
+        past: PastLike,
+        name: str,
+        active: Node,
+        lifted_key: Node,
+        id_scalar: Node,
+    ) -> "LiftedKeyPresenceHandle":
+        return cls(
+            key=past.publish(f"{name}_key", gate(active, lifted_key)),
+            id_value=past.publish(f"{name}_id", id_scalar),
+        )
+
+    def present(self, past: PastLike, query_id: Node) -> Node:
+        """±1: was a producer with id == ``query_id`` published?"""
+        recovered = past.pick_argmax(
+            lifted_presence_query(query_id), self.key, self.id_value
+        )
+        return same_int(recovered, query_id)
+
+
+@dataclass(frozen=True)
+class LiftedKeyPresenceLookup:
+    """Callable lifted presence test returning a boolean (±1) presence value."""
+
+    past: PastLike
+    handle: LiftedKeyPresenceHandle
+
+    def __call__(self, query_id: Node) -> Node:
+        return self.handle.present(self.past, query_id)

@@ -38,10 +38,10 @@ from dataclasses import dataclass
 from torchwright.graph import Node
 
 from .attention_handles import (
-    KeyMarkerHandle,
-    KeyPresenceLookup,
     KeyValueHandle,
     KeyValueLookup,
+    LiftedKeyPresenceHandle,
+    LiftedKeyPresenceLookup,
     LiftedKeyValueHandle,
     LiftedKeyValueLookup,
     OptionalKeyValueHandle,
@@ -224,7 +224,7 @@ class NodeIndex:
     """
 
     has_any: Node
-    exists: KeyPresenceLookup
+    exists: LiftedKeyPresenceLookup
     root: Node
     px: LiftedKeyValueLookup
     py: LiftedKeyValueLookup
@@ -402,17 +402,25 @@ def _node_has_any(
     return past.pick_argmax(constant(1.0), node_context.header_active, node_value)
 
 
-def _node_presence_lookup(past: GraphPast, token: SceneTokenView) -> KeyPresenceLookup:
-    """Publish NODE presence keyed by node id."""
-    # The +1 gives early-exit setup a representable sentinel query when the
-    # current row is the last possible node id.
-    handle = KeyMarkerHandle.publish(
+def _node_presence_lookup(
+    past: GraphPast, token: SceneTokenView
+) -> LiftedKeyPresenceLookup:
+    """Publish NODE presence keyed by node id (lifted-equality, width-3 key).
+
+    Lifted form: recover the matched node id and test equality to the query
+    (see ``LiftedKeyPresenceHandle``). A sentinel/early-exit query id past the
+    last real node has no exact producer, so its nearest-neighbour recovery
+    reads absent -- the same answer the old ``+1`` one-hot sentinel slot gave,
+    without the width-65 key.
+    """
+    handle = LiftedKeyPresenceHandle.publish(
         past,
         "node_exists",
         token.is_node,
-        one_hot(token.node_j, N_NODES_MAX + 1),
+        token.id_lifted_key,
+        token.node_j,
     )
-    return KeyPresenceLookup(past, handle, N_NODES_MAX + 1)
+    return LiftedKeyPresenceLookup(past, handle)
 
 
 def _node_value_lookup(
@@ -511,7 +519,7 @@ class SegIndex:
     """
 
     subsector: LiftedKeyValueLookup
-    exists: KeyPresenceLookup
+    exists: LiftedKeyPresenceLookup
     ax: LiftedKeyValueLookup
     ay: LiftedKeyValueLookup
     bx: LiftedKeyValueLookup
@@ -755,17 +763,23 @@ def _seg_subsector_lookup(
     return LiftedKeyValueLookup(past, handle)
 
 
-def _seg_presence_lookup(past: GraphPast, token: SceneTokenView) -> KeyPresenceLookup:
-    """Publish SEG presence keyed by seg id."""
-    # The +1 gives `exists()` a harmless zero/sentinel address for
-    # non-SEG positions while preserving exact addresses for real segs.
-    handle = KeyMarkerHandle.publish(
+def _seg_presence_lookup(
+    past: GraphPast, token: SceneTokenView
+) -> LiftedKeyPresenceLookup:
+    """Publish SEG presence keyed by seg id (lifted-equality, width-3 key).
+
+    Lifted form: recover the matched seg id and test equality to the query (see
+    ``LiftedKeyPresenceHandle``). Replaces the width-129 one-hot key; a query
+    for an absent seg recovers its nearest neighbour and reads absent.
+    """
+    handle = LiftedKeyPresenceHandle.publish(
         past,
         "seg_exists",
         token.is_seg,
-        one_hot(token.seg_i, N_SEGS_MAX + 1),
+        token.id_lifted_key,
+        token.seg_i,
     )
-    return KeyPresenceLookup(past, handle, N_SEGS_MAX + 1)
+    return LiftedKeyPresenceLookup(past, handle)
 
 
 def _seg_value_lookup(
