@@ -272,25 +272,17 @@ class SceneTokenView:
         return NODE_BACK_CHILD.extract(self.input_vec, "child_u")
 
     @cached_property
-    def front_child_lifted_key(self) -> Node:
-        """The front child's lifted equality key ``[child, -child^2, 1]``.
+    def child_lifted_key(self) -> Node:
+        """This row's child lifted equality key ``[child, -child^2, 1]``.
 
-        The ``id_lifted_key`` derived span is declared on both NODE child
-        slots (and the structural id slots). Each ``(type, slot, name)``
-        declaration owns its own span, so on a NODE_FRONT_CHILD row only the
-        front-child span is non-zero and this read recovers that key; on any
-        other row it is the off-type zero. Mirrors ``front_child_u`` but in
-        the width-3 lifted form used as a producer key.
-        """
-        return extract_derived(self.input_vec, ID_LIFTED_KEY_DERIVED_NAME)
-
-    @cached_property
-    def back_child_lifted_key(self) -> Node:
-        """The back child's lifted equality key ``[child, -child^2, 1]``.
-
-        See ``front_child_lifted_key``: on a NODE_BACK_CHILD row only the
-        back-child span carries the value, so this read recovers the back
-        child's key. Mirrors ``back_child_u`` in the width-3 lifted form.
+        The ``id_lifted_key`` derived span is declared on both NODE child slots
+        (and the structural id slots). Each ``(type, slot, name)`` declaration
+        owns its own span, so on a NODE_FRONT_CHILD row this recovers the front
+        child's key and on a NODE_BACK_CHILD row the back child's; on any other
+        row it is the off-type zero. The front/back child lookups gate this read
+        by ``is_front_child`` / ``is_back_child``, so one accessor serves both.
+        Mirrors ``front_child_u`` / ``back_child_u`` in the width-3 lifted form
+        used as a producer key.
         """
         return extract_derived(self.input_vec, ID_LIFTED_KEY_DERIVED_NAME)
 

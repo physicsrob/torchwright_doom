@@ -304,14 +304,14 @@ class NodeIndex:
                 node_context,
                 "node_front_child_lifted",
                 token.is_front_child,
-                token.front_child_lifted_key,
+                token.child_lifted_key,
             ),
             back_child_lifted=_node_child_lookup(
                 past,
                 node_context,
                 "node_back_child_lifted",
                 token.is_back_child,
-                token.back_child_lifted_key,
+                token.child_lifted_key,
             ),
             bbox_top_front=_node_value_lookup(
                 past,
