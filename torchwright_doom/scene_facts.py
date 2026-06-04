@@ -44,8 +44,6 @@ from .attention_handles import (
     LiftedKeyPresenceLookup,
     LiftedKeyValueHandle,
     LiftedKeyValueLookup,
-    OptionalKeyValueHandle,
-    OptionalKeyValueLookup,
     ValidValueHandle,
 )
 from .past import GraphPast
@@ -467,7 +465,8 @@ class SubsectorIndex:
     The implementation only needs the first seg for each subsector.
     """
 
-    first_seg: OptionalKeyValueLookup
+    first_seg: LiftedKeyValueLookup
+    present: LiftedKeyPresenceLookup
 
     @classmethod
     def publish(
@@ -476,34 +475,41 @@ class SubsectorIndex:
         token: SceneTokenView,
         subsector_context: HeaderContext,
     ) -> "SubsectorIndex":
-        """Publish SS-backed channels and return subsector lookups."""
+        """Publish SS-backed channels and return subsector lookups.
+
+        Keyed by the lifted subsector id (``current_key`` = ``[ss,-ss^2,1]``,
+        already carried by the header context) instead of a width-64 one_hot.
+        The first-seg VALUE rides a lifted value lookup (queried only for present
+        subsectors, so the bare lifted query is fine); presence rides a lifted
+        presence lookup that recovers the matched subsector id and compares it to
+        the query (see ``LiftedKeyPresenceHandle``).
+        """
+        first_seg_mask = and_(
+            token.is_seg,
+            token.is_first_seg_of_subsector,
+        )
+        value_handle = LiftedKeyValueHandle.publish(
+            past,
+            "first_seg",
+            first_seg_mask,
+            subsector_context.current_key,
+            token.seg_i,
+        )
+        present_handle = LiftedKeyPresenceHandle.publish(
+            past,
+            "first_seg_present",
+            first_seg_mask,
+            subsector_context.current_key,
+            subsector_context.current_id,
+        )
         return cls(
-            first_seg=_first_seg_lookup(past, token, subsector_context),
+            first_seg=LiftedKeyValueLookup(past, value_handle),
+            present=LiftedKeyPresenceLookup(past, present_handle),
         )
 
     def has_first_seg(self, ss: Node) -> Node:
         """Return whether subsector `ss` has at least one SEG."""
-        return self.first_seg.present(ss)
-
-
-def _first_seg_lookup(
-    past: GraphPast,
-    token: SceneTokenView,
-    subsector_context: HeaderContext,
-) -> OptionalKeyValueLookup:
-    """Publish first-owned-SEG lookup keyed by current subsector."""
-    first_seg_mask = and_(
-        token.is_seg,
-        token.is_first_seg_of_subsector,
-    )
-    handle = OptionalKeyValueHandle.publish(
-        past,
-        "first_seg",
-        first_seg_mask,
-        one_hot(subsector_context.current_id, N_SUBSECTORS_MAX),
-        token.seg_i,
-    )
-    return OptionalKeyValueLookup(past, handle, N_SUBSECTORS_MAX)
+        return self.present(ss)
 
 
 @dataclass(frozen=True)
