@@ -29,7 +29,6 @@ validation belongs on a larger machine. The in-process free-run on a tiny scene
 from __future__ import annotations
 
 import os
-import tempfile
 
 import onnx
 
@@ -43,7 +42,9 @@ from torchwright_doom.render_main import forward
 # compile_to_onnx streams, so d only sets the cramming point, not peak memory.
 # d=6400, d_head=160 (a multiple of 160; covers the widest attention key — the
 # traversal-edge one-hot of width N_ENTITY_MAX + N_DEPTH_MAX = 145). At the
-# fanout=8 dispatch this lands ~44 layers.
+# fanout=8 dispatch this lands ~34 layers (was ~44 before the world-angle
+# 4-atans-to-1 collapse — the three eliminated 1024-wide atans had forced the
+# scheduler to spread the dispatch across more layers under width pressure).
 _D = 6400
 _D_HEAD = 160
 
@@ -76,8 +77,11 @@ def test_forward_compiles_to_onnx(tmp_path) -> None:
     assert "past_len" in in_names, in_names
     assert "logits" in out_names, out_names
 
-    # Layer count: the fanout=8 dispatch reduction lands ~44 (was ~66 at fanout=2,
-    # ~32 flat). A band catches both a fanout regression (back to ~66) and a
-    # blow-up, without pinning an exact number.
+    # Layer count: the fanout=8 dispatch reduction lands ~34 after the
+    # world-angle 4-atans-to-1 collapse (was ~44 before it; ~66 at fanout=2). A
+    # ±8 band around the expected count catches a fanout regression (back toward
+    # ~66) or a blow-up while tolerating scheduler jitter — and, tightened here,
+    # also catches a regression that merely undoes this collapse's depth win
+    # (the old 48 ceiling would have let ~44 slip through).
     n_layers = sum(1 for n in in_names if n.startswith("past_K_"))
-    assert 36 <= n_layers <= 52, f"unexpected compiled layer count {n_layers}"
+    assert 26 <= n_layers <= 42, f"unexpected compiled layer count {n_layers}"

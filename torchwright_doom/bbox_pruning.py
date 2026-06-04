@@ -46,14 +46,15 @@ from .render_ops import (
     max_screen,
     min_screen,
     one_minus,
-    signed_world_angle,
     sub,
     wrap_signed_angle,
 )
 from .scene_index import SceneIndex
 from .solid_intervals import SolidIntervals
 from .std import (
+    AngleInputEmit,
     ScalarEmit,
+    angle_inputs,
     angle_scalar,
     bool_or,
     bool_to_01,
@@ -339,7 +340,7 @@ class BBoxPruner:
             self._corner_y(self.inp.boxpos_check_a_y_bottom),
         )
 
-    def after_world_angle_mark_a(self) -> ScalarEmit:
+    def after_world_angle_mark_a(self) -> AngleInputEmit:
         return self._world_angle_mark_out()
 
     def after_theta_mark_a(self) -> ScalarEmit:
@@ -357,7 +358,7 @@ class BBoxPruner:
             self._corner_y(self.inp.boxpos_check_b_y_bottom),
         )
 
-    def after_world_angle_mark_b(self) -> ScalarEmit:
+    def after_world_angle_mark_b(self) -> AngleInputEmit:
         return self._world_angle_mark_out()
 
     def after_theta_mark_b(self) -> ScalarEmit:
@@ -480,12 +481,12 @@ class BBoxPruner:
     def _recent_boxpos(self) -> Node:
         return self.boxpos_row.pick(self.past, self.input_boxpos_or_zero)
 
-    def _world_angle_mark_out(self) -> ScalarEmit:
+    def _world_angle_mark_out(self) -> AngleInputEmit:
         vx = self.corner_x_row.pick(self.past, self.input_bbox_coord_or_zero)
         vy = self.corner_y_row.pick(self.past, self.input_bbox_coord_or_zero)
         dx = sub(vx, self.scene.view.x)
         dy = sub(vy, self.scene.view.y)
-        return angle_scalar(signed_world_angle(dx, dy))
+        return angle_inputs(dx, dy)
 
     def _theta_mark_out(self) -> ScalarEmit:
         world_angle = self.world_angle_row.pick(self.past, self.input_angle_or_zero)

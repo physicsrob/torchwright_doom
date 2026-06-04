@@ -115,6 +115,8 @@ __all__ = [
     "ScalarEmit",
     "value_scalar",
     "angle_scalar",
+    "AngleInputEmit",
+    "angle_inputs",
 ]
 
 
@@ -171,6 +173,49 @@ def angle_scalar(angle: Node) -> ScalarEmit:
     from .vocab import ANGLE_VALUE
 
     return ScalarEmit(ANGLE_VALUE, angle)
+
+
+# ---------------------------------------------------------------------------
+# Route-then-atan-once: deferred world-angle atan2 inputs
+# ---------------------------------------------------------------------------
+#
+# ``signed_world_angle`` (the graph's R_PointToAngle atan2) is the widest
+# computation in ``forward()`` — its 1024-wide ray/scale/count nodes drive the
+# residual-stream peak. The 4 world-angle branches (the two seg endpoints and the
+# two bbox corners) each used to run their OWN atan, but exactly one of the 4
+# branch predicates is +1 per position (mutual exclusivity, guaranteed by the
+# protocol), so 3 of the 4 atans are pure waste.
+#
+# Instead, a world-angle ``after_*`` returns just its endpoint's ``(dx, dy)``
+# wrapped in an :class:`AngleInputEmit`. The dispatch
+# (``render_main._collapse_world_angle_inputs``) picks the active branch's pair
+# by its one-hot predicate (float-exact) and runs ONE ``signed_world_angle``,
+# then re-wraps the result as an ``ANGLE_VALUE`` :class:`ScalarEmit` so the
+# existing :func:`angle_scalar` collapse folds it into the one shared
+# digit-quad head. 8 ray-halves (4 sites × tan/cot) → 2. The emitted angle is
+# byte-identical: the picked pair is the winning branch's pair bit-for-bit and
+# the single atan is deterministic.
+
+
+@dataclass(frozen=True)
+class AngleInputEmit:
+    """A world-angle branch's deferred atan2 inputs (``dx``, ``dy``). The
+    dispatch picks the active branch's pair by its one-hot predicate
+    (float-exact) and runs ONE :func:`signed_world_angle`, then re-wraps as
+    :class:`ScalarEmit` ``(ANGLE_VALUE)``. See the module note above."""
+
+    dx: Node
+    dy: Node
+
+
+def angle_inputs(dx: Node, dy: Node) -> AngleInputEmit:
+    """A world-angle branch's deferred atan2 inputs (the endpoint-minus-view
+    ``(dx, dy)``).
+
+    Drop-in for ``angle_scalar(signed_world_angle(dx, dy))`` at a branch
+    ``after_*`` emitter — the atan is deferred to dispatch time and run once
+    over the picked active pair instead of once per branch."""
+    return AngleInputEmit(dx, dy)
 
 
 def head_width() -> int:

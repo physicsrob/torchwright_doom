@@ -31,12 +31,18 @@ from .render_ops import (
     min_screen,
     one_minus,
     same_int,
-    signed_world_angle,
     sub,
     wrap_signed_angle,
 )
 from .seg_cycle import dispatch_projection_angle_phase
-from .std import ScalarEmit, angle_scalar, make_token_head, select
+from .std import (
+    AngleInputEmit,
+    ScalarEmit,
+    angle_inputs,
+    angle_scalar,
+    make_token_head,
+    select,
+)
 from .vocab import (
     ADVANCE_SEG,
     EMIT_X2,
@@ -93,16 +99,16 @@ class SegScanner:
             self.advance_after_current_process_seg(),
         )
 
-    def after_world_angle_mark_a(self) -> ScalarEmit:
-        """Emit ANGLE_VALUE(world_a) for endpoint A."""
+    def after_world_angle_mark_a(self) -> AngleInputEmit:
+        """Defer the ANGLE_VALUE(world_a) atan2 inputs for endpoint A."""
         return self.world_angle_mark_out(is_b_side=False)
 
     def after_theta_mark_a(self) -> ScalarEmit:
         """Emit ANGLE_VALUE(theta_a) from the previous world angle."""
         return self.theta_mark_out()
 
-    def after_world_angle_mark_b(self) -> ScalarEmit:
-        """Emit ANGLE_VALUE(world_b) for endpoint B."""
+    def after_world_angle_mark_b(self) -> AngleInputEmit:
+        """Defer the ANGLE_VALUE(world_b) atan2 inputs for endpoint B."""
         return self.world_angle_mark_out(is_b_side=True)
 
     def after_theta_mark_b(self) -> ScalarEmit:
@@ -203,8 +209,12 @@ class SegScanner:
         )
 
     # DOOM: R_AddLine endpoint angle computation (r_bsp.c line 271-272, R_PointToAngle calls)
-    def world_angle_mark_out(self, is_b_side: bool) -> ScalarEmit:
-        """Run one endpoint's atan2 chain and emit ANGLE_VALUE(world_*)."""
+    def world_angle_mark_out(self, is_b_side: bool) -> AngleInputEmit:
+        """Defer one endpoint's atan2 inputs for ANGLE_VALUE(world_*).
+
+        Returns the endpoint-minus-view ``(dx, dy)``; the dispatch picks the
+        active world-angle branch's pair and runs ONE ``signed_world_angle``
+        (see :func:`angle_inputs`)."""
         projection = self.projection
         scene = projection.core.scene
         seg_id = projection.seg.cycle.seg_id
@@ -214,8 +224,7 @@ class SegScanner:
             vx, vy = scene.segs.endpoint_a(seg_id)
         dx = sub(vx, scene.view.x)
         dy = sub(vy, scene.view.y)
-        world_angle = signed_world_angle(dx, dy)
-        return angle_scalar(world_angle)
+        return angle_inputs(dx, dy)
 
     # DOOM: player-relative angle conversion (r_bsp.c:R_AddLine lines 284-285)
     def theta_mark_out(self) -> ScalarEmit:

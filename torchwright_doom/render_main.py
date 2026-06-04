@@ -47,14 +47,18 @@ from .past import GraphPast, PastHandleScope
 from .payload_router import PayloadRouter
 from .protocol_registry import DISPATCH_TRANSITIONS
 from .protocol_tokens import ProtocolTokenView
+from .render_ops import _ATAN_ABS_RANGE, signed_world_angle
 from .scene_index import SceneIndex
 from .seg_projection import SegProjection
 from .seg_scanner import SegScanner
 from .solid_intervals import SolidIntervals
 from .std import (
+    AngleInputEmit,
     ScalarEmit,
+    angle_scalar,
     bool_or,
     bool_to_01,
+    clamp,
     clamp_to_slot,
     concat,
     make_token_head,
@@ -176,6 +180,31 @@ def dispatch_next_token(
     return concat(head, emit_derived_zero())
 
 
+def _group_by_value(pairs: list[tuple[Node, Node]]) -> list[tuple[Node, Node]]:
+    """Collapse ``(value, ±1-predicate)`` pairs sharing the SAME value node into
+    one ``(value, predicate)`` entry per distinct value — first-seen order, the
+    grouped predicate being the OR of the pairs that share that value.
+
+    The shared core of both dispatch picks: :func:`_distinct_head_pairs` groups the
+    emit *heads* a transition selects, and :func:`_collapse_scalar_emits` groups a
+    carrier's branch *scalars* (the world-angle pre-pass points all four world
+    branches at one shared atan, so their four pairs collapse to one). Because
+    exactly one input predicate is +1 per position, the OR is +1 iff any grouped
+    pair fires — one-hot is preserved."""
+    groups: dict[int, tuple[Node, list[Node]]] = {}
+    order: list[int] = []
+    for value, pred in pairs:
+        key = id(value)
+        if key not in groups:
+            groups[key] = (value, [])
+            order.append(key)
+        groups[key][1].append(pred)
+    return [
+        (value, preds[0] if len(preds) == 1 else bool_or(*preds))
+        for value, preds in (groups[key] for key in order)
+    ]
+
+
 def _distinct_head_pairs(
     inp: ProtocolTokenView,
     branches: BranchOutputs,
@@ -183,20 +212,10 @@ def _distinct_head_pairs(
     """Group transitions by the head node they select, OR-ing the predicates of
     transitions that share a head. Returns one ``(predicate, head)`` pair per
     distinct head, in first-seen order — the input to ``type_switch``."""
-    groups: dict[int, tuple[Node, list[Node]]] = {}
-    order: list[int] = []
-    for transition in DISPATCH_TRANSITIONS:
-        cond = getattr(inp, transition.predicate)
-        head = branches[transition.branch]
-        key = id(head)
-        if key not in groups:
-            groups[key] = (head, [])
-            order.append(key)
-        groups[key][1].append(cond)
-    return tuple(
-        (conds[0] if len(conds) == 1 else bool_or(*conds), head)
-        for head, conds in (groups[key] for key in order)
-    )
+    pairs = [
+        (branches[t.branch], getattr(inp, t.predicate)) for t in DISPATCH_TRANSITIONS
+    ]
+    return tuple((pred, head) for head, pred in _group_by_value(pairs))
 
 
 # DOOM: R_RenderPlayerView (r_main.c) — top-level per-frame render dispatch
@@ -239,9 +258,13 @@ def build_branch_outputs(
     Values are emit *heads* (``make_token_head`` / ``after_*``), not full rows;
     the dispatch stamps the shared derived tail after selection. Numeric-carrier
     branches (``VALUE`` / ``ANGLE_VALUE``) instead return a :class:`ScalarEmit`
-    (just their 1-wide scalar); :func:`_collapse_scalar_emits` folds all branches
-    of a carrier into ONE shared digit-quad head before returning, so the dict
-    handed to the dispatch is again ``branch -> head Node`` everywhere.
+    (just their 1-wide scalar); the four world-angle branches return an
+    :class:`AngleInputEmit` (just their atan2 ``(dx, dy)``). Two collapse passes
+    fold these back to ``branch -> head Node`` before returning:
+    :func:`_collapse_world_angle_inputs` routes the four deferred atan inputs to
+    ONE shared :func:`signed_world_angle` (re-wrapped as an ``ANGLE_VALUE``
+    ``ScalarEmit``), then :func:`_collapse_scalar_emits` folds every carrier's
+    branches into ONE shared digit-quad head.
     """
     no_op_out = make_token_head(NO_OP)
     traversal = protocols.traversal
@@ -249,7 +272,7 @@ def build_branch_outputs(
     payload_router = protocols.payload_router
     seg_scan = SegScanner(projection)
     wall_range = WallRangeBuilder(projection)
-    branches: dict[str, "Node | ScalarEmit"] = {
+    branches: dict[str, "Node | ScalarEmit | AngleInputEmit"] = {
         # Inert / begin.
         "no_op": no_op_out,
         "done": make_token_head(DONE),
@@ -307,7 +330,92 @@ def build_branch_outputs(
     # the one NO_OP head.
     for transition in DISPATCH_TRANSITIONS:
         branches.setdefault(transition.branch, no_op_out)
-    return _collapse_scalar_emits(inp, branches)
+    # Route the four world-angle branches' deferred atan inputs to one shared
+    # atan (4 atans -> 1), then collapse every numeric carrier to one head.
+    collapsed = _collapse_world_angle_inputs(inp, branches)
+    return _collapse_scalar_emits(inp, collapsed)
+
+
+def _branch_predicates(inp: ProtocolTokenView) -> dict[str, list[Node]]:
+    """Map each dispatch branch to its transition predicate node(s), read off
+    ``inp`` exactly as :func:`_distinct_head_pairs` does.
+
+    A branch reached by more than one transition accumulates one predicate per
+    transition (the caller ORs them). Shared by both collapse passes
+    (:func:`_collapse_world_angle_inputs`, :func:`_collapse_scalar_emits`) so they
+    mask on identical predicates."""
+    branch_preds: dict[str, list[Node]] = defaultdict(list)
+    for transition in DISPATCH_TRANSITIONS:
+        branch_preds[transition.branch].append(getattr(inp, transition.predicate))
+    return branch_preds
+
+
+def _one_hot_predicate(branch_preds: Mapping[str, list[Node]], name: str) -> Node:
+    """The single ±1 dispatch predicate for branch ``name`` — the OR of every
+    transition that selects it. Exactly one branch's predicate is +1 per
+    position, so the masks built from these are one-hot at the active row."""
+    conds = branch_preds[name]
+    assert conds, f"branch {name!r} has no dispatch-transition predicate"
+    return conds[0] if len(conds) == 1 else bool_or(*conds)
+
+
+def _collapse_world_angle_inputs(
+    inp: ProtocolTokenView,
+    branches: Mapping[str, "Node | ScalarEmit | AngleInputEmit"],
+) -> dict[str, "Node | ScalarEmit"]:
+    """Route the four world-angle branches' deferred atan2 inputs to ONE shared
+    :func:`signed_world_angle` — the 4-atans-to-1 collapse (see the module note in
+    ``emit.py``). ``signed_world_angle`` is the widest computation in
+    ``forward()``; only one of the four world-angle branches is ever the live
+    output, so three of the four atans are pure waste.
+
+    Each world-angle branch (``world_a`` / ``world_b`` / ``bbox_world_a`` /
+    ``bbox_world_b``) returns its endpoint's ``(dx, dy)`` wrapped in an
+    :class:`AngleInputEmit` instead of running its own atan. Exactly one of the
+    four branch predicates is +1 per position (mutual exclusivity), so the active
+    branch's ``(dx, dy)`` is picked float-exact (``pick_by_one_hot``,
+    ``approximate=False``) and a single ``signed_world_angle`` runs over the
+    winning pair. The angle is re-wrapped as an ``ANGLE_VALUE`` :class:`ScalarEmit`
+    at all four branch keys, so the downstream :func:`_collapse_scalar_emits` folds
+    them into the one shared ANGLE_VALUE head exactly as before. Byte-identical at
+    the active row; 8 ray-halves (4 sites × tan/cot) → 2.
+
+    The discriminator is ``isinstance(out, AngleInputEmit)`` — **not** the
+    ``"projection_angle"`` / ``"bbox_angle"`` payload group, which also tags the
+    four *theta* branches. Theta reads the emitted world angle back and applies
+    ``wrap_signed_angle`` (not an atan), so it must stay its own ``ScalarEmit``.
+    """
+    members = [
+        (name, out)
+        for name, out in branches.items()
+        if isinstance(out, AngleInputEmit)
+    ]
+    if not members:
+        return dict(branches)
+
+    branch_preds = _branch_predicates(inp)
+    mask = concat(
+        *[bool_to_01(_one_hot_predicate(branch_preds, name)) for name, _e in members]
+    )
+
+    # Clamp each candidate (dx, dy) to the atan's ±3072 square BEFORE the pick.
+    # The raw `dx = sub(vertex, view)` carries a tracked value_range wider than
+    # 3072, which would blow `broadcast_select`'s additive offset past its sanity
+    # bound. Byte-identical at the active row: `signed_world_angle` re-clamps to
+    # the same ±3072 internally via `_abs_coord`, so the clamp is idempotent there.
+    dxs = [clamp(emit.dx, -_ATAN_ABS_RANGE, _ATAN_ABS_RANGE) for _n, emit in members]
+    dys = [clamp(emit.dy, -_ATAN_ABS_RANGE, _ATAN_ABS_RANGE) for _n, emit in members]
+    # Two d_fill=1 picks sharing the SAME mask — simpler than one d_fill=2 pick +
+    # split (no slot-major interleave), and the second pick's cost is negligible
+    # against the 1024-wide atan. Both are float-exact at the active row.
+    picked_dx = pick_by_one_hot(mask, concat(*dxs), d_fill=1)
+    picked_dy = pick_by_one_hot(mask, concat(*dys), d_fill=1)
+
+    shared = angle_scalar(signed_world_angle(picked_dx, picked_dy))
+    return {
+        name: (shared if isinstance(out, AngleInputEmit) else out)
+        for name, out in branches.items()
+    }
 
 
 def _collapse_scalar_emits(
@@ -334,9 +442,7 @@ def _collapse_scalar_emits(
     the single shared quantization, on a row where exactly one predicate fires.
     """
     # branch -> its dispatch predicate(s), read exactly as _distinct_head_pairs.
-    branch_preds: dict[str, list[Node]] = defaultdict(list)
-    for transition in DISPATCH_TRANSITIONS:
-        branch_preds[transition.branch].append(getattr(inp, transition.predicate))
+    branch_preds = _branch_predicates(inp)
 
     # Group the ScalarEmit branches by carrier, in first-seen branch order.
     by_carrier: dict[int, list[tuple[str, ScalarEmit]]] = {}
@@ -348,17 +454,23 @@ def _collapse_scalar_emits(
     for members in by_carrier.values():
         carrier = members[0][1].carrier
         (slot_name,) = carrier.slots  # VALUE -> "v"; ANGLE_VALUE -> "angle"
-        preds: list[Node] = []
-        for name, _emit in members:
-            conds = branch_preds[name]
-            assert conds, f"branch {name!r} has no dispatch-transition predicate"
-            preds.append(conds[0] if len(conds) == 1 else bool_or(*conds))
-        mask = concat(*[bool_to_01(p) for p in preds])
+        # Collapse members that share the SAME scalar node into one pick entry:
+        # the world-angle pre-pass points all four world branches at one shared
+        # atan, so they would otherwise build four identical table entries. The
+        # per-branch VALUE carriers each carry a distinct scalar, so this is a
+        # no-op for them. (Mirrors _distinct_head_pairs' head grouping.)
+        grouped = _group_by_value(
+            [
+                (emit.scalar, _one_hot_predicate(branch_preds, name))
+                for name, emit in members
+            ]
+        )
+        mask = concat(*[bool_to_01(pred) for _scalar, pred in grouped])
         # Clamp each candidate to the slot range BEFORE the pick so the
         # broadcast_select offset stays the slot's magnitude (an un-clamped
         # angle's value_type is ±millions); byte-identical at the winning row.
         table = concat(
-            *[clamp_to_slot(carrier, slot_name, emit.scalar) for _name, emit in members]
+            *[clamp_to_slot(carrier, slot_name, scalar) for scalar, _pred in grouped]
         )
         picked = pick_by_one_hot(mask, table, d_fill=1)
         head = make_token_head(carrier, **{slot_name: picked})

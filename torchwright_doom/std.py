@@ -36,7 +36,13 @@ from torchwright.ops.map_select import (
     switch as _switch,
 )
 
-from .emit import ScalarEmit, angle_scalar, value_scalar
+from .emit import (
+    AngleInputEmit,
+    ScalarEmit,
+    angle_inputs,
+    angle_scalar,
+    value_scalar,
+)
 from .extract import extract_derived, indicator_to_bool
 from .tokens import FloatSlot, IntSlot, TokenType
 
@@ -58,10 +64,13 @@ __all__ = [
     "extract_derived",
     "indicator_to_bool",
     "pick_by_one_hot",
+    "clamp",
     "clamp_to_slot",
     "ScalarEmit",
     "value_scalar",
     "angle_scalar",
+    "AngleInputEmit",
+    "angle_inputs",
 ]
 
 
@@ -283,6 +292,17 @@ def make_token_head(token_type: TokenType, **slot_value_nodes: Node) -> Node:
     return emit_token_head(
         token_type, **_clamp_slot_values(token_type, slot_value_nodes)
     )
+
+
+def clamp(node: Node, lo: float, hi: float) -> Node:
+    """Clamp a 1-wide scalar to ``[lo, hi]`` in one MLP sublayer.
+
+    A thin re-export of :func:`torchwright.ops.arithmetic_ops.clamp`, so a
+    ported renderer file reaches its clamp through the same sandbox-api-equivalent
+    ``std`` surface as its other ops instead of importing ``torchwright.ops``
+    directly. Used by the dispatch's world-angle collapse to pin each candidate
+    ``(dx, dy)`` to the atan square before the float-exact pick."""
+    return _clamp(node, lo, hi)
 
 
 def clamp_to_slot(token_type: TokenType, slot_name: str, value: Node) -> Node:

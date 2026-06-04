@@ -38,6 +38,7 @@ from .render_ops import IS_SUBSECTOR, SIDE_POSITIVE, add_const, mul_side, sub
 from .scene_index import SceneIndex
 from .solid_intervals import SolidIntervals
 from .std import (
+    AngleInputEmit,
     ScalarEmit,
     bool_to_01,
     constant,
@@ -215,13 +216,13 @@ class BspTraversal:
     def after_bbox_corner_y_mark_b(self) -> ScalarEmit:
         return self.bbox.after_corner_y_mark_b()
 
-    def after_bbox_world_angle_mark_a(self) -> ScalarEmit:
+    def after_bbox_world_angle_mark_a(self) -> AngleInputEmit:
         return self.bbox.after_world_angle_mark_a()
 
     def after_bbox_theta_mark_a(self) -> ScalarEmit:
         return self.bbox.after_theta_mark_a()
 
-    def after_bbox_world_angle_mark_b(self) -> ScalarEmit:
+    def after_bbox_world_angle_mark_b(self) -> AngleInputEmit:
         return self.bbox.after_world_angle_mark_b()
 
     def after_bbox_theta_mark_b(self) -> ScalarEmit:
