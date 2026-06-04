@@ -166,8 +166,8 @@ def test_compiled_emit_three_slot_round_trip() -> None:
 
 
 def test_compiled_emit_float_slot_round_trip() -> None:
-    """VALUE.v — the FloatSlot path. 2-digit digit-quad block via
-    ``thermometer_floor_div`` (one MLP sublayer)."""
+    """VALUE.v — the FloatSlot path. 2-digit digit-quad block via the
+    ``floor_int`` high-byte staircase (one MLP sublayer)."""
     slot = _value_slot()
     span = slot.hi - slot.lo
     # Cover the full FloatSlot range plus byte-boundary neighbors.

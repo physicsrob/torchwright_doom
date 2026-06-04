@@ -37,11 +37,13 @@ Depth, measured by compiling each helper alone with ``d=1024`` against
   ``q = value − lo`` plus one for the raw / digit-quad payload).
 * 2-digit IntSlot (cardinality 257..65,536): 3 layers. One layer
   for ``q = value − lo`` (or 0 layers if ``lo == 0``); one layer for
-  the ``thermometer_floor_div`` PWL; one layer for the centred /
-  scaled outputs ``[2·(hi_q − CENTER)]`` and the fused
+  the ``floor_int`` high-byte staircase (round-to-nearest via the
+  ``+0.5`` offset; see :func:`_digit_quad_payload`); one layer for the
+  centred / scaled outputs ``[2·(hi_q − CENTER)]`` and the fused
   ``[2·(q − BASE·hi_q − CENTER)]`` (the latter a single ``Linear``
   over ``[q, hi_q]`` so the lo recovery and the centring share an
-  op).
+  op). A *narrow* slot at a 2-digit position skips the staircase
+  entirely (its high byte is a literal 0), so it costs no floor layer.
 * 2-digit FloatSlot (VALUE today): 3 layers — same path; the v→q
   affine is fused with whatever follows.
 
@@ -90,6 +92,17 @@ from .embedding import (
     _digit_count_for_cardinality,
 )
 from .tokens import FloatSlot, IntSlot, TokenType
+
+# High-byte staircase sharpness for the 2-digit digit-quad (see
+# `_digit_quad_payload`). The high byte is `floor((q + 0.5)/BASE)` — a
+# round-to-nearest whose `floor_int` ramp sits at the half-integer byte
+# threshold `m·BASE − 0.5`. The ramp is `BASE/sharpness` wide in q-space; it
+# must stay clear of the ±0.06 robustness band the near-miss tests require
+# either side of that threshold (`tests/embedding/test_emit_near_miss.py`), so
+# `BASE/sharpness < 0.06` ⇒ `sharpness > BASE/0.06 ≈ 4267`. 8192 gives a
+# 0.03125-wide ramp (≈0.029 clearance) while keeping the ramp far steeper than
+# the old `sharpness=1000` (0.256-wide) form that floored at the integer.
+_DQ_HI_SHARPNESS: int = 8192
 
 __all__ = [
     "emit_slotless",
@@ -604,15 +617,24 @@ def _digit_quad_payload(
             name=f"{name}_hi_const0",
         )
     else:
-        # hi_q = floor(q / BASE). q is a *continuous* FloatSlot step index (e.g.
-        # ~62196 for v=0.898), so use floor_int — ramps at integer boundaries,
-        # exact mid-bin — over the high-byte range [0, max_q // BASE].
-        # thermometer_floor_div is integer-inputs-only (half-integer thresholds)
-        # and interpolates junk on a continuous q. floor_int is cancellation-free
-        # at this magnitude (the saturating-step staircase); sharpness=1000 keeps
-        # the ramp well clear of the value's fractional part.
-        q_over_base = _affine_1d(q_node, 1.0 / float(BASE), 0.0, name=f"{name}_hi_div")
-        hi_q = floor_int(q_over_base, 0, max_q // BASE, sharpness=1000)
+        # hi_q = floor((q + 0.5)/BASE) = floor(round(q)/BASE) — the high byte of
+        # q rounded to the nearest step. The +0.5 puts the floor_int transition
+        # at the half-integer byte threshold m·BASE − 0.5 (round-to-nearest),
+        # matching the old thermometer_floor_div semantics the digit-quad was
+        # designed around. Without it, a continuous q in [m·BASE − 0.5, m·BASE)
+        # floors its high byte to m−1 and recovers a low byte ≈ 255.5 → 255,
+        # landing one step below round(q) across every byte boundary. q is a
+        # *continuous* step index (e.g. ~62196 for v=0.898), so floor_int (not
+        # thermometer_floor_div, which interpolates junk on continuous q) — it is
+        # cancellation-free at this magnitude (the saturating-step staircase).
+        # sharpness keeps the ramp narrow enough to clear the near-miss band
+        # either side of the threshold (see `_DQ_HI_SHARPNESS`). With this offset
+        # the recovered low byte q − BASE·hi_q lands in [−0.5, 255.5), so the
+        # unchanged lo_c_2 below argmaxes to the correct byte.
+        q_over_base = _affine_1d(
+            q_node, 1.0 / float(BASE), 0.5 / float(BASE), name=f"{name}_hi_div"
+        )
+        hi_q = floor_int(q_over_base, 0, max_q // BASE, sharpness=_DQ_HI_SHARPNESS)
     hi_c_2 = _affine_1d(hi_q, 2.0, -2.0 * CENTER, name=f"{name}_hi_c2")
     # lo_q = q − BASE·hi_q realised as a single Linear over the
     # concat of (q, hi_q). The ``subtract(q, multiply_const(hi_q,

@@ -14,12 +14,12 @@ The digit-quad encoder has two known soft regions:
   the gap is ~0.002. Score magnitudes here run ~32,500, where fp32's
   absolute precision is ~0.004 — gap below noise floor. We accept
   either ``k`` or its near neighbor inside the noise-floor band.
-* **byte-boundary transition zone**. The high-byte staircase
-  (``thermometer_floor_div``) ramps over ``±0.05`` around each
-  half-integer threshold. Inside this ramp, ``hi_q`` is fractional,
-  ``lo_q`` lands near 127.5, and argmax may pick *any* row in the
-  active byte rather than the two byte-end neighbors. Outside the
-  ramp (≥ 0.06 from midpoint) the split is clean.
+* **byte-boundary transition zone**. The high byte is
+  ``floor_int(q/BASE + 0.5/BASE)`` — a round-to-nearest whose ramp
+  sits just below each half-integer threshold ``m·BASE − 0.5``,
+  ``BASE/sharpness`` (~0.03) wide. Inside this ramp ``hi_q`` is
+  fractional and argmax may pick a wrong row; outside it (≥ 0.06 from
+  the threshold) the split is clean.
 
 VALUE is the FloatSlot under test; ANGLE_VALUE doubles as a 2-digit
 IntSlot stress (its 8192-step cardinality also crosses the 256-byte
@@ -116,10 +116,9 @@ def test_value_near_half_step_accepts_either_neighbor() -> None:
     32,500 (~0.004 absolute precision). Either ``k`` or its near
     neighbor is acceptable.
 
-    ``k`` at a byte boundary is covered by
-    :func:`test_value_byte_boundary_outside_ramp` — at ``k = m·BASE``,
-    ``q = k - 0.499 = midpoint + 0.001`` lands inside the staircase
-    ramp, where any row in the active byte may win.
+    All test ks are interior to their byte; ``k`` at a byte boundary is
+    covered by :func:`test_value_byte_boundary_outside_ramp`, where the
+    high-byte round-to-nearest carry is the thing under test.
     """
     # All test ks are interior to their byte (no byte boundary within 1
     # of them).
@@ -140,15 +139,15 @@ def test_value_near_half_step_accepts_either_neighbor() -> None:
 
 
 def test_value_byte_boundary_outside_ramp() -> None:
-    """Outside the high-byte staircase ramp the byte boundary splits
-    cleanly: ``q = midpoint − δ`` picks the lower neighbor's byte,
-    ``q = midpoint + δ`` picks the upper neighbor's byte (δ ≥ 0.06,
-    one step past the 0.05-wide ramp).
+    """Outside the high-byte round-to-nearest ramp the byte boundary
+    splits cleanly: ``q = midpoint − δ`` picks the lower neighbor's byte,
+    ``q = midpoint + δ`` picks the upper neighbor's byte (δ ≥ 0.06, well
+    past the ~0.03-wide ``floor_int`` ramp at the half-integer threshold).
 
     "Picks the byte" — not necessarily the nearest integer. ``q = m·BASE
-    − 0.5 + 0.06 = m·BASE − 0.44`` rounds to integer ``m·BASE``: hi_q =
-    m (post-ramp), lo_q = -0.44, nearest row by (hi, lo) distance is
-    ``(m, 0) = m·BASE``.
+    − 0.5 + 0.06 = m·BASE − 0.44`` rounds to integer ``m·BASE``: the high
+    byte carries to m, lo_q = q − m·BASE = -0.44, nearest row by (hi, lo)
+    distance is ``(m, 0) = m·BASE``.
     """
     levels = _value_slot().levels
     test_ms = [1, 2, 32, 128, 200, 255]
@@ -206,4 +205,48 @@ def test_int_slot_near_integer_step_strict() -> None:
             assert argmax == expected, (
                 f"ANGLE_VALUE angle={angle_real} (k={angle}, d={d}): "
                 f"argmax {argmax} != expected {expected}"
+            )
+
+
+def _emit_angle(angle_real: float) -> torch.Tensor:
+    """Emit residual for ``ANGLE_VALUE`` at a (possibly non-integer) angle."""
+    slot = ANGLE_VALUE.slots["angle"]
+    with fresh_graph_session():
+        a_in = create_input(
+            "a", 1, value_range=(float(slot.lo) - 1, float(slot.hi) + 1)
+        )
+        out = emit_int_slot_token(ANGLE_VALUE, angle=a_in)
+        cache = reference_eval(out, {"a": torch.tensor([[float(angle_real)]])}, n_pos=1)
+        return cache[out]
+
+
+def test_int_slot_byte_boundary_outside_ramp() -> None:
+    """ANGLE_VALUE high byte rounds to nearest across its 32 byte boundaries.
+
+    The IntSlot carrier flows the same ``floor_int`` high-byte staircase as
+    VALUE; this mirrors :func:`test_value_byte_boundary_outside_ramp` in angle
+    space. The step index is ``q = angle − lo``; a byte boundary ``q = m·BASE``
+    sits at ``angle = m·BASE + lo``. Just outside the ~0.03-wide ramp (δ = 0.06
+    from the half-integer midpoint) the high byte carries cleanly: the lower
+    side picks step ``m·BASE − 1``, the upper side picks step ``m·BASE``.
+    """
+    slot = ANGLE_VALUE.slots["angle"]
+    cardinality = slot.hi - slot.lo  # 8192 → 32 bytes
+    for m in [1, 8, 16, 24, 31]:
+        boundary_q = m * BASE  # step index at the byte boundary
+        if not (0 < boundary_q < cardinality):
+            continue
+        midpoint_angle = boundary_q - 0.5 + slot.lo  # half-integer rounding midpoint
+        for delta, step_k, label in [
+            (-0.06, boundary_q - 1, "midpoint-0.06 → byte m-1"),
+            (+0.06, boundary_q, "midpoint+0.06 → byte m"),
+        ]:
+            angle_real = midpoint_angle + delta
+            if not (slot.lo <= angle_real < slot.hi):
+                continue
+            argmax = _project_argmax(_emit_angle(angle_real))
+            expected = _value_row(ANGLE_VALUE, {"angle": step_k + slot.lo})
+            assert argmax == expected, (
+                f"ANGLE_VALUE angle={angle_real} ({label}, m={m}): argmax "
+                f"{argmax} != expected step {step_k} (row {expected})"
             )
