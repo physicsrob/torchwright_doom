@@ -476,6 +476,7 @@ def _emit_token_with_step_indices(
                     step_index_nodes[slot_name],
                     layout.shared_position_cardinality[j],
                     name=f"emit_dq_{type_name}_p{j}{suffix}",
+                    slot=slot,
                 )
             )
         else:
@@ -531,7 +532,27 @@ def _raw_col_from_step_index(
     )
 
 
-def _digit_quad_payload(q_node: Node, cardinality: int, *, name: str) -> Node:
+def _own_cardinality(slot: IntSlot | FloatSlot) -> int:
+    """The emitting slot's own cardinality — the number of step indices it
+    can take, ``q ∈ [0, cardinality)``.
+
+    Mirrors the slot read in :func:`_raw_col_from_step_index`: ``hi - lo``
+    for an :class:`IntSlot`, ``levels`` for a :class:`FloatSlot`. This is
+    the slot's *own* width, which may be narrower than the shared-position
+    cardinality that sizes the digit-quad block.
+    """
+    if isinstance(slot, IntSlot):
+        return slot.hi - slot.lo
+    return slot.levels
+
+
+def _digit_quad_payload(
+    q_node: Node,
+    cardinality: int,
+    *,
+    name: str,
+    slot: IntSlot | FloatSlot | None = None,
+) -> Node:
     """Build the digit-quad payload ``[..., 2·d_c, 1, ...]`` from a
     step-index node ``q``, at the width implied by ``cardinality``.
 
@@ -546,6 +567,18 @@ def _digit_quad_payload(q_node: Node, cardinality: int, *, name: str) -> Node:
     depth-free. For 2 digits (257 ≤ cardinality ≤ 65,536): the high byte comes
     from :func:`floor_int` (``floor(q / BASE)``, exact on a continuous q) and the
     low byte recovers via an affine that folds into the surrounding Concatenate.
+
+    ``slot`` is the *emitting* slot (not the widest at this position). When its
+    own cardinality fits in one byte (``own_card ≤ BASE``), every step index
+    ``q ∈ [0, own_card) ⊂ [0, 256)``, so the high byte ``floor(q / BASE)`` is
+    provably 0. In that case the high byte is emitted as a literal constant and
+    the 255-wide :func:`floor_int` staircase is skipped entirely. The emitted
+    bytes are byte-identical (exact math gives 0; the literal is even more
+    accurate than the PWL floor), and the column layout / ``W_EMBED`` table are
+    unchanged because they key off the position cardinality, not the slot's own.
+    The two genuine 2-byte carriers (``value`` and ``angleValue``,
+    ``own_card > BASE``) keep flooring. With ``slot=None`` the floor is always
+    built (the conservative path).
     """
     digits = _digit_count_for_cardinality(cardinality)
 
@@ -560,15 +593,26 @@ def _digit_quad_payload(q_node: Node, cardinality: int, *, name: str) -> Node:
         return Concatenate([scaled, one])
 
     max_q = cardinality - 1
-    # hi_q = floor(q / BASE). q is a *continuous* FloatSlot step index (e.g.
-    # ~62196 for v=0.898), so use floor_int — ramps at integer boundaries, exact
-    # mid-bin — over the high-byte range [0, max_q // BASE]. thermometer_floor_div
-    # is integer-inputs-only (half-integer thresholds) and interpolates junk on a
-    # continuous q. floor_int is cancellation-free at this magnitude (the
-    # saturating-step staircase); sharpness=1000 keeps the ramp well clear of the
-    # value's fractional part.
-    q_over_base = _affine_1d(q_node, 1.0 / float(BASE), 0.0, name=f"{name}_hi_div")
-    hi_q = floor_int(q_over_base, 0, max_q // BASE, sharpness=1000)
+    own_card = _own_cardinality(slot) if slot is not None else None
+    if own_card is not None and own_card <= BASE:
+        # q ∈ [0, own_card) ⊂ [0, BASE), so floor(q / BASE) ≡ 0. Emit the high
+        # byte as a literal 0 — byte-identical to the floor's exact-math output,
+        # but with no 255-wide staircase (no width, no depth). hi_c_2 then
+        # collapses to the constant −2·CENTER and lo_c_2 to 2·(q − CENTER).
+        hi_q = create_literal_value(
+            torch.tensor([0.0], dtype=torch.float32),
+            name=f"{name}_hi_const0",
+        )
+    else:
+        # hi_q = floor(q / BASE). q is a *continuous* FloatSlot step index (e.g.
+        # ~62196 for v=0.898), so use floor_int — ramps at integer boundaries,
+        # exact mid-bin — over the high-byte range [0, max_q // BASE].
+        # thermometer_floor_div is integer-inputs-only (half-integer thresholds)
+        # and interpolates junk on a continuous q. floor_int is cancellation-free
+        # at this magnitude (the saturating-step staircase); sharpness=1000 keeps
+        # the ramp well clear of the value's fractional part.
+        q_over_base = _affine_1d(q_node, 1.0 / float(BASE), 0.0, name=f"{name}_hi_div")
+        hi_q = floor_int(q_over_base, 0, max_q // BASE, sharpness=1000)
     hi_c_2 = _affine_1d(hi_q, 2.0, -2.0 * CENTER, name=f"{name}_hi_c2")
     # lo_q = q − BASE·hi_q realised as a single Linear over the
     # concat of (q, hi_q). The ``subtract(q, multiply_const(hi_q,
