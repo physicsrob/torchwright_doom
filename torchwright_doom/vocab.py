@@ -51,6 +51,11 @@ N_ENTITY_MAX = N_NODES_MAX + N_SUBSECTORS_MAX  # unified child_u space
 N_DEPTH_MAX = 16
 N_PLANES_MAX = 32
 N_VP_PER_PLANE_MAX = 8
+# Flattened (plane, vp) instance space and the one-past sentinels the runtime
+# visplane scans use (Phase H ``visplane_state``); sandbox protocol_tokens_decl.
+N_VISPLANE_MAX = N_PLANES_MAX * N_VP_PER_PLANE_MAX
+N_PLANE_SENTINEL = N_PLANES_MAX
+N_VP_SENTINEL = N_VP_PER_PLANE_MAX
 N_LIGHT_LEVELS = 256
 
 FOV_HALF_BAM = ANGLE_BAM // 8  # 1024
