@@ -24,15 +24,17 @@ from torchwright.graph import Linear, Node
 from torchwright.graph.asserts import assert_matches_value_type
 from torchwright.graph.value_type import NodeValueType, Range
 from torchwright.ops.arithmetic_ops import (
+    ceil_int,
     clamp,
     compare,
+    floor_int,
     multiply_2d,
     piecewise_linear,
 )
 from torchwright.ops.linear_relu_linear import linear_relu_linear
 from torchwright.ops.logic_ops import bool_all_true, bool_any_true, bool_not
 
-from .constants import SCREEN_WIDTH
+from .constants import SCREEN_HEIGHT, SCREEN_WIDTH
 from .std import concat, constant, linear, reduce_sum, select
 from .vocab import N_NODES_MAX
 
@@ -559,6 +561,108 @@ def mul_scalestep(diff: Node, inverse_width: Node) -> Node:
         n=257,
         name="mul_scalestep",
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase H — wall-column rasterizer screen-y ops
+# ---------------------------------------------------------------------------
+# Per-column wall projection: ``top_y_raw = CENTER_Y − worldheight × scale``,
+# then round to an integer scanline. The ``mul_height_scale`` product feeds the
+# CEIL_Y/FLOOR_Y staircases across a ±0.4-unit deadband, so it rides a wide
+# 1024-point grid (the comparator-sensitive projection product) and the
+# staircases use ``sharpness=10000`` (a 1e-4 ramp) — narrow enough that the
+# product's piecewise-linear noise (~0.077) lands in the flat zone and rounds
+# to an exact integer instead of interpolating across a scanline boundary.
+
+
+def mul_height_scale(height: Node, scale: Node) -> Node:
+    """World-relative height × wall scale → screen-y offset (sandbox
+    ``MUL_HEIGHT_SCALE``, ``((-200, 200), (0, 64))``, 1024 bp). The height axis
+    spans the full e1m1 ``|sector_h − viewz|`` range (~175) so a far wall does
+    not extrapolate off the grid."""
+    return _mul_grid(
+        height,
+        scale,
+        lo1=-200.0,
+        hi1=200.0,
+        lo2=0.0,
+        hi2=_MAX_SCALE,
+        n=1024,
+        name="mul_height_scale",
+    )
+
+
+def mul_column_scalestep(x_offset: Node, scalestep: Node) -> Node:
+    """Column offset × per-column scale step (sandbox ``MUL_COLUMN_SCALESTEP``,
+    ``((0, SCREEN_WIDTH), (-1, 1))``, ``SCREEN_WIDTH+1`` bp). The offset axis is
+    an integer column, so ``SCREEN_WIDTH+1`` breakpoints land each column
+    exactly on a grid line."""
+    return _mul_grid(
+        x_offset,
+        scalestep,
+        lo1=0.0,
+        hi1=float(SCREEN_WIDTH),
+        lo2=-1.0,
+        hi2=1.0,
+        n=SCREEN_WIDTH + 1,
+        name="mul_column_scalestep",
+    )
+
+
+def CEIL_Y(x: Node) -> Node:
+    """Integer ceil over the screen-y range ``[0, SCREEN_HEIGHT-1]`` (sandbox
+    ``CEIL_Y``); ``sharpness=10000`` → 1e-4 ramp."""
+    return ceil_int(x, 0, SCREEN_HEIGHT - 1, sharpness=10_000.0)
+
+
+def FLOOR_Y(x: Node) -> Node:
+    """Integer floor over ``[0, SCREEN_HEIGHT-1]`` (sandbox ``FLOOR_Y``)."""
+    return floor_int(x, 0, SCREEN_HEIGHT - 1, sharpness=10_000.0)
+
+
+def FLOOR_Y_WIDE(x: Node) -> Node:
+    """Integer floor over ``[-128, SCREEN_HEIGHT-1]`` (sandbox ``FLOOR_Y_WIDE``).
+    Keeps negative results so an above-horizon upper region yields a negative
+    ``mid`` and the integer ``le_span_y`` visibility check marks the empty upper
+    span empty (narrow ``FLOOR_Y`` would clamp it to 0 and hide that case)."""
+    return floor_int(x, -128, SCREEN_HEIGHT - 1, sharpness=10_000.0)
+
+
+def CEIL_Y_WIDE(x: Node) -> Node:
+    """Integer ceil over ``[0, 128]`` (sandbox ``CEIL_Y_WIDE``). Keeps the large
+    positive result for a below-screen lower region so ``le_span_y`` treats the
+    lower-empty case correctly (narrow ``CEIL_Y`` would clamp to SCREEN_HEIGHT-1
+    and read visible)."""
+    return ceil_int(x, 0, 128, sharpness=10_000.0)
+
+
+def gt_y_ceil_boundary(raw_y: Node, boundary: Node) -> Node:
+    """±1: ``raw_y > boundary - 0.4`` (sandbox ``gt_y_ceil_boundary``). "ceil"
+    names the reference's rounding direction, not a ceiling plane; the -0.4
+    deadband sits just below an integer scanline so multiply noise cannot flip
+    the test at a boundary."""
+    return compare(sub(raw_y, boundary), -0.4)
+
+
+def gt_y_floor_boundary(raw_y: Node, boundary: Node) -> Node:
+    """±1: ``raw_y > boundary + 0.4`` (sandbox ``gt_y_floor_boundary``)."""
+    return compare(sub(raw_y, boundary), 0.4)
+
+
+def le_span_y(y1: Node, y2: Node) -> Node:
+    """±1: integer span non-empty test ``y1 <= y2`` (sandbox ``le_span_y`` =
+    ``not (y1 - y2 > 0.5)``)."""
+    return one_minus(compare(sub(y1, y2), 0.5))
+
+
+def SPAN_Y_CLAMP(x: Node) -> Node:
+    """Clamp a span y to ``[0, SCREEN_HEIGHT-1]`` (sandbox ``SPAN_Y_CLAMP``)."""
+    return clamp(x, 0.0, float(SCREEN_HEIGHT - 1))
+
+
+def CLIP_Y_CLAMP(x: Node) -> Node:
+    """Clamp a clip-array y to ``[-1, SCREEN_HEIGHT]`` (sandbox ``CLIP_Y_CLAMP``)."""
+    return clamp(x, -1.0, float(SCREEN_HEIGHT))
 
 
 def FAR_DEN_CLAMP(x: Node) -> Node:
