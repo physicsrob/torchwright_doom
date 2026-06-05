@@ -40,10 +40,14 @@ from torchwright_doom.past import GraphPast
 from torchwright_doom.render_main import forward
 
 # compile_to_onnx streams, so d only sets the cramming point, not peak memory.
-# d=4096, d_head=32 covers the post-radix successor key-width floor
-# (max d_qk = 20) while preserving the current 45-layer heuristic schedule.
+# d=4096, d_head=128 covers Phase H's widest attention keys — the runtime
+# visplane composite keys (the R_CheckPlane occupied_key is a plane one-hot[32] +
+# vp one-hot[8] + screen-x one-hot[60] = d_qk≈100) and the ClipMemory per-column
+# occlusion key (SCREEN_WIDTH+1=61 → d_qk=62). These are now the binding d_head
+# floor (the radix successor sits at 20); they are the next d_head-reduction
+# candidates (lift/narrow like the successor) — port wide first, narrow later.
 _D = 4096
-_D_HEAD = 32
+_D_HEAD = 128
 
 
 def test_forward_compiles_to_onnx(tmp_path) -> None:

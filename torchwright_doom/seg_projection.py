@@ -46,9 +46,26 @@ from .seg_cycle import (
     VisibleRun,
 )
 from .solid_intervals import SolidIntervals
-from .std import concat, constant, extract_derived, indicator_to_bool, select
+from .std import (
+    concat,
+    constant,
+    extract_derived,
+    gate,
+    indicator_to_bool,
+    one_hot,
+    select,
+)
 from .std import sum as vec_sum
-from .wall_range_state import RecentDrawsegState
+from torchwright.ops.arithmetic_ops import clamp
+from .render_constants import MATCH_GAIN_LONG
+from .visplane_state import RuntimeVisplaneState
+from .wall_column_state import (
+    ClipMemory,
+    WallColumnState,
+    WallSpanRuntimeDraft,
+    WallSpanRuntimeState,
+)
+from .wall_range_state import RecentDrawsegState, SegLevelFacts
 
 U_TAN_BY_COLUMN_DERIVED_NAME = "u_tan_by_column"
 
@@ -176,13 +193,108 @@ class DrawsegScope:
 
 
 @dataclass(frozen=True)
+class WallRuntimeContext:
+    """Published wall-column and wall-span runtime state (Phase H)."""
+
+    clip: ClipMemory
+    seg_facts: SegLevelFacts
+    wall_column: WallColumnState
+    wall_span_runtime: WallSpanRuntimeState
+
+
+@dataclass(frozen=True)
+class VisplaneRuntimeContext:
+    """Published runtime-visplane and R_CheckPlane handoff state (Phase H)."""
+
+    plane_mark_kind_or_zero: PastHandle
+    check_result_key_pub: PastHandle
+    check_result_vp_pub: PastHandle
+    runtime_visplanes: RuntimeVisplaneState
+
+    def assigned_vp_for_kind(self, past: PastHandleScope, kind: Node) -> Node:
+        """Runtime visplane assigned to a floor/ceiling kind by the most recent
+        R_CHECK_PLANE_RESULT, recovered from the check-result handoff handles."""
+        return past.pick_most_recent(
+            one_hot(kind, 2),
+            self.check_result_key_pub,
+            self.check_result_vp_pub,
+            match_gain=MATCH_GAIN_LONG,
+        )
+
+
+class WallColumnRenderScalars:
+    """Assemble the per-column wall-render scalars at the SCREEN_Y_VALUE row.
+
+    At the SCREEN_Y_VALUE row that follows the column scale VALUE sidecar, gather
+    the three scalars a wall column needs -- dc_iscale, the native u coordinate,
+    and the colormap (light) row -- and publish them together as the
+    ``wallcol_render_state`` channel consumed by the wall-span draft. Both
+    column-scale sidecars are published in Phase 1 and recovered here via
+    ``attend_to_offset(-1)``; the u coordinate comes from WALL_COL_U at offset -2.
+    """
+
+    @classmethod
+    def publish(
+        cls,
+        past: PastHandleScope,
+        inp: ProtocolTokenView,
+        scene: SceneIndex,
+        *,
+        column_scale_inv_or_zero: PastHandle,
+        column_scale_diminish_or_zero: PastHandle,
+        recent_drawseg_store_i: Node,
+    ) -> PastHandle:
+        zero_value = constant(0.0)
+        dc_iscale_at_publish_point = past.attend_to_offset(
+            column_scale_inv_or_zero, delta_pos=-1,
+        )
+        wallcol_dc_iscale_value = select(
+            inp.screen_y_after_wall_column_scale,
+            dc_iscale_at_publish_point,
+            zero_value,
+        )
+        scale_diminish_at_publish_point = past.attend_to_offset(
+            column_scale_diminish_or_zero, delta_pos=-1,
+        )
+        colormap_row_index = clamp(
+            vec_sum(
+                scene.segs.light_static(recent_drawseg_store_i),
+                scale_diminish_at_publish_point,
+            ),
+            0.0,
+            31.0,
+        )
+        wallcol_cmap_row_value = select(
+            inp.screen_y_after_wall_column_scale,
+            colormap_row_index,
+            zero_value,
+        )
+        # WALL_COL_U(u_idx) is emitted right after SET_CURSOR_X; at the
+        # SCREEN_Y_VALUE row after the scale sidecar the slot is reachable at -2.
+        input_wall_col_u_idx_or_zero = past.publish(
+            "input_wall_col_u_idx_or_zero",
+            inp.wall_col_u_idx,
+        )
+        u_idx_at_wall_col_u = past.attend_to_offset(
+            input_wall_col_u_idx_or_zero, delta_pos=-2,
+        )
+        return past.publish(
+            "wallcol_render_state",
+            concat(
+                wallcol_dc_iscale_value,
+                u_idx_at_wall_col_u,
+                wallcol_cmap_row_value,
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class SegProjection:
     """Published per-position render context for the subsector/R_AddLine protocol.
 
-    Reduced to the five Phase-F subcontexts -- ``core``, ``inputs``, ``rows``,
-    ``seg``, ``drawseg``. The ``wall`` / ``planes`` / ``flats`` subcontexts are
-    Phase H and are not built here; branch owners that would consume them are
-    NO_OP-stubbed in the reduced dispatch.
+    Phase H un-reduces this to add the ``wall`` and ``planes`` subcontexts (the
+    wall-column rasterizer + runtime visplane occupancy). The ``flats``
+    subcontext (the flat *pixel* pass) stays deferred to Phase J.
     """
 
     core: CoreContext
@@ -190,6 +302,8 @@ class SegProjection:
     rows: ProjectionRows
     seg: SegScanContext
     drawseg: DrawsegScope
+    wall: WallRuntimeContext
+    planes: VisplaneRuntimeContext
 
     @classmethod
     def publish(
@@ -216,11 +330,11 @@ class SegProjection:
         # Two per-column scale sidecars (Phase 11 / Phase-H consumers via
         # attend_to_offset(-1)); published here to keep their channel names live
         # for when the wall-column renderer lands. Harmless in the reduced build.
-        past.publish(
+        input_column_scale_diminish_or_zero = past.publish(
             "seg_column_scale_diminish_or_zero",
             inp.value_wall_scale_diminish5,
         )
-        past.publish(
+        input_column_scale_inv_or_zero = past.publish(
             "seg_column_scale_inv_or_zero",
             inp.value_inv5,
         )
@@ -256,7 +370,7 @@ class SegProjection:
             inp.is_set_cursor_x,
         )
         cursor_x_key = cursor_x_row.pick(past, input_x_key_or_zero)
-        past.publish("cursor_x_key_value", cursor_x_key)
+        cursor_x_key_pub = past.publish("cursor_x_key_value", cursor_x_key)
         # Late input sidecar (emitted after cursor_x in protocol order).
         input_xtova_cos_or_zero = past.publish(
             "seg_input_xtova_cos_or_zero",
@@ -290,9 +404,8 @@ class SegProjection:
             "projection_recent_store_range",
             inp.is_store_wall_range,
         )
-        # clip_update row (Phase 7 ClipMemory consumer is deferred); published to
-        # keep the recency channel coherent across the teacher-forced span.
-        RecentMarkerHandle.publish(
+        # clip_update row — consumed by Phase 7 ClipMemory (wall-column occlusion).
+        clip_update_row = RecentMarkerHandle.publish(
             past,
             "projection_recent_clip_update",
             inp.is_clip_update,
@@ -333,19 +446,18 @@ class SegProjection:
         # Phase 4 — seg-cycle recovery: subsector -> process-seg -> plane ids.
         subsector_context = SubsectorContext.publish(past, inp)
         cycle = ProcessSegCycle.publish(past, inp, subsector_context)
-        PlaneIdLookup.publish(past, inp, cycle)
+        plane_ids = PlaneIdLookup.publish(past, inp, cycle)
 
-        # Phase 5 — plane-mark side channels (consumed by the deferred visplane
-        # owner; published to keep the channels coherent).
-        past.publish(
+        # Phase 5 — plane-mark side channels (consumed by the visplane owner).
+        plane_mark_kind_or_zero = past.publish(
             "plane_mark_kind_or_zero",
             select(inp.is_plane_mark, inp.plane_mark_kind, zero),
         )
-        past.publish(
+        plane_mark_p_or_zero = past.publish(
             "plane_mark_p_or_zero",
             select(inp.is_plane_mark, inp.plane_mark_p, zero),
         )
-        past.publish(
+        plane_mark_vp_or_zero = past.publish(
             "plane_mark_vp_or_zero",
             select(inp.is_plane_mark, inp.plane_mark_vp, zero),
         )
@@ -361,8 +473,14 @@ class SegProjection:
         )
         visible_run = VisibleRun.publish(past, inp, columns, solids)
 
-        # Phase 7 (reduced) — find_run start column + recent drawseg state.
-        # ClipMemory (per-column occlusion arrays) is Phase H and omitted.
+        # Phase 7 — per-column clip memory + recent drawseg state.
+        clip = ClipMemory.publish(
+            past,
+            inp,
+            cursor_x_key,
+            clip_update_row,
+            cursor_x_key_pub,
+        )
         find_run_x = SCREEN_X_CLAMP(find_run_row.pick(past, input_x_or_zero))
         recent_drawseg = RecentDrawsegState.read_from_recent_rows(
             past,
@@ -374,6 +492,65 @@ class SegProjection:
             input_x_or_zero=input_x_or_zero,
             input_drawseg_scale_or_zero=input_drawseg_scale_or_zero,
         )
+        # Phase 8 — wall-column state (consumes clip, recent drawseg, plane ids).
+        wall_column = WallColumnState.publish(
+            past,
+            inp,
+            scene,
+            clip,
+            input_x_or_zero,
+            input_x_key_or_zero,
+            input_drawseg_scale_or_zero,
+            recent_drawseg.store_i,
+            plane_ids,
+        )
+        # Phase 9 — check-result marker handoff (consumed by VisplaneMarker).
+        check_result_key_pub = past.publish(
+            "r_check_plane_result_key",
+            gate(
+                inp.is_r_check_plane_result,
+                one_hot(inp.r_check_plane_result_kind, 2),
+            ),
+        )
+        check_result_vp_pub = past.publish(
+            "r_check_plane_result_vp",
+            select(inp.is_r_check_plane_result, inp.r_check_plane_result_vp, zero),
+        )
+        # Phase 10 — runtime visplanes (consumes wall_column + plane-mark channels).
+        runtime_visplanes = RuntimeVisplaneState.publish(
+            past,
+            inp,
+            wall_column,
+            plane_mark_p_or_zero,
+            plane_mark_vp_or_zero,
+        )
+        # Phase 11 — seg facts + wall-column render scalars. At SEG_KPART rows the
+        # lifted seg key comes from the most recent R_STORE_WALL_RANGE row.
+        seg_facts = SegLevelFacts.publish(
+            past, inp, scene, seg_key_at_kpart_row=recent_drawseg.store_key,
+        )
+        wallcol_render_state = WallColumnRenderScalars.publish(
+            past,
+            inp,
+            scene,
+            column_scale_inv_or_zero=input_column_scale_inv_or_zero,
+            column_scale_diminish_or_zero=input_column_scale_diminish_or_zero,
+            recent_drawseg_store_i=recent_drawseg.store_i,
+        )
+        # Phase 12 — wall-span draft.
+        wall_span_draft = WallSpanRuntimeDraft.publish(
+            past,
+            inp,
+            pos,
+            scene,
+            seg_facts,
+            wall_column,
+            recent_drawseg.store_i,
+            wallcol_render_state,
+        )
+        # Phase 13 (wall side) — wall-span K-row finish. The flat pass
+        # (FlatPassState) is Phase J and omitted.
+        wall_span_runtime = wall_span_draft.finish(past, inp)
 
         inputs = InputChannels(
             drawseg_scale_vec=input_drawseg_scale_vec,
@@ -414,5 +591,17 @@ class SegProjection:
                 drawseg_scale2_row=drawseg_scale2_row,
                 drawseg_scalestep_row=drawseg_scalestep_row,
                 inputs=inputs,
+            ),
+            wall=WallRuntimeContext(
+                clip=clip,
+                seg_facts=seg_facts,
+                wall_column=wall_column,
+                wall_span_runtime=wall_span_runtime,
+            ),
+            planes=VisplaneRuntimeContext(
+                plane_mark_kind_or_zero=plane_mark_kind_or_zero,
+                check_result_key_pub=check_result_key_pub,
+                check_result_vp_pub=check_result_vp_pub,
+                runtime_visplanes=runtime_visplanes,
             ),
         )

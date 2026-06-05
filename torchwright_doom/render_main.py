@@ -50,7 +50,10 @@ from .protocol_tokens import ProtocolTokenView
 from .render_ops import _ATAN_ABS_RANGE, signed_world_angle
 from .scene_index import SceneIndex
 from .seg_projection import SegProjection
+from .range_dispatcher import RangeDispatcher
 from .seg_scanner import SegScanner
+from .visplane_marker import VisplaneMarker
+from .wall_column_renderer import WallColumnRenderer
 from .solid_intervals import SolidIntervals
 from .std import (
     AngleInputEmit,
@@ -272,6 +275,9 @@ def build_branch_outputs(
     payload_router = protocols.payload_router
     seg_scan = SegScanner(projection)
     wall_range = WallRangeBuilder(projection)
+    wall_cols = WallColumnRenderer(projection)
+    visplanes = VisplaneMarker(projection)
+    ranges = RangeDispatcher(projection)
     branches: dict[str, "Node | ScalarEmit | AngleInputEmit"] = {
         # Inert / begin.
         "no_op": no_op_out,
@@ -324,6 +330,17 @@ def build_branch_outputs(
         "drawseg_bsilheight": wall_range.after_drawseg_bsilheight(),
         "drawseg_tsilheight": wall_range.after_drawseg_tsilheight(),
         "drawseg_u_phase": wall_range.after_drawseg_u_phase(),
+        # Visplane check + plane marks (VisplaneMarker) — Phase H.
+        "r_check_plane": visplanes.after_r_check_plane(),
+        "r_check_plane_result": visplanes.after_r_check_plane_result(),
+        "plane_mark": visplanes.after_plane_mark(),
+        # Wall columns / spans / clip (WallColumnRenderer) — Phase H.
+        "wall_col_u": wall_cols.after_wall_col_u(),
+        "wall_span_meta": wall_cols.after_wall_span_meta(),
+        "clip_update": wall_cols.after_clip_update(),
+        "screen_y": wall_cols.after_screen_y_value(no_op_out),
+        # Host-visible screen-range merge (RangeDispatcher) — Phase H.
+        "screen_range": ranges.after_screen_range(no_op_out),
     }
     # Every remaining registry branch — the deferred bbox sub-protocol (Phase G)
     # and the wall-column / visplane / flat / pixel owners (Phase H/J) — shares

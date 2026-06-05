@@ -241,8 +241,11 @@ class WallRangeBuilder:
         return angle_scalar(u_phase_angle)
 
     def after_drawseg_u_angle_value(self) -> Node:
-        # DEFERRED (Phase H): VisplaneMarker(projection).first_check_or_start_wall_columns().
-        return make_token_head(NO_OP)
+        # Phase H: the DRAWSEG_U_PHASE -> ANGLE_VALUE handoff starts the visplane
+        # find/check chain (or the wall-column pass if no plane is marked).
+        from .visplane_marker import VisplaneMarker
+
+        return VisplaneMarker(self.projection).first_check_or_start_wall_columns()
 
     def after_drawseg_value(self, fallback_out: Node) -> Node:
         projection = self.projection
@@ -254,11 +257,18 @@ class WallRangeBuilder:
             wall_kind=self.wall_kind(seg_i),
             silhouette=self.silhouette(seg_i),
         )
-        # DEFERRED (Phase H): is_value_after_wall_column -> SCREEN_Y_VALUE(
-        # WallColumnRenderer(...).wall_column_new_ceiling_from_value()).
+        # Phase H: a VALUE after a wall column (SCREEN_Y_VALUE marker carrier)
+        # emits the new ceiling clip bound for the next column.
+        from .vocab import SCREEN_Y_VALUE
+        from .wall_column_renderer import WallColumnRenderer
+
+        wall_column_screen_y_out = make_token_head(
+            SCREEN_Y_VALUE,
+            y=WallColumnRenderer(projection).wall_column_new_ceiling_from_value(),
+        )
         drawseg_value_out = select(
             inp.is_value_after_wall_column,
-            make_token_head(NO_OP),
+            wall_column_screen_y_out,
             select(
                 inp.is_value_after_seg_dc_tmid_mid,
                 make_token_head(SEG_DC_TMID_UPPER),
