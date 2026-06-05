@@ -37,8 +37,8 @@ Depth, measured by compiling each helper alone with ``d=1024`` against
   ``q = value − lo`` plus one for the raw / digit-quad payload).
 * 2-digit IntSlot (cardinality 257..65,536): 3 layers. One layer
   for ``q = value − lo`` (or 0 layers if ``lo == 0``); one layer for
-  the ``floor_int`` high-byte staircase (round-to-nearest via the
-  ``+0.5`` offset; see :func:`_digit_quad_payload`); one layer for the
+  the ``floor_int`` high-byte staircase (carry-free, ramp at the byte
+  boundary; see :func:`_digit_quad_payload`); one layer for the
   centred / scaled outputs ``[2·(hi_q − CENTER)]`` and the fused
   ``[2·(q − BASE·hi_q − CENTER)]`` (the latter a single ``Linear``
   over ``[q, hi_q]`` so the lo recovery and the centring share an
@@ -94,15 +94,18 @@ from .embedding import (
 from .tokens import FloatSlot, IntSlot, TokenType
 
 # High-byte staircase sharpness for the 2-digit digit-quad (see
-# `_digit_quad_payload`). The high byte is `floor((q + 0.5)/BASE)` — a
-# round-to-nearest whose `floor_int` ramp sits at the half-integer byte
-# threshold `m·BASE − 0.5`. The ramp is `BASE/sharpness` wide in q-space; it
-# must stay clear of the ±0.06 robustness band the near-miss tests require
-# either side of that threshold (`tests/embedding/test_emit_near_miss.py`), so
-# `BASE/sharpness < 0.06` ⇒ `sharpness > BASE/0.06 ≈ 4267`. 8192 gives a
-# 0.03125-wide ramp (≈0.029 clearance) while keeping the ramp far steeper than
-# the old `sharpness=1000` (0.256-wide) form that floored at the integer.
-_DQ_HI_SHARPNESS: int = 8192
+# `_digit_quad_payload`). The high byte is `floor(q/BASE)`, whose `floor_int`
+# ramp sits AT each byte boundary `m·BASE`. A continuous step index for a
+# range-encoded integer carrier lands just below a boundary; the closest, a
+# 1-unit drawseg, is only `1/64 ≈ 0.0156` below one, so the ramp
+# (`BASE/sharpness` wide in q-space) must be narrower than that:
+# `256/sharpness < 0.0156` ⇒ `sharpness > 16400`. 32768 gives a 0.0078-wide ramp
+# (~2× clearance on the worst carrier value); raising it shrinks the residual
+# boundary sliver further but steepens the ramp for compiled fp32. (Was 8192
+# with a `+0.5` round-to-nearest high-byte floor whose ramp at `m·BASE − 0.5` a
+# 33-column drawseg sat dead-center of, recovering a fractional high byte that
+# amplified into a ~128-step miss; see the near-miss + carrier gates.)
+_DQ_HI_SHARPNESS: int = 32768
 
 __all__ = [
     "emit_slotless",
@@ -662,22 +665,21 @@ def _digit_quad_payload(
             name=f"{name}_hi_const0",
         )
     else:
-        # hi_q = floor((q + 0.5)/BASE) = floor(round(q)/BASE) — the high byte of
-        # q rounded to the nearest step. The +0.5 puts the floor_int transition
-        # at the half-integer byte threshold m·BASE − 0.5 (round-to-nearest),
-        # matching the old thermometer_floor_div semantics the digit-quad was
-        # designed around. Without it, a continuous q in [m·BASE − 0.5, m·BASE)
-        # floors its high byte to m−1 and recovers a low byte ≈ 255.5 → 255,
-        # landing one step below round(q) across every byte boundary. q is a
-        # *continuous* step index (e.g. ~62196 for v=0.898), so floor_int (not
-        # thermometer_floor_div, which interpolates junk on continuous q) — it is
-        # cancellation-free at this magnitude (the saturating-step staircase).
-        # sharpness keeps the ramp narrow enough to clear the near-miss band
-        # either side of the threshold (see `_DQ_HI_SHARPNESS`). With this offset
-        # the recovered low byte q − BASE·hi_q lands in [−0.5, 255.5), so the
-        # unchanged lo_c_2 below argmaxes to the correct byte.
+        # Robust carry-free byte split. The high byte is floor(q/BASE) with its
+        # floor_int ramp AT the byte boundary m·BASE (no +0.5 offset). A
+        # continuous step index for a range-encoded integer carrier lands just
+        # BELOW a boundary (q = m·BASE − k for small k) — squarely in the floor's
+        # flat zone — so the high byte stays a clean integer and the shared low
+        # byte recovery 2·(q − BASE·hi_q) below is exact. Only a value within
+        # BASE/sharpness of a boundary itself is soft, and the low byte then
+        # truncates (no carry into the high byte): a ±1-step round-DOWN, never the
+        # ~128-step miss the old +0.5 round-to-nearest produced when its
+        # boundary−0.5 ramp caught a 33-column drawseg dead-center. _DQ_HI_SHARP-
+        # NESS sets the (now narrow) ramp. (A two-stage mod BASE·16 / mod BASE
+        # sawtooth would be narrower but its outer ramp is 16× wider in q-space,
+        # re-opening a ~128-step zone at every BASE·16 boundary — rejected.)
         q_over_base = _affine_1d(
-            q_node, 1.0 / float(BASE), 0.5 / float(BASE), name=f"{name}_hi_div"
+            q_node, 1.0 / float(BASE), 0.0, name=f"{name}_hi_div"
         )
         hi_q = floor_int(q_over_base, 0, max_q // BASE, sharpness=_DQ_HI_SHARPNESS)
     hi_c_2 = _affine_1d(hi_q, 2.0, -2.0 * CENTER, name=f"{name}_hi_c2")
