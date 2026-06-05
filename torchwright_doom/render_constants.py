@@ -18,6 +18,17 @@ from __future__ import annotations
 # callers thread this explicitly.
 MATCH_GAIN_LONG = 300_000.0
 
+# Wall-column per-column clip-array recovery (``ClipMemory.pick_most_recent``,
+# Phase H). Same magnitude as ``MATCH_GAIN_LONG`` — the clip key is one unit of
+# content gap (a screen-x one-hot match) and must dominate the recency span over
+# a full rollout. Plain float (no graph node), import-safe.
+MATCH_GAIN_CLIP = 300_000.0
+
+# Weight on the sentinel column of the ClipMemory query, so a column with no
+# prior clip-update falls through to the ``DEFAULT_CLIP_KEY`` sentinel record
+# (the initial ``(-1, SCREEN_HEIGHT)`` open clip) rather than a garbage blend.
+CLIP_SENTINEL_QUERY_WEIGHT = 0.5
+
 # NOTE: the sandbox keeps ``ONE``/``ZERO``/``FALSE`` as module-level
 # ``constant`` Vecs. On the real side a ``constant`` is a graph ``Node`` with a
 # global auto-incrementing id; creating one at import time gives it a fixed low

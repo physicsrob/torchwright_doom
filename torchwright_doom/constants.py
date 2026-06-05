@@ -19,3 +19,5 @@ from __future__ import annotations
 
 SCREEN_WIDTH = 60
 SCREEN_HEIGHT = 50
+# Screen vertical centre (the projection horizon); sandbox ``reference.CENTER_Y``.
+CENTER_Y = SCREEN_HEIGHT / 2.0
