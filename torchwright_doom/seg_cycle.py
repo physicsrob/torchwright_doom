@@ -142,16 +142,21 @@ class PlaneIdLookup:
             gate(inp.is_ss_ceiling_plane, inp.id_lifted_key),
         )
         ceiling_value = past.publish(
-            "ss_ceiling_plane_value", inp.ss_ceiling_plane_p,
+            "ss_ceiling_plane_value",
+            inp.ss_ceiling_plane_p,
         )
         ss_query = lifted_id_query(cycle.subsector_id)
         return cls(
             floor_id=past.pick_most_recent(
-                ss_query, floor_key, floor_value,
+                ss_query,
+                floor_key,
+                floor_value,
                 match_gain=MATCH_GAIN_LONG,
             ),
             ceiling_id=past.pick_most_recent(
-                ss_query, ceiling_key, ceiling_value,
+                ss_query,
+                ceiling_key,
+                ceiling_value,
                 match_gain=MATCH_GAIN_LONG,
             ),
         )

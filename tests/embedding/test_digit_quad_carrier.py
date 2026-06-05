@@ -72,12 +72,7 @@ def test_no_whole_bucket_miss_across_byte_boundaries():
     the carry-free split degrades gracefully, never by a whole bucket."""
     boundaries = [256, 512, 4096, 33792, 65280]  # multiples of 256, incl. 16·256
     deltas = [-0.6, -0.4, -0.1, 0.0, 0.1, 0.4, 0.6]
-    qs = [
-        b + d
-        for b in boundaries
-        for d in deltas
-        if 0.0 <= b + d <= 65535.0
-    ]
+    qs = [b + d for b in boundaries for d in deltas if 0.0 <= b + d <= 65535.0]
     _out, _v, _inp, rows = _emit_value_rows([_v_of_q(q) for q in qs])
     bad = [(q, r, round(q)) for q, r in zip(qs, rows) if abs(r - round(q)) > 1]
     assert not bad, bad

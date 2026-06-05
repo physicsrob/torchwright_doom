@@ -61,8 +61,11 @@ def _collect(output_node):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--top", type=int, default=40)
-    ap.add_argument("--by-annotation", action="store_true",
-                    help="also print total width grouped by annotation subtree")
+    ap.add_argument(
+        "--by-annotation",
+        action="store_true",
+        help="also print total width grouped by annotation subtree",
+    )
     args = ap.parse_args()
 
     out = _build()

@@ -103,7 +103,6 @@ def radix_with_sentinel(starts, column: int, W: int) -> int:
     # --- H1 same bucket, strictly above local digit ---
     h1_cands = [s for s in starts if hi(s, B) == qh and lo(s, B) > ql]
     same_present = len(h1_cands) > 0
-    same_s = min(h1_cands, key=lambda s: lo(s, B)) if same_present else None
 
     # --- H2 next higher bucket (INVALID_HI fallback is always a candidate) ---
     # qh <= N_BUCKETS-1 < INVALID_HI, so the sentinel is always strictly above qh.
@@ -113,13 +112,12 @@ def radix_with_sentinel(starts, column: int, W: int) -> int:
     # --- H3 minimum start in the carried bucket ---
     h3_cands = [s for s in starts if hi(s, B) == higher_hi]  # empty if INVALID_HI
     carry_present = (higher_hi < INVALID_HI) and len(h3_cands) > 0
-    carry_s = min(h3_cands, key=lambda s: lo(s, B)) if carry_present else None
 
     # --- combine: select(same_present, same_s, select(carry_present, carry_s, W))
     if same_present:
-        return same_s
+        return min(h1_cands, key=lambda s: lo(s, B))
     if carry_present:
-        return carry_s
+        return min(h3_cands, key=lambda s: lo(s, B))
     return SENTINEL_START
 
 
@@ -127,15 +125,20 @@ def radix_with_sentinel(starts, column: int, W: int) -> int:
 # Validation drivers
 # --------------------------------------------------------------------------- #
 
+
 def _check(starts, column, W, stats):
     expected = brute_next_start_after(starts, column, W)
     got_clean = radix_next_start_after(starts, column, W)
     got_sent = radix_with_sentinel(starts, column, W)
     stats["n"] += 1
     if got_clean != expected:
-        stats["mismatches"].append(("clean", W, list(starts), column, expected, got_clean))
+        stats["mismatches"].append(
+            ("clean", W, list(starts), column, expected, got_clean)
+        )
     if got_sent != expected:
-        stats["mismatches"].append(("sentinel", W, list(starts), column, expected, got_sent))
+        stats["mismatches"].append(
+            ("sentinel", W, list(starts), column, expected, got_sent)
+        )
 
 
 def _run_scale(W, stats, *, n_random, pair_cap, seed):
@@ -171,13 +174,13 @@ def _run_scale(W, stats, *, n_random, pair_cap, seed):
     # Targeted edge cases at the bucket boundaries.
     edge_cols = sorted({0, 1, B - 1, B, B + 1, 2 * B - 1, 2 * B, W - 1, W})
     edge_starts = [
-        [],                                   # empty
-        [W],                                  # only the top column
-        [0, B, 2 * B, 3 * B],                 # one per low bucket (lo==0)
-        [B - 1, 2 * B - 1, 3 * B - 1],        # top-of-bucket starts
-        [5, 5, 5],                            # duplicates
-        [c for c in range(0, W + 1, B)],      # bucket-aligned sweep
-        [qh_b for qh_b in range(W + 1)],      # every column present
+        [],  # empty
+        [W],  # only the top column
+        [0, B, 2 * B, 3 * B],  # one per low bucket (lo==0)
+        [B - 1, 2 * B - 1, 3 * B - 1],  # top-of-bucket starts
+        [5, 5, 5],  # duplicates
+        [c for c in range(0, W + 1, B)],  # bucket-aligned sweep
+        [qh_b for qh_b in range(W + 1)],  # every column present
     ]
     for starts in edge_starts:
         for c in edge_cols:
@@ -188,7 +191,7 @@ def _run_scale(W, stats, *, n_random, pair_cap, seed):
     # the smaller start strictly above the column, never a bucket-1 phantom.
     if N_BUCKETS >= 3:
         for c in range(B, 2 * B):  # all of bucket 1
-            _check([0, 2 * B], c, W, stats)        # both wrong buckets
+            _check([0, 2 * B], c, W, stats)  # both wrong buckets
             _check([B - 1, 2 * B + 1], c, W, stats)
 
 
@@ -196,9 +199,10 @@ def run_all(*, n_random=8000, seed=1234):
     stats = {"n": 0, "mismatches": []}
     for W in SCALES:
         _run_scale(
-            W, stats,
+            W,
+            stats,
             n_random=n_random,
-            pair_cap=4000 if W > 60 else 10 ** 9,
+            pair_cap=4000 if W > 60 else 10**9,
             seed=seed + W,
         )
     return stats
@@ -207,6 +211,7 @@ def run_all(*, n_random=8000, seed=1234):
 # --------------------------------------------------------------------------- #
 # pytest entry points
 # --------------------------------------------------------------------------- #
+
 
 def test_radix_matches_brute_force():
     stats = run_all()

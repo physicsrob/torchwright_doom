@@ -80,7 +80,9 @@ def test_octant_matches_golden_on_dense_sweep() -> None:
     frac = (out - out.round()).abs().max().item()
     assert frac < 1e-3, f"octant output not integer-valued: max frac {frac}"
 
-    worst = max(_bam_diff(out[i].item(), _golden_bam(*points[i])) for i in range(len(points)))
+    worst = max(
+        _bam_diff(out[i].item(), _golden_bam(*points[i])) for i in range(len(points))
+    )
     # Off-grid angles can sit a single BAM step from the rounded atan2 only when
     # the true angle lands within half a BAM unit of a threshold; the count is
     # otherwise exact. Real geometry (next test) is exact.
@@ -122,9 +124,9 @@ def test_octant_exact_on_e1m1_geometry() -> None:
     # The clamp must cover the geometry: bbox corners reach |d| ~2752, which
     # overruns the legacy 2048 clamp and is why the unified helper uses 3072.
     max_abs = max(max(abs(dx), abs(dy)) for dx, dy in points)
-    assert max_abs < _ATAN_ABS_RANGE, (
-        f"geometry |d|={max_abs:.1f} exceeds clamp {_ATAN_ABS_RANGE}"
-    )
+    assert (
+        max_abs < _ATAN_ABS_RANGE
+    ), f"geometry |d|={max_abs:.1f} exceeds clamp {_ATAN_ABS_RANGE}"
 
     out = _eval_octant(points)
     mismatches = [
@@ -132,9 +134,9 @@ def test_octant_exact_on_e1m1_geometry() -> None:
         for i in range(len(points))
         if _bam_diff(out[i].item(), _golden_bam(*points[i])) > 0.0
     ]
-    assert not mismatches, (
-        f"{len(mismatches)} octant/golden BAM mismatches, first 10: {mismatches[:10]}"
-    )
+    assert (
+        not mismatches
+    ), f"{len(mismatches)} octant/golden BAM mismatches, first 10: {mismatches[:10]}"
 
 
 def test_wrap_signed_angle_matches_reference() -> None:

@@ -43,17 +43,79 @@ from torchwright_doom.embedding import build_doom_embedding
 from torchwright_doom.past import GraphPast
 from torchwright_doom.render_main import forward
 
-
 # --- subsystem classification (by node name; first match wins) --------------
 _BUCKETS: list[tuple[str, tuple[str, ...]]] = [
     ("E8 type-code", ("emit_e8", "e8_", "type_code", "input_type")),
-    ("digit-quad emit", ("emit_dq", "emit_raw", "floor_int", "in_range", "q_value", "_dq", "thermometer")),
+    (
+        "digit-quad emit",
+        (
+            "emit_dq",
+            "emit_raw",
+            "floor_int",
+            "in_range",
+            "q_value",
+            "_dq",
+            "thermometer",
+        ),
+    ),
     ("emit other", ("emit_", "make_token", "derived_zero")),
-    ("attention/pick", ("attn", "pick", "attend", "softmax", "_qk", "score", "most_recent", "argmax", "argmin", "mean_where")),
-    ("geometry PWL", ("mul", "multiply", "atan", "ray", "abs", "cos", "sin", "cross", "side", "signed", "wrap", "piecewise", "sqrt", "reciprocal", "scale", "proj")),
-    ("compare/clamp", ("compare", "clamp", "gt_", "_gt", "marker_present", "step", "bool")),
+    (
+        "attention/pick",
+        (
+            "attn",
+            "pick",
+            "attend",
+            "softmax",
+            "_qk",
+            "score",
+            "most_recent",
+            "argmax",
+            "argmin",
+            "mean_where",
+        ),
+    ),
+    (
+        "geometry PWL",
+        (
+            "mul",
+            "multiply",
+            "atan",
+            "ray",
+            "abs",
+            "cos",
+            "sin",
+            "cross",
+            "side",
+            "signed",
+            "wrap",
+            "piecewise",
+            "sqrt",
+            "reciprocal",
+            "scale",
+            "proj",
+        ),
+    ),
+    (
+        "compare/clamp",
+        ("compare", "clamp", "gt_", "_gt", "marker_present", "step", "bool"),
+    ),
     ("select/dispatch", ("select", "cond_gate", "broadcast_select", "switch", "gate")),
-    ("affine glue", ("add_const", "sub", "neg", "add", "linear", "concat", "split", "sum", "literal", "zero", "one_hot")),
+    (
+        "affine glue",
+        (
+            "add_const",
+            "sub",
+            "neg",
+            "add",
+            "linear",
+            "concat",
+            "split",
+            "sum",
+            "literal",
+            "zero",
+            "one_hot",
+        ),
+    ),
     ("embedding", ("embedding", "embed", "lifted")),
 ]
 
@@ -70,8 +132,15 @@ def _node_label(n) -> str:
     return getattr(n, "name", "") or type(n).__name__
 
 
-def compile_capture(output_node, pos, d: int, d_head: int, optimize: int,
-                    d_hidden=None, run_optimize_graph: bool = False):
+def compile_capture(
+    output_node,
+    pos,
+    d: int,
+    d_head: int,
+    optimize: int,
+    d_hidden=None,
+    run_optimize_graph: bool = False,
+):
     """Compile once; return (compiled, node_to_layer, peak_width, peak_live).
 
     ``run_optimize_graph`` applies ``optimize_graph`` (``fuse_consecutive_linears``)
@@ -81,6 +150,7 @@ def compile_capture(output_node, pos, d: int, d_head: int, optimize: int,
     n_fused = None
     if run_optimize_graph:
         from torchwright.graph.optimize import fuse_consecutive_linears
+
         n_fused = fuse_consecutive_linears({output_node}, verbose=False)
 
     node_to_layer: dict[int, int] = {}
@@ -113,8 +183,14 @@ def compile_capture(output_node, pos, d: int, d_head: int, optimize: int,
     try:
         t0 = time.perf_counter()
         compiled = _exp.compile_headless(
-            output_node, pos, d=d, d_head=d_head, max_layers=400,
-            verbose=False, device="cpu", d_hidden=d_hidden,
+            output_node,
+            pos,
+            d=d,
+            d_head=d_head,
+            max_layers=400,
+            verbose=False,
+            device="cpu",
+            d_hidden=d_hidden,
         )
         t = time.perf_counter() - t0
     finally:
@@ -123,9 +199,15 @@ def compile_capture(output_node, pos, d: int, d_head: int, optimize: int,
     return compiled, node_to_layer, id_to_node, peak, t, n_fused
 
 
-def schedule_only_capture(output_node, pos, d: int, d_head: int,
-                          run_optimize_graph: bool = False, max_layers: int = 600,
-                          d_hidden=None):
+def schedule_only_capture(
+    output_node,
+    pos,
+    d: int,
+    d_head: int,
+    run_optimize_graph: bool = False,
+    max_layers: int = 600,
+    d_hidden=None,
+):
     """Memory-safe: run ONLY the heuristic scheduler (no weight tensors, no
     HeadlessTransformer) and return (n_layers, node_to_layer, id_to_node,
     peak_width, live_at_peak, n_fused).
@@ -143,6 +225,7 @@ def schedule_only_capture(output_node, pos, d: int, d_head: int,
     n_fused = None
     if run_optimize_graph:
         from torchwright.graph.optimize import fuse_consecutive_linears
+
         n_fused = fuse_consecutive_linears({output_node}, verbose=False)
 
     graph = GraphAnalyzer(output_node)
@@ -175,11 +258,18 @@ def schedule_only_capture(output_node, pos, d: int, d_head: int,
     _rm.ResidualStreamMap.allocate = _alloc
     try:
         layers, _routing, cancel, n_layers = _run_heuristic_warm_start(
-            graph=graph, d=d, d_head=d_head, pos_encoding=pos,
+            graph=graph,
+            d=d,
+            d_head=d_head,
+            pos_encoding=pos,
             d_hidden=(d_hidden if d_hidden else d),
-            residual_map=rmap, computed=computed, clusters=None,
-            admission_budget_fraction=0.4, policy=policy,
-            overlay_pinned_inputs=set(), output_node=output_node,
+            residual_map=rmap,
+            computed=computed,
+            clusters=None,
+            admission_budget_fraction=0.4,
+            policy=policy,
+            overlay_pinned_inputs=set(),
+            output_node=output_node,
             max_layers=max_layers,
         )
     finally:
@@ -211,8 +301,10 @@ def critical_path(output_node, n2l, id_to_node):
     """Trace the deepest dependency chain (the depth-determining critical path)."""
     memo: dict = {}
     # Seed from the deepest scheduled node reachable from the output.
-    start = max(scheduled_preds(output_node, n2l, memo) or [output_node],
-                key=lambda n: n2l.get(n.node_id, -1))
+    start = max(
+        scheduled_preds(output_node, n2l, memo) or [output_node],
+        key=lambda n: n2l.get(n.node_id, -1),
+    )
     chain = [start]
     cur = start
     while True:
@@ -242,12 +334,17 @@ def main():
         from torchwright_doom.protocol_tokens import ProtocolTokenView
         from torchwright_doom.scene_index import SceneIndex
         from torchwright_doom.render_main import (
-            publish_runtime_protocols, build_branch_outputs, _distinct_head_pairs,
+            publish_runtime_protocols,
+            build_branch_outputs,
+            _distinct_head_pairs,
         )
         from torchwright_doom.emit import emit_derived_zero
         from torchwright_doom.std import concat as _concat, type_switch as _ts
         from torchwright_doom.past import PastHandleScope
-        fanout = None if fanout_env.lower() in ("none", "0", "full") else int(fanout_env)
+
+        fanout = (
+            None if fanout_env.lower() in ("none", "0", "full") else int(fanout_env)
+        )
         gp = GraphPast(input_vec=emb, pos_encoding=pos)
         scene = SceneIndex.build(emb, gp, pos)
         scope = PastHandleScope(gp)
@@ -267,33 +364,45 @@ def main():
     sched_only = os.environ.get("SCHED_ONLY", "0") == "1"
     if sched_only:
         import time as _t
+
         t0 = _t.perf_counter()
         n_layers, n2l, id_to_node, peak_used, live, n_fused, pk_layer = (
-            schedule_only_capture(nt, pos, d, d_head, run_optimize_graph=run_og,
-                                  d_hidden=d_hidden))
+            schedule_only_capture(
+                nt, pos, d, d_head, run_optimize_graph=run_og, d_hidden=d_hidden
+            )
+        )
         t = _t.perf_counter() - t0
         peak = {"used": peak_used, "live": live}
-        print(f"=== SCHEDULE-ONLY (no weights): d={d} d_head={d_head} "
-              f"optimize_graph={run_og}(fused={n_fused}) "
-              f"layers={n_layers} peak_width={peak_used}@L{pk_layer} t={t:.1f}s ===")
+        print(
+            f"=== SCHEDULE-ONLY (no weights): d={d} d_head={d_head} "
+            f"optimize_graph={run_og}(fused={n_fused}) "
+            f"layers={n_layers} peak_width={peak_used}@L{pk_layer} t={t:.1f}s ==="
+        )
     else:
         compiled, n2l, id_to_node, peak, t, n_fused = compile_capture(
-            nt, pos, d, d_head, optimize, d_hidden=d_hidden, run_optimize_graph=run_og)
+            nt, pos, d, d_head, optimize, d_hidden=d_hidden, run_optimize_graph=run_og
+        )
         n_layers = compiled._n_layers
-        print(f"=== compiled: optimize={optimize} d={d} d_head={d_head} dh={d_hidden} "
-              f"optimize_graph={run_og}(fused={n_fused}) "
-              f"layers={n_layers} peak_width={peak['used']} compile={t:.1f}s ===")
+        print(
+            f"=== compiled: optimize={optimize} d={d} d_head={d_head} dh={d_hidden} "
+            f"optimize_graph={run_og}(fused={n_fused}) "
+            f"layers={n_layers} peak_width={peak['used']} compile={t:.1f}s ==="
+        )
 
     # ---- DEPTH: critical path by subsystem ----
     path = critical_path(nt, n2l, id_to_node)
-    print(f"\n--- critical path (depth driver): {len(path)} scheduled nodes "
-          f"spanning layers 0..{n2l.get(path[-1].node_id, '?')} ---")
+    print(
+        f"\n--- critical path (depth driver): {len(path)} scheduled nodes "
+        f"spanning layers 0..{n2l.get(path[-1].node_id, '?')} ---"
+    )
     path_buckets = Counter(bucket(_node_label(n)) for n in path)
     for b, c in path_buckets.most_common():
         print(f"  {c:4d}  {b}")
     print("  (full critical-path chain):")
     for n in path:
-        print(f"    L{n2l.get(n.node_id,'?'):>3}  {bucket(_node_label(n)):18s} {_node_label(n)}")
+        print(
+            f"    L{n2l.get(n.node_id,'?'):>3}  {bucket(_node_label(n)):18s} {_node_label(n)}"
+        )
 
     # ---- DEPTH: nodes-per-bucket and max-layer-per-bucket ----
     by_bucket_count: Counter = Counter()

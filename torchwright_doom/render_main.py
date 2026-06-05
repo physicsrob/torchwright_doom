@@ -386,9 +386,7 @@ def _collapse_world_angle_inputs(
     ``wrap_signed_angle`` (not an atan), so it must stay its own ``ScalarEmit``.
     """
     members = [
-        (name, out)
-        for name, out in branches.items()
-        if isinstance(out, AngleInputEmit)
+        (name, out) for name, out in branches.items() if isinstance(out, AngleInputEmit)
     ]
     if not members:
         return dict(branches)

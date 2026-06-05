@@ -678,9 +678,7 @@ def _digit_quad_payload(
         # NESS sets the (now narrow) ramp. (A two-stage mod BASE·16 / mod BASE
         # sawtooth would be narrower but its outer ramp is 16× wider in q-space,
         # re-opening a ~128-step zone at every BASE·16 boundary — rejected.)
-        q_over_base = _affine_1d(
-            q_node, 1.0 / float(BASE), 0.0, name=f"{name}_hi_div"
-        )
+        q_over_base = _affine_1d(q_node, 1.0 / float(BASE), 0.0, name=f"{name}_hi_div")
         hi_q = floor_int(q_over_base, 0, max_q // BASE, sharpness=_DQ_HI_SHARPNESS)
     hi_c_2 = _affine_1d(hi_q, 2.0, -2.0 * CENTER, name=f"{name}_hi_c2")
     # lo_q = q − BASE·hi_q realised as a single Linear over the

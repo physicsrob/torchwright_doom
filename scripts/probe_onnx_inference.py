@@ -1,6 +1,7 @@
 """De-risk: can onnxruntime run the doom token-I/O ONNX within VM memory, and
 does its prefill argmax match the exact-math oracle? (Decides whether compile
 validation can include inference or only the compile.)"""
+
 from __future__ import annotations
 import os, sys
 from pathlib import Path
@@ -8,7 +9,11 @@ import numpy as np
 
 _UMBRELLA = Path(__file__).resolve().parents[2]
 os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
-for p in (_UMBRELLA, _UMBRELLA / "torchwright_doom", _UMBRELLA / "torchwright_doom" / "tests"):
+for p in (
+    _UMBRELLA,
+    _UMBRELLA / "torchwright_doom",
+    _UMBRELLA / "torchwright_doom" / "tests",
+):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
@@ -39,5 +44,7 @@ print(f"prefill logits {logits.shape}, finite={bool(np.isfinite(logits).all())}"
 begin = len(ids) - 1
 emitted = int(logits[begin].argmax())
 expect = row_index(SET_CURSOR_DIRECTION_Y, {})
-print(f"BEGIN emits {TOKEN_VOCAB.row_to_token[emitted][0].name} (row {emitted}); "
-      f"expect setCursorDirectionY (row {expect}) -> {'OK' if emitted == expect else 'MISMATCH'}")
+print(
+    f"BEGIN emits {TOKEN_VOCAB.row_to_token[emitted][0].name} (row {emitted}); "
+    f"expect setCursorDirectionY (row {expect}) -> {'OK' if emitted == expect else 'MISMATCH'}"
+)

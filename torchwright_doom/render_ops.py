@@ -348,7 +348,9 @@ def ABS_SMALL_INT(x: Node) -> Node:
 
     Only used for equality / pixel-width decisions, where clamping large
     differences is fine (zero vs nonzero is all that matters)."""
-    return piecewise_linear(x, [-64.0, 0.0, 64.0], lambda v: abs(v), name="abs_small_int")
+    return piecewise_linear(
+        x, [-64.0, 0.0, 64.0], lambda v: abs(v), name="abs_small_int"
+    )
 
 
 def HAS_PIXEL_WIDTH(x_diff: Node) -> Node:
@@ -432,7 +434,15 @@ NEAR_DEN_SCALE_FACTOR = 1024.0
 
 
 def _mul_grid(
-    a: Node, b: Node, *, lo1: float, hi1: float, lo2: float, hi2: float, n: int, name: str
+    a: Node,
+    b: Node,
+    *,
+    lo1: float,
+    hi1: float,
+    lo2: float,
+    hi2: float,
+    n: int,
+    name: str,
 ) -> Node:
     """Sandbox ``multiply(input_range=((lo1,hi1),(lo2,hi2)), breakpoints=n)``.
 
@@ -459,8 +469,16 @@ def _mul_grid(
 def mul_normal_coord(coef: Node, rel: Node) -> Node:
     """Unit-normal coefficient × view-relative coordinate (sandbox
     ``MUL_NORMAL_COORD``, ``((-1,1),(-1200,1200))``, 65 bp)."""
-    return _mul_grid(coef, rel, lo1=-1.0, hi1=1.0, lo2=-1200.0, hi2=1200.0, n=65,
-                     name="mul_normal_coord")
+    return _mul_grid(
+        coef,
+        rel,
+        lo1=-1.0,
+        hi1=1.0,
+        lo2=-1200.0,
+        hi2=1200.0,
+        n=65,
+        name="mul_normal_coord",
+    )
 
 
 def MUL_UNIT(a: Node, b: Node) -> Node:
@@ -471,36 +489,76 @@ def MUL_UNIT(a: Node, b: Node) -> Node:
 def MUL_FAR_DEN(distance: Node, xtova_cos: Node) -> Node:
     """Far scale denominator: distance × view-angle cosine (sandbox
     ``MUL_FAR_DEN``, ``((1,1500),(0.7,1.01))``, 257 bp)."""
-    return _mul_grid(distance, xtova_cos, lo1=1.0, hi1=1500.0, lo2=0.7, hi2=1.01,
-                     n=257, name="mul_far_den")
+    return _mul_grid(
+        distance,
+        xtova_cos,
+        lo1=1.0,
+        hi1=1500.0,
+        lo2=0.7,
+        hi2=1.01,
+        n=257,
+        name="mul_far_den",
+    )
 
 
 def MUL_NEAR_DEN(distance: Node, xtova_cos: Node) -> Node:
     """Near scale denominator (sandbox ``MUL_NEAR_DEN``, ``((0.001,1),(0.7,1.01))``,
     257 bp)."""
-    return _mul_grid(distance, xtova_cos, lo1=0.001, hi1=1.0, lo2=0.7, hi2=1.01,
-                     n=257, name="mul_near_den")
+    return _mul_grid(
+        distance,
+        xtova_cos,
+        lo1=0.001,
+        hi1=1.0,
+        lo2=0.7,
+        hi2=1.01,
+        n=257,
+        name="mul_near_den",
+    )
 
 
 def mul_far_scale(numerator: Node, inverse_denominator: Node) -> Node:
     """Far scale = numerator × (1/denominator) (sandbox ``MUL_FAR_SCALE``,
     ``((0, 32·ratio),(0, 0.1))``, 257 bp)."""
-    return _mul_grid(numerator, inverse_denominator, lo1=0.0, hi1=32.0 * _PROJ_RATIO,
-                     lo2=0.0, hi2=0.1, n=257, name="mul_far_scale")
+    return _mul_grid(
+        numerator,
+        inverse_denominator,
+        lo1=0.0,
+        hi1=32.0 * _PROJ_RATIO,
+        lo2=0.0,
+        hi2=0.1,
+        n=257,
+        name="mul_far_scale",
+    )
 
 
 def MUL_NEAR_FLOOR_SCALE(numerator: Node, inverse_denominator: Node) -> Node:
     """Near-floor scale (sandbox ``MUL_NEAR_FLOOR_SCALE``, ``((0, 0.1·ratio),(0, 2))``,
     257 bp)."""
-    return _mul_grid(numerator, inverse_denominator, lo1=0.0, hi1=0.1 * _PROJ_RATIO,
-                     lo2=0.0, hi2=2.0, n=257, name="mul_near_floor_scale")
+    return _mul_grid(
+        numerator,
+        inverse_denominator,
+        lo1=0.0,
+        hi1=0.1 * _PROJ_RATIO,
+        lo2=0.0,
+        hi2=2.0,
+        n=257,
+        name="mul_near_floor_scale",
+    )
 
 
 def mul_scalestep(diff: Node, inverse_width: Node) -> Node:
     """Per-column scale step = (scale2-scale1) × (1/width) (sandbox
     ``MUL_SCALESTEP``, ``((-2.5·ratio, 2.5·ratio),(0, 1))``, 257 bp)."""
-    return _mul_grid(diff, inverse_width, lo1=-2.5 * _PROJ_RATIO, hi1=2.5 * _PROJ_RATIO,
-                     lo2=0.0, hi2=1.0, n=257, name="mul_scalestep")
+    return _mul_grid(
+        diff,
+        inverse_width,
+        lo1=-2.5 * _PROJ_RATIO,
+        hi1=2.5 * _PROJ_RATIO,
+        lo2=0.0,
+        hi2=1.0,
+        n=257,
+        name="mul_scalestep",
+    )
 
 
 def FAR_DEN_CLAMP(x: Node) -> Node:

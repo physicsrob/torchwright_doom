@@ -269,8 +269,7 @@ def test_narrow_slot_high_byte_is_constant_no_floor() -> None:
             out = emit_int_slot_token(NODE, j=j_in)
             # (a) No floor_int op anywhere in the emit subgraph for this slot.
             assert not any(
-                getattr(n, "name", "").startswith("floor_int")
-                for n in _all_nodes(out)
+                getattr(n, "name", "").startswith("floor_int") for n in _all_nodes(out)
             ), f"NODE(j={k}) emit still builds a floor_int staircase"
             cache = reference_eval(
                 out, input_values={"j": torch.tensor([[float(k)]])}, n_pos=1

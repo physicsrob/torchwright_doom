@@ -4,6 +4,7 @@ emitted next token? type_switch's fold is a sum of gated heads; reassociating it
 token-I/O forward at fanout=2 and fanout=None on TINY_BSP_SCENE and compares the
 per-position next-token argmax. Memory-safe (exact math, no compile, n_pos=20).
 """
+
 from __future__ import annotations
 import os, sys
 from pathlib import Path
@@ -22,7 +23,9 @@ from torchwright_doom.past import GraphPast, PastHandleScope
 from torchwright_doom.scene_index import SceneIndex
 from torchwright_doom.protocol_tokens import ProtocolTokenView
 from torchwright_doom.render_main import (
-    publish_runtime_protocols, build_branch_outputs, _distinct_head_pairs,
+    publish_runtime_protocols,
+    build_branch_outputs,
+    _distinct_head_pairs,
 )
 from torchwright_doom.emit import emit_derived_zero
 from torchwright_doom.std import concat as C, type_switch as TS
@@ -46,12 +49,14 @@ def build_forward(emb, pos, fanout):
 def main():
     sys.path.insert(0, str(_UMBRELLA / "torchwright_doom" / "tests"))
     from prefill_fixture import TINY_BSP_SCENE, row_index as _row_index
+
     ids = [_row_index(t, s) for t, s in TINY_BSP_SCENE]
     ids_col = torch.tensor([[float(i)] for i in ids], dtype=torch.float32)
     n_pos = len(ids)
     w_t = W_EMBED.t()
 
     import torchwright.graph.misc as _misc
+
     _orig = _misc.Assert._check
     _misc.Assert._check = lambda self, x: None  # garbage candidates trip range asserts
     results = {}
@@ -61,7 +66,9 @@ def main():
             emb = build_doom_embedding("token_ids")
             nt = build_forward(emb, pos, fanout)
             cache = reference_eval(nt, {"token_ids": ids_col}, n_pos)
-            results[fanout] = [int(torch.argmax(cache[nt][i] @ w_t).item()) for i in range(n_pos)]
+            results[fanout] = [
+                int(torch.argmax(cache[nt][i] @ w_t).item()) for i in range(n_pos)
+            ]
     finally:
         _misc.Assert._check = _orig
 
@@ -69,7 +76,9 @@ def main():
     mism = [(i, a[i], b[i]) for i in range(n_pos) if a[i] != b[i]]
     print(f"fanout=2 vs flat: {n_pos} positions, {len(mism)} mismatches")
     for i, x, y in mism:
-        print(f"  pos {i}: {TOKEN_VOCAB.row_to_token[x][0].name} != {TOKEN_VOCAB.row_to_token[y][0].name}")
+        print(
+            f"  pos {i}: {TOKEN_VOCAB.row_to_token[x][0].name} != {TOKEN_VOCAB.row_to_token[y][0].name}"
+        )
     print("RESULT: IDENTICAL" if not mism else "RESULT: DIFFERS")
 
 

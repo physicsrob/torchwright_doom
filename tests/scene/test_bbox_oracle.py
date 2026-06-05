@@ -81,8 +81,14 @@ _CARRIERS = {"value", "angleValue"}
 # excluded (contrast the projection gate's ``drawseg.uPhase``, whose carrier ran
 # into a Phase-H NO_OP stub).
 _CARRIER_MARKERS = {
-    "bbox.x1", "bbox.y1", "bbox.x2", "bbox.y2",
-    "bbox.angle1", "bbox.theta1", "bbox.angle2", "bbox.theta2",
+    "bbox.x1",
+    "bbox.y1",
+    "bbox.x2",
+    "bbox.y2",
+    "bbox.angle1",
+    "bbox.theta1",
+    "bbox.angle2",
+    "bbox.theta2",
 }
 
 # Carrier-value tolerances (same basis as the projection gate). Angles: octant
@@ -231,7 +237,9 @@ def _scan_next_tokens(bbox_eval) -> dict:
             if next_name in ("R_Subsector", "bspFront"):
                 n_descend += 1
             elif next_name == "bboxClipScan":
-                n_interval_skip += 1  # covered -> skip to next_x (needs populated intervals)
+                n_interval_skip += (
+                    1  # covered -> skip to next_x (needs populated intervals)
+                )
         if next_name == "bspReturn":
             n_prune += 1
 
@@ -265,10 +273,9 @@ def test_bbox_carriers_within_tolerance(bbox_eval) -> None:
     """The bbox corner ``value`` (R0) and world/theta ``angleValue`` carriers are
     within tolerance (octant ±BAM; the R0 digit-quad floor's encode noise)."""
     scan = _scan_next_tokens(bbox_eval)
-    assert not scan["carrier_mismatches"], (
-        "bbox CARRIER value mismatches:\n"
-        + "\n".join(scan["carrier_mismatches"][:25])
-    )
+    assert not scan[
+        "carrier_mismatches"
+    ], "bbox CARRIER value mismatches:\n" + "\n".join(scan["carrier_mismatches"][:25])
 
 
 def test_bbox_markers_exact(bbox_eval) -> None:

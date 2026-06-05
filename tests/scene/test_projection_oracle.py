@@ -77,11 +77,21 @@ _CARRIERS = {"value", "angleValue"}
 # reduced build NO_OP-stubs — that position is the F→H boundary, not an F
 # comparison. (``drawseg.uPhase`` itself is still compared as a marker.)
 _CARRIER_MARKERS = {
-    "angle1", "theta1", "angle2", "theta2",
-    "segDcTmidMid", "segDcTmidUpper", "segDcTmidLower",
-    "drawseg.scale1.den", "drawseg.scale1", "drawseg.scale2.den", "drawseg.scale2",
-    "drawseg.scalestep.den", "drawseg.scalestep",
-    "drawseg.bsilheight", "drawseg.tsilheight",
+    "angle1",
+    "theta1",
+    "angle2",
+    "theta2",
+    "segDcTmidMid",
+    "segDcTmidUpper",
+    "segDcTmidLower",
+    "drawseg.scale1.den",
+    "drawseg.scale1",
+    "drawseg.scale2.den",
+    "drawseg.scale2",
+    "drawseg.scalestep.den",
+    "drawseg.scalestep",
+    "drawseg.bsilheight",
+    "drawseg.tsilheight",
 }
 
 # Carrier-value tolerances. Angles: the octant count vs the drafter's
@@ -122,6 +132,10 @@ def _is_carrier(full, i: int) -> bool:
         and i > 0
         and full[i - 1].type.name in _CARRIER_MARKERS
     )
+
+
+def _is_compared(full, i: int) -> bool:
+    return _is_marker(full, i) or _is_carrier(full, i)
 
 
 def _carrier_delta(name: str, predicted_row: int, expected_row: int) -> float | None:
@@ -220,7 +234,7 @@ def _scan_next_tokens(projection_eval) -> dict:
     for i in range(begin, n_pos - 1):
         if full[i].type.name == "R_StoreWallRange" and first_store_idx is None:
             first_store_idx = i
-        if not (_is_marker(full, i) or _is_carrier(full, i)):
+        if not _is_compared(full, i):
             continue
         coverage[full[i].type.name] += 1
         predicted_row = int(torch.argmax(emitted[i] @ w_embed_t).item())
@@ -256,9 +270,10 @@ def test_projection_carriers_within_tolerance(projection_eval) -> None:
     continuous 16-bit q with the cancellation-free ``floor_int`` (was the
     integer-only ``thermometer_floor_div``, which interpolated junk)."""
     scan = _scan_next_tokens(projection_eval)
-    assert not scan["carrier_mismatches"], (
-        "projection CARRIER value mismatches:\n"
-        + "\n".join(scan["carrier_mismatches"][:25])
+    assert not scan[
+        "carrier_mismatches"
+    ], "projection CARRIER value mismatches:\n" + "\n".join(
+        scan["carrier_mismatches"][:25]
     )
 
 
@@ -293,7 +308,7 @@ def test_projection_markers_exact(projection_eval) -> None:
     later_clipscans = sum(
         1
         for i in range(first_store_idx + 1, n_pos - 1)
-        if full[i].type.name == "clipScan" and _compared(full, i)
+        if full[i].type.name == "clipScan" and _is_compared(full, i)
     )
     if _AR_SPAN >= _OCCLUSION_AR_SPAN:
         assert later_clipscans >= 1, (

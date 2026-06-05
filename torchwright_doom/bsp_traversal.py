@@ -119,9 +119,7 @@ class BspTraversal:
         side_table = SideTable.publish(past, inp)
         enter_child = _node_first_child(scene, side_table, inp.enter_node)
         between_child = _node_second_child(scene, side_table, inp.between_node)
-        enter_child_lifted = _node_first_child_lifted(
-            scene, side_table, inp.enter_node
-        )
+        enter_child_lifted = _node_first_child_lifted(scene, side_table, inp.enter_node)
         between_child_lifted = _node_second_child_lifted(
             scene, side_table, inp.between_node
         )

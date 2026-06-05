@@ -28,6 +28,7 @@ port.
 from __future__ import annotations
 
 from functools import cached_property
+from typing import TYPE_CHECKING
 
 from torchwright.graph import Node
 
@@ -111,6 +112,73 @@ from .vocab import (
 
 class ProtocolTokenView:
     """Lazy typed view over the current AR protocol token."""
+
+    if TYPE_CHECKING:
+        # These cached properties are installed from TOKEN_CHECK_PREDICATES at
+        # module import time; declare them here so mypy sees the generated API.
+        is_value: Node
+        is_angle_value: Node
+        is_begin: Node
+        is_think_side: Node
+        is_side_record: Node
+        is_enter: Node
+        is_between: Node
+        is_return: Node
+        is_visit_subsector: Node
+        is_process_seg: Node
+        is_find_run: Node
+        is_world_a_mark: Node
+        is_theta_a_mark: Node
+        is_world_b_mark: Node
+        is_theta_b_mark: Node
+        is_bbox_boxpos: Node
+        is_bbox_corner_x_a_mark: Node
+        is_bbox_corner_y_a_mark: Node
+        is_bbox_corner_x_b_mark: Node
+        is_bbox_corner_y_b_mark: Node
+        is_bbox_world_a_mark: Node
+        is_bbox_theta_a_mark: Node
+        is_bbox_world_b_mark: Node
+        is_bbox_theta_b_mark: Node
+        is_bbox_scan: Node
+        is_advance_seg: Node
+        is_emit_x2: Node
+        is_store_wall_range: Node
+        is_seg_kpart: Node
+        is_seg_dc_tmid_mid: Node
+        is_seg_dc_tmid_upper: Node
+        is_seg_dc_tmid_lower: Node
+        is_drawseg_meta: Node
+        is_drawseg_scale1_den: Node
+        is_drawseg_scale1: Node
+        is_drawseg_scale2_den: Node
+        is_drawseg_scale2: Node
+        is_drawseg_scalestep_den: Node
+        is_drawseg_scalestep: Node
+        is_drawseg_bsilheight: Node
+        is_drawseg_tsilheight: Node
+        is_drawseg_u_phase: Node
+        is_r_check_plane: Node
+        is_r_check_plane_result: Node
+        is_wall_column: Node
+        is_wall_col_u: Node
+        is_wall_span_meta: Node
+        is_set_cursor_y: Node
+        is_pixel_color: Node
+        is_clip_update: Node
+        is_plane_mark: Node
+        is_draw_planes_begin: Node
+        is_flat_next_plane: Node
+        is_flat_next_vp: Node
+        is_flat_visplane_begin: Node
+        is_make_spans_col: Node
+        is_span_close_slot: Node
+        is_span_row: Node
+        is_set_cursor_direction_y: Node
+        is_set_cursor_direction_x: Node
+        is_screen_y_value: Node
+        is_screen_range: Node
+        is_done: Node
 
     def __init__(
         self,
@@ -748,7 +816,7 @@ class ProtocolTokenView:
 
 
 def _token_check_property(token_type: TokenType):
-    @cached_property
+    @cached_property  # type: ignore[misc]
     def predicate(self: ProtocolTokenView) -> Node:
         return token_type.check(self.input_vec)
 

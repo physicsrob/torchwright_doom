@@ -103,8 +103,9 @@ def _warm_start(graph, output_node, pos, d, d_head, rmap, computed, max_layers):
     )
 
 
-def mode_status(output_node, pos, d, d_head, time_budget_s, solver_log,
-                horizon_margin=1):
+def mode_status(
+    output_node, pos, d, d_head, time_budget_s, solver_log, horizon_margin=1
+):
     graph, output_node, rmap, computed = _setup(output_node, pos, d)
     t0 = time.perf_counter()
     hint_layers, hint_routing, hint_cancel, hint_n_layers = _warm_start(
@@ -235,15 +236,18 @@ def localize(output_node, pos, d, d_head, time_budget_s):
     # the BIRTH-dirty over-count is the culprit.
     all_fams_no_attn = frozenset(CONSTRAINT_FAMILIES) - {"attn_cumulative"}
     bz = build_cpsat_model(
-        output_node, pos, d=d, d_head=d_head, d_hidden=d,
-        max_layers=solver_max_layers, _disabled_families=all_fams_no_attn,
+        output_node,
+        pos,
+        d=d,
+        d_head=d_head,
+        d_hidden=d,
+        max_layers=solver_max_layers,
+        _disabled_families=all_fams_no_attn,
         assume_zero_init=True,
     )
     _fix_schedule(bz, hint_layers, hint_routing, None)
     stz = _solve_status(bz.model, time_budget_s)
-    print(
-        f"  [only attn_cumulative, assume_zero_init=True (no BIRTH-dirty)] -> {stz}"
-    )
+    print(f"  [only attn_cumulative, assume_zero_init=True (no BIRTH-dirty)] -> {stz}")
 
     # Sanity baseline: disable ALL toggleable families.  With layers+routing
     # fixed and cancel free and no capacity/ordering family, only definitional
@@ -256,8 +260,13 @@ def localize(output_node, pos, d, d_head, time_budget_s):
     b0b, _ = _build(disabled=all_fams)
     # layer-only fix (no routing) with all off — isolates a routing conflict.
     b0b2 = build_cpsat_model(
-        output_node, pos, d=d, d_head=d_head, d_hidden=d,
-        max_layers=solver_max_layers, _disabled_families=all_fams,
+        output_node,
+        pos,
+        d=d,
+        d_head=d_head,
+        d_hidden=d,
+        max_layers=solver_max_layers,
+        _disabled_families=all_fams,
     )
     _fix_schedule(b0b2, hint_layers, None, None)
     st0b = _solve_status(b0b2.model, time_budget_s)
@@ -265,7 +274,9 @@ def localize(output_node, pos, d, d_head, time_budget_s):
 
     # Dual bisect: ENABLE exactly one family (all others off).  Each family
     # that is INFEASIBLE on its own independently rejects the heuristic point.
-    print("  --- dual: ENABLE ONE family (rest off), fix layer+routing, cancel free ---")
+    print(
+        "  --- dual: ENABLE ONE family (rest off), fix layer+routing, cancel free ---"
+    )
     for fam in sorted(CONSTRAINT_FAMILIES):
         disabled = all_fams - {fam}
         bb, _ = _build(disabled=disabled)
@@ -274,7 +285,9 @@ def localize(output_node, pos, d, d_head, time_budget_s):
         print(f"    only {fam:<20} -> {s}{flag}")
 
     # Original bisect: disable exactly one family (rest on).
-    print("  --- bisect: disable ONE family (rest on), fix layer+routing, cancel free ---")
+    print(
+        "  --- bisect: disable ONE family (rest on), fix layer+routing, cancel free ---"
+    )
     for fam in sorted(CONSTRAINT_FAMILIES):
         bb, _ = _build(disabled=frozenset({fam}))
         s = _solve_status(bb.model, time_budget_s)
@@ -325,29 +338,40 @@ def noeager(output_node, pos, d, d_head, time_budget_s):
     # problem is purely that CP-SAT isn't seeding from it (a solver-param issue).
     def _mk(disabled=frozenset()):
         return build_cpsat_model(
-            output_node, pos, d=d, d_head=d_head, d_hidden=d,
-            max_layers=solver_max_layers, assume_zero_init=True,
+            output_node,
+            pos,
+            d=d,
+            d_head=d_head,
+            d_hidden=d,
+            max_layers=solver_max_layers,
+            assume_zero_init=True,
             _disabled_families=disabled,
         )
 
     # (1) fix layer+routing, cancel FREE -> is the LAYER ASSIGNMENT feasible?
-    b1 = _mk(); c1 = _fix_schedule(b1, hint_layers, hint_routing, None)
+    b1 = _mk()
+    c1 = _fix_schedule(b1, hint_layers, hint_routing, None)
     s1 = _solve_status(b1.model, 30.0)
-    print(f"            fix layer+routing, cancel FREE -> {s1} "
-          f"(L={c1[0]} route={c1[1]})")
+    print(
+        f"            fix layer+routing, cancel FREE -> {s1} "
+        f"(L={c1[0]} route={c1[1]})"
+    )
     # (2) also fix cancel
-    b2 = _mk(); c2 = _fix_schedule(b2, hint_layers, hint_routing, hint_cancel)
+    b2 = _mk()
+    c2 = _fix_schedule(b2, hint_layers, hint_routing, hint_cancel)
     s2 = _solve_status(b2.model, 30.0)
     print(f"            fix layer+routing+cancel={c2[2]} -> {s2}")
     # (3) ALL families off, fix layer+routing -> sanity (must be feasible)
     allf = frozenset(CONSTRAINT_FAMILIES)
-    b3 = _mk(allf); _fix_schedule(b3, hint_layers, hint_routing, None)
+    b3 = _mk(allf)
+    _fix_schedule(b3, hint_layers, hint_routing, None)
     s3 = _solve_status(b3.model, 30.0)
     print(f"            [ALL families OFF] fix layer+routing -> {s3}")
     # (4) dual: enable only one family (cancel free) -> which independently rejects
     if s1 == "INFEASIBLE":
         for fam in sorted(CONSTRAINT_FAMILIES):
-            bb = _mk(allf - {fam}); _fix_schedule(bb, hint_layers, hint_routing, None)
+            bb = _mk(allf - {fam})
+            _fix_schedule(bb, hint_layers, hint_routing, None)
             s = _solve_status(bb.model, 30.0)
             flag = " <== REJECTS" if s == "INFEASIBLE" else ""
             print(f"              only {fam:<20} -> {s}{flag}")
@@ -432,16 +456,11 @@ def measure(output_node, pos, d, d_head):
 
     def free_add(A):
         for E in A.inputs:
-            if (
-                isinstance(E, Concatenate)
-                or E in pinned
-                or E.node_id not in layer_of
-            ):
+            if isinstance(E, Concatenate) or E in pinned or E.node_id not in layer_of:
                 continue
             other = [c for c in gm.consumers_eff.get(E, set()) if c is not A]
             if any(
-                isinstance(c, Concatenate) or c.node_id not in layer_of
-                for c in other
+                isinstance(c, Concatenate) or c.node_id not in layer_of for c in other
             ):
                 continue
             if all(layer_of[c.node_id] < layer_of[A.node_id] for c in other):
@@ -554,8 +573,12 @@ def main():
     ap.add_argument("--d", type=int, nargs="+", default=[11200, 2560])
     ap.add_argument("--d-head", type=int, default=160)
     ap.add_argument("--time-budget", type=float, default=30.0)
-    ap.add_argument("--horizon-margin", type=int, default=1,
-                    help="solver_max_layers = hint_n_layers + this (default 1)")
+    ap.add_argument(
+        "--horizon-margin",
+        type=int,
+        default=1,
+        help="solver_max_layers = hint_n_layers + this (default 1)",
+    )
     ap.add_argument("--solver-log", action="store_true")
     args = ap.parse_args()
 
@@ -567,8 +590,15 @@ def main():
             if d % args.d_head != 0:
                 print(f"  d={d}  skipped (not a multiple of d_head={args.d_head})")
                 continue
-            mode_status(nt, pos, d, args.d_head, args.time_budget,
-                        args.solver_log, args.horizon_margin)
+            mode_status(
+                nt,
+                pos,
+                d,
+                args.d_head,
+                args.time_budget,
+                args.solver_log,
+                args.horizon_margin,
+            )
     elif args.mode == "localize":
         for d in args.d:
             if d % args.d_head != 0:

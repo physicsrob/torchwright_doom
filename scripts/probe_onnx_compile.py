@@ -8,6 +8,7 @@ also exercises the real token-I/O artifact (token_ids -> logits, KV-cached).
 Run with peak-RSS measurement:
     D=6400 /usr/bin/time -v python -m scripts.probe_onnx_compile
 """
+
 from __future__ import annotations
 import os, sys, time
 from pathlib import Path
@@ -38,11 +39,14 @@ else:
     from torchwright_doom.protocol_tokens import ProtocolTokenView
     from torchwright_doom.scene_index import SceneIndex
     from torchwright_doom.render_main import (
-        publish_runtime_protocols, build_branch_outputs, _distinct_head_pairs,
+        publish_runtime_protocols,
+        build_branch_outputs,
+        _distinct_head_pairs,
     )
     from torchwright_doom.emit import emit_derived_zero
     from torchwright_doom.std import concat as _C, type_switch as _TS
     from torchwright_doom.past import PastHandleScope
+
     fanout = None if fanout_env.lower() in ("none", "0", "full") else int(fanout_env)
     gp = GraphPast(input_vec=emb, pos_encoding=pos)
     scene = SceneIndex.build(emb, gp, pos)
@@ -54,16 +58,30 @@ else:
     )
     protocols = publish_runtime_protocols(emb, scope, inp, scene, pos)
     branches = build_branch_outputs(inp, protocols)
-    nt = _C(_TS(*_distinct_head_pairs(inp, branches), max_fanout=fanout),
-            emit_derived_zero())
+    nt = _C(
+        _TS(*_distinct_head_pairs(inp, branches), max_fanout=fanout),
+        emit_derived_zero(),
+    )
 
 opt = int(os.environ.get("OPT", "0"))
 trim = os.environ.get("TRIM", "1") == "1"
-print(f"=== compile_to_onnx token-I/O: d={D} d_head={D_HEAD} fanout={fanout_env} "
-      f"optimize={opt} trim_heads={trim} ===")
+print(
+    f"=== compile_to_onnx token-I/O: d={D} d_head={D_HEAD} fanout={fanout_env} "
+    f"optimize={opt} trim_heads={trim} ==="
+)
 t0 = time.perf_counter()
-compile_to_onnx(nt, pos, embedding=emb, output_path=out_path, d=D, d_head=D_HEAD,
-                max_layers=400, verbose=True, trim_heads=trim, optimize=opt)
+compile_to_onnx(
+    nt,
+    pos,
+    embedding=emb,
+    output_path=out_path,
+    d=D,
+    d_head=D_HEAD,
+    max_layers=400,
+    verbose=True,
+    trim_heads=trim,
+    optimize=opt,
+)
 print(f"compile wall time: {time.perf_counter()-t0:.1f}s")
 if os.path.exists(out_path):
     print(f"onnx size: {os.path.getsize(out_path)/1e6:.1f} MB")
