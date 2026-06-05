@@ -13,15 +13,17 @@ module-level ``constant(...)`` sentinels (``_SENTINEL_KEY`` etc.) are built
 *inside* the methods — a module-level ``constant`` is a graph node whose low
 id aliases test-built nodes after the conftest id-counter reset
 (``reference_eval`` / ``probe_compiled`` memoisation). The integer index
-tables ``_SCALED_START`` / ``_NEXT_START_INDICATORS`` are plain weight data,
-so they stay at module scope.
+tables used by the radix successor are plain weight data, so they stay at
+module scope.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 from torchwright.graph import Node
+from torchwright.ops.arithmetic_ops import compare, mod_const, thermometer_floor_div
 
 from .attention_handles import RecentMarkerHandle
 from .constants import SCREEN_WIDTH
@@ -29,15 +31,32 @@ from .past import PastHandle, PastHandleScope
 from .protocol_tokens import ProtocolTokenView
 from .render_ops import MUL_SCREEN, add_const, and_, one_minus, snap_bool
 from .scene_index import SceneIndex
-from .std import concat, constant, linear, one_hot, select, split
+from .std import (
+    bool_and,
+    clamp,
+    concat,
+    constant,
+    linear,
+    one_hot,
+    pick_by_one_hot,
+    select,
+    split,
+)
 
-# Per-position start-score scale and the threshold indicator basis for
-# ``pick_argmin_above``. Plain weight data (no graph nodes), so module scope is
-# fine; both are sized by SCREEN_WIDTH, which is fixed at import.
-_SCALED_START = [[0.75]]
-_NEXT_START_INDICATORS = [
-    [1.0 if start > threshold else 0.0 for threshold in range(SCREEN_WIDTH + 1)]
-    for start in range(SCREEN_WIDTH + 1)
+_RADIX_BASE = math.ceil(math.sqrt(SCREEN_WIDTH + 1))
+_N_BUCKETS = SCREEN_WIDTH // _RADIX_BASE + 1
+_INVALID_HI = _N_BUCKETS
+
+# Plain weight data (no graph nodes), so module scope is safe. The runtime graph
+# forms the row index with ``one_hot`` and uses these tables to publish the small
+# strict-above indicator bases that H1/H2 consume.
+_LO_ABOVE_TABLE = [
+    [1.0 if lo > threshold else 0.0 for threshold in range(_RADIX_BASE)]
+    for lo in range(_RADIX_BASE)
+]
+_HI_FOR_H2_ABOVE_TABLE = [
+    [1.0 if hi > threshold else 0.0 for threshold in range(_N_BUCKETS)]
+    for hi in range(_N_BUCKETS + 1)
 ]
 
 
@@ -48,9 +67,17 @@ class SolidIntervals:
     past: PastHandleScope
     key: PastHandle
     interval_state: PastHandle
-    start_score: PastHandle
-    start_indicators: PastHandle
-    start_value: PastHandle
+    solid_emit: PastHandle
+    start_s: PastHandle
+    start_hi: PastHandle
+    start_lo: PastHandle
+    start_bucket_onehot: PastHandle
+    start_above_lo: PastHandle
+    start_hi_for_h2: PastHandle
+    start_hi_above_for_h2: PastHandle
+    start_above_all: PastHandle
+    same_payload: PastHandle
+    carry_payload: PastHandle
 
     @classmethod
     def publish(
@@ -92,23 +119,23 @@ class SolidIntervals:
             "solid_interval_state",
             concat(solid_emit, select(solid_emit, x2, sentinel_start)),
         )
-        start_value_vec = select(solid_emit, x1, sentinel_start)
-        start_value = past.publish("solid_interval_start", start_value_vec)
-        start_score = past.publish(
-            "solid_interval_start_score",
-            linear(start_value_vec, _SCALED_START),
-        )
-        start_indicators = past.publish(
-            "solid_interval_start_above",
-            linear(one_hot(start_value_vec, SCREEN_WIDTH + 1), _NEXT_START_INDICATORS),
-        )
+        start_s = select(solid_emit, x1, sentinel_start)
+        successor = _publish_successor_fields(past, start_s, solid_emit)
         return cls(
             past=past,
             key=key,
             interval_state=interval_state,
-            start_score=start_score,
-            start_indicators=start_indicators,
-            start_value=start_value,
+            solid_emit=successor.solid_emit,
+            start_s=successor.start_s,
+            start_hi=successor.start_hi,
+            start_lo=successor.start_lo,
+            start_bucket_onehot=successor.start_bucket_onehot,
+            start_above_lo=successor.start_above_lo,
+            start_hi_for_h2=successor.start_hi_for_h2,
+            start_hi_above_for_h2=successor.start_hi_above_for_h2,
+            start_above_all=successor.start_above_all,
+            same_payload=successor.same_payload,
+            carry_payload=successor.carry_payload,
         )
 
     # DOOM: solidsegs scan predicate (r_bsp.c:R_ClipSolidWallSegment/R_ClipPassWallSegment)
@@ -144,12 +171,137 @@ class SolidIntervals:
 
     def next_start_after(self, column: Node) -> Node:
         """Return the nearest solid interval start strictly after `column`."""
-        return self.past.pick_argmin_above(
-            self.start_score,
-            self.start_indicators,
-            one_hot(column, SCREEN_WIDTH + 1),
-            self.start_value,
+        query_hi = thermometer_floor_div(column, _RADIX_BASE, SCREEN_WIDTH)
+        query_lo = mod_const(column, _RADIX_BASE, SCREEN_WIDTH)
+        query_bucket_onehot = one_hot(query_hi, _N_BUCKETS)
+        query_lo_threshold = one_hot(query_lo, _RADIX_BASE)
+
+        same = self.past.pick_argmin_above_in_bucket(
+            self.start_lo,
+            self.solid_emit,
+            self.start_bucket_onehot,
+            self.start_above_lo,
+            query_bucket_onehot,
+            query_lo_threshold,
+            self.same_payload,
         )
+        same_s, same_solid, same_bucket_oh, same_above_lo = split(
+            same,
+            [1, 1, _N_BUCKETS, _RADIX_BASE],
+        )
+        same_bucket_score = pick_by_one_hot(query_bucket_onehot, same_bucket_oh)
+        same_above_score = pick_by_one_hot(query_lo_threshold, same_above_lo)
+        same_present = bool_and(
+            snap_bool(same_solid),
+            compare(same_bucket_score, 0.9),
+            compare(same_above_score, 0.9),
+        )
+
+        higher_hi = self.past.pick_argmin_above(
+            self.start_hi_for_h2,
+            self.start_hi_above_for_h2,
+            query_bucket_onehot,
+            self.start_hi_for_h2,
+        )
+        higher_bucket_query = one_hot(
+            clamp(higher_hi, 0.0, float(_N_BUCKETS - 1)), _N_BUCKETS
+        )
+
+        carry = self.past.pick_argmin_above_in_bucket(
+            self.start_lo,
+            self.solid_emit,
+            self.start_bucket_onehot,
+            self.start_above_all,
+            higher_bucket_query,
+            constant([1.0]),
+            self.carry_payload,
+        )
+        carry_s, carry_solid, carry_bucket_oh = split(carry, [1, 1, _N_BUCKETS])
+        higher_is_real_bucket = one_minus(compare(higher_hi, float(_N_BUCKETS) - 0.5))
+        carry_bucket_score = pick_by_one_hot(higher_bucket_query, carry_bucket_oh)
+        carry_present = bool_and(
+            higher_is_real_bucket,
+            snap_bool(carry_solid),
+            compare(carry_bucket_score, 0.9),
+        )
+
+        return select(
+            same_present,
+            same_s,
+            select(carry_present, carry_s, constant(float(SCREEN_WIDTH))),
+        )
+
+
+@dataclass(frozen=True)
+class _SuccessorHandles:
+    solid_emit: PastHandle
+    start_s: PastHandle
+    start_hi: PastHandle
+    start_lo: PastHandle
+    start_bucket_onehot: PastHandle
+    start_above_lo: PastHandle
+    start_hi_for_h2: PastHandle
+    start_hi_above_for_h2: PastHandle
+    start_above_all: PastHandle
+    same_payload: PastHandle
+    carry_payload: PastHandle
+
+
+def _publish_successor_fields(
+    past: PastHandleScope,
+    start_s: Node,
+    solid_emit: Node,
+) -> _SuccessorHandles:
+    solid_emit_h = past.publish("solid_interval_solid_emit", solid_emit)
+    start_s_h = past.publish("solid_interval_start", start_s)
+
+    start_hi = thermometer_floor_div(start_s, _RADIX_BASE, SCREEN_WIDTH)
+    start_lo = mod_const(start_s, _RADIX_BASE, SCREEN_WIDTH)
+    start_bucket_onehot = one_hot(start_hi, _N_BUCKETS)
+    start_above_lo = linear(one_hot(start_lo, _RADIX_BASE), _LO_ABOVE_TABLE)
+
+    start_hi_for_h2 = select(solid_emit, start_hi, constant(float(_INVALID_HI)))
+    start_hi_above_for_h2 = linear(
+        one_hot(start_hi_for_h2, _N_BUCKETS + 1),
+        _HI_FOR_H2_ABOVE_TABLE,
+    )
+    start_above_all = constant([1.0])
+
+    start_hi_h = past.publish("solid_interval_start_hi", start_hi)
+    start_lo_h = past.publish("solid_interval_start_lo", start_lo)
+    start_bucket_h = past.publish(
+        "solid_interval_start_bucket_onehot",
+        start_bucket_onehot,
+    )
+    start_above_lo_h = past.publish("solid_interval_start_above_lo", start_above_lo)
+    start_hi_for_h2_h = past.publish(
+        "solid_interval_start_hi_for_h2",
+        start_hi_for_h2,
+    )
+    start_hi_above_for_h2_h = past.publish(
+        "solid_interval_start_hi_above_for_h2",
+        start_hi_above_for_h2,
+    )
+    start_above_all_h = past.publish("solid_interval_start_above_all", start_above_all)
+
+    same_payload = concat(start_s, solid_emit, start_bucket_onehot, start_above_lo)
+    carry_payload = concat(start_s, solid_emit, start_bucket_onehot)
+    same_payload_h = past.publish("solid_interval_same_payload", same_payload)
+    carry_payload_h = past.publish("solid_interval_carry_payload", carry_payload)
+
+    return _SuccessorHandles(
+        solid_emit=solid_emit_h,
+        start_s=start_s_h,
+        start_hi=start_hi_h,
+        start_lo=start_lo_h,
+        start_bucket_onehot=start_bucket_h,
+        start_above_lo=start_above_lo_h,
+        start_hi_for_h2=start_hi_for_h2_h,
+        start_hi_above_for_h2=start_hi_above_for_h2_h,
+        start_above_all=start_above_all_h,
+        same_payload=same_payload_h,
+        carry_payload=carry_payload_h,
+    )
 
 
 # Encode solid interval (x1, x2) as query key for argmax matching (DOOM: cliprange_t, r_bsp.c:88-92)

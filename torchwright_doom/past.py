@@ -14,6 +14,7 @@ from torchwright.graph import Node, PosEncoding
 from torchwright.ops import negate
 from torchwright.ops.attention_ops import (
     attend_argmax_dot,
+    attend_argmin_above_in_bucket,
     attend_argmin_above_integer,
     attend_mean_where,
     attend_most_recent_matching,
@@ -224,6 +225,64 @@ class GraphPast:
             value_node,
         )
 
+    def pick_argmin_above_in_bucket(
+        self,
+        score: PastHandle,
+        validity: PastHandle,
+        key_bucket_onehot: PastHandle,
+        score_above_each_threshold: PastHandle,
+        query_bucket_onehot: Node,
+        threshold_onehot: Node,
+        value: PastHandle,
+        *,
+        assert_hardness_gt: float | None = None,
+    ) -> Node:
+        """Bucket-filtered argmin-above read over graph-published rows."""
+        score_node = self._check_handle(score, "pick_argmin_above_in_bucket score")
+        validity_node = self._check_handle(
+            validity, "pick_argmin_above_in_bucket validity"
+        )
+        key_bucket_node = self._check_handle(
+            key_bucket_onehot, "pick_argmin_above_in_bucket key_bucket_onehot"
+        )
+        above_node = self._check_handle(
+            score_above_each_threshold,
+            "pick_argmin_above_in_bucket score_above_each_threshold",
+        )
+        self._check_node(
+            query_bucket_onehot, "pick_argmin_above_in_bucket query_bucket_onehot"
+        )
+        self._check_node(
+            threshold_onehot, "pick_argmin_above_in_bucket threshold_onehot"
+        )
+        value_node = self._check_handle(value, "pick_argmin_above_in_bucket value")
+
+        if len(key_bucket_node) != len(query_bucket_onehot):
+            raise ValueError(
+                "GraphPast.pick_argmin_above_in_bucket: key_bucket_onehot "
+                f"width {len(key_bucket_node)} must match query_bucket_onehot "
+                f"width {len(query_bucket_onehot)}"
+            )
+        if len(above_node) != len(threshold_onehot):
+            raise ValueError(
+                "GraphPast.pick_argmin_above_in_bucket: "
+                "score_above_each_threshold width "
+                f"{len(above_node)} must match threshold_onehot width "
+                f"{len(threshold_onehot)}"
+            )
+
+        return attend_argmin_above_in_bucket(
+            self._pos,
+            score_node,
+            validity_node,
+            key_bucket_node,
+            above_node,
+            query_bucket_onehot,
+            threshold_onehot,
+            value_node,
+            assert_hardness_gt=assert_hardness_gt,
+        )
+
     @staticmethod
     def _check_node(node: Node, where: str) -> None:
         if not isinstance(node, Node):
@@ -271,6 +330,43 @@ class PastHandleScope:
 
     def input_slot(self, name: str) -> PastHandle:
         return self._past.input_slot(name)
+
+    def pick_argmin_above(
+        self,
+        score: PastHandle,
+        indicators_above: PastHandle,
+        threshold_onehot: Node,
+        value: PastHandle,
+    ) -> Node:
+        return self._past.pick_argmin_above(
+            score,
+            indicators_above,
+            threshold_onehot,
+            value,
+        )
+
+    def pick_argmin_above_in_bucket(
+        self,
+        score: PastHandle,
+        validity: PastHandle,
+        key_bucket_onehot: PastHandle,
+        score_above_each_threshold: PastHandle,
+        query_bucket_onehot: Node,
+        threshold_onehot: Node,
+        value: PastHandle,
+        *,
+        assert_hardness_gt: float | None = None,
+    ) -> Node:
+        return self._past.pick_argmin_above_in_bucket(
+            score,
+            validity,
+            key_bucket_onehot,
+            score_above_each_threshold,
+            query_bucket_onehot,
+            threshold_onehot,
+            value,
+            assert_hardness_gt=assert_hardness_gt,
+        )
 
     def __getitem__(self, name: str) -> PastHandle:
         if name.startswith("input."):
