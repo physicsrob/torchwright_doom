@@ -20,9 +20,31 @@ from dataclasses import dataclass, field
 from torchwright.graph import Node
 
 
+# Number of distinct wall-texture heights in the WAD asset book
+# (``len(WALL_HEIGHT_BANK)`` = sorted{16, 56, 72, 128}); the width of the
+# per-texture height-index one-hot ``h_idx_oh`` returns.
+_H_IDX_OH_WIDTH = 4
+
+
 @dataclass(frozen=True)
 class WallAssets:
     """Wall texture metadata + palette lookup (lookup-track deliverable)."""
+
+    def h_idx_oh(self, tex_id: Node) -> Node:
+        """Per-texture height-index one-hot (sandbox ``WallAssets.h_idx_oh`` ->
+        ``pick_by_index(tex_id, WALL_TEX_H_IDX_OH, ..., d_fill=len(WALL_HEIGHT_BANK))``).
+
+        Stubbed to a width-``_H_IDX_OH_WIDTH`` zero vector for Phase H. The real
+        per-texture height-index table is the lookup track's deliverable
+        (``plan_lookup3d.md``); the real-side WAD loader does not parse texture
+        lumps yet. Safe on the geometry fixtures: ``h_idx_oh`` only feeds the
+        wall-span height / texel sawtooth consumed by the Phase-J pixel pass — it
+        never lands on a compared Phase-H next-token (the H gate caps before the
+        first PIXEL), so the value is published-for-coherence and discarded.
+        """
+        from .std import constant
+
+        return constant([0.0] * _H_IDX_OH_WIDTH)
 
     def height(self, tex_id: Node) -> Node:
         """Native texture height for ``dc_texturemid`` pegging (sandbox
