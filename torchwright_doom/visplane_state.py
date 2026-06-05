@@ -19,8 +19,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from torchwright.ops.arithmetic_ops import compare
+from torchwright.ops.arithmetic_ops import compare, piecewise_linear
 
+from .attention_handles import lifted_id_query
 from .past import PastHandle, PastHandleScope
 from .render_ops import SCREEN_X_CLAMP, add_const, and_, neg, or_
 from .std import (
@@ -80,6 +81,35 @@ _USED_VP_ABOVE = [
 ]
 _USED_PLANE_KEY_SCALE = _scale_matrix(N_PLANES_MAX, 64.0)
 _USED_VP_THRESHOLD_SCALE = _scale_matrix(N_VP_PER_PLANE_MAX + 1, 16.0)
+
+# Instance equality, lifted to a width-3 scalar-id key (d_head reduction). The
+# (plane, vp) pair flattens to instance_idx = N_VP_PER_PLANE_MAX*plane + vp
+# (0..N_VISPLANE_MAX-1) and is matched by lifted equality ``[id, -id^2, 1]``
+# instead of two 128-gain one-hots — shrinking the occupied_key's instance part
+# from 32 + 8 = 40 cols to 3 (and the whole key 100 -> 63, the binding d_head
+# driver). The square is exact at integer ids (breakpoints on every integer).
+#
+# The lifted key carries no extra gain (its ``-id^2`` already reaches ~65k at the
+# top instance id; a ×128 gain would blow ``cond_gate``'s 1e6 masked-zero offset
+# bound). Instead, the *x_oh* side of the key is scaled DOWN by
+# ``_RANGE_QUERY_GAIN`` so the unit lifted-equality gap (1 per adjacent id)
+# dominates the ``range_score`` swing (<= 1) that ranks columns within a matched
+# instance, while the picked column's UNSCALED ``range_score`` (1 or 2) still
+# drives the 1.5 overlap deadband.
+_INSTANCE_BREAKPOINTS = list(range(N_VISPLANE_MAX))
+_RANGE_QUERY_GAIN = 0.25
+_X_OH_KEY_SCALE = _scale_matrix(SCREEN_WIDTH, _RANGE_QUERY_GAIN)
+
+
+def _lifted_instance_key(instance_idx: Node) -> Node:
+    """Producer key for instance equality: ``[id, -id^2, 1]`` (width 3)."""
+    square = piecewise_linear(
+        instance_idx,
+        _INSTANCE_BREAKPOINTS,
+        lambda v: v * v,
+        name="visplane_instance_square",
+    )
+    return concat(instance_idx, neg(square), constant(1.0))
 
 
 def _range_overlap(score: Node) -> Node:
@@ -149,14 +179,16 @@ class RuntimeVisplaneState:
         occupied_x_value = wall_column.pick(past, wall_column.x)
         occupied_x_oh_value = wall_column.pick(past, wall_column.x_key)
 
-        occupied_key_value = concat(
-            linear(one_hot(occupied_p_value, N_PLANES_MAX), _OCC_PLANE_SCALE),
-            linear(one_hot(occupied_vp_value, N_VP_PER_PLANE_MAX), _OCC_VP_SCALE),
-            occupied_x_oh_value,
-        )
         occupied_instance_idx = linear(
             concat(occupied_p_value, occupied_vp_value),
             _INSTANCE_IDX_LINEAR,
+        )
+        # Lifted instance equality (3) + the per-column one-hot (SCREEN_WIDTH),
+        # the latter scaled down so the instance match dominates the within-match
+        # range_score ranking.
+        occupied_key_value = concat(
+            _lifted_instance_key(occupied_instance_idx),
+            linear(occupied_x_oh_value, _X_OH_KEY_SCALE),
         )
         occupied_instance_oh_value = one_hot(
             occupied_instance_idx,
@@ -293,15 +325,15 @@ class RuntimeVisplaneState:
         x2: Node,
     ) -> Node:
         range_score = _range_score_bits(x1, x2)
-        query = concat(
-            linear(one_hot(plane_id, N_PLANES_MAX), _OCC_PLANE_SCALE),
-            linear(one_hot(candidate_vp, N_VP_PER_PLANE_MAX), _OCC_VP_SCALE),
-            range_score,
-        )
         query_instance_idx = linear(
             concat(plane_id, candidate_vp),
             _INSTANCE_IDX_LINEAR,
         )
+        # Lifted instance-equality query (3) + the per-column thermometer
+        # (SCREEN_WIDTH): the instance match dominates, then range_score ranks the
+        # matched instance's columns so the picked column's coverage count drives
+        # the overlap test.
+        query = concat(lifted_id_query(query_instance_idx), range_score)
         query_instance_oh = one_hot(query_instance_idx, N_VISPLANE_MAX)
         picked = VisplaneConflictValues(
             *split(

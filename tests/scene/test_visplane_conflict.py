@@ -24,8 +24,8 @@ from torchwright_doom.std import concat, constant, gate, linear, one_hot
 from torchwright_doom.visplane_state import (
     RuntimeVisplaneState,
     _INSTANCE_IDX_LINEAR,
-    _OCC_PLANE_SCALE,
-    _OCC_VP_SCALE,
+    _X_OH_KEY_SCALE,
+    _lifted_instance_key,
 )
 from torchwright_doom.vocab import (
     N_PLANES_MAX,
@@ -72,15 +72,13 @@ def _build(plane_id, candidate_vp, x1, x2, occ_cols):
     x_val = linear(occ, [[0.0], [0.0], [0.0], [1.0]])
     x_oh = one_hot(x_val, SCREEN_WIDTH)
 
+    instance_idx = linear(concat(p_val, vp_val), _INSTANCE_IDX_LINEAR)
     occupied_key_value = concat(
-        linear(one_hot(p_val, N_PLANES_MAX), _OCC_PLANE_SCALE),
-        linear(one_hot(vp_val, N_VP_PER_PLANE_MAX), _OCC_VP_SCALE),
-        x_oh,
+        _lifted_instance_key(instance_idx), linear(x_oh, _X_OH_KEY_SCALE)
     )
     occupied_key = past.publish(
         "occupied_key", gate(occupied_active, occupied_key_value)
     )
-    instance_idx = linear(concat(p_val, vp_val), _INSTANCE_IDX_LINEAR)
     instance_oh = one_hot(instance_idx, N_VISPLANE_MAX)
     occupied_state = past.publish(
         "occupied_state", concat(occupied_active, x_oh, instance_oh)
