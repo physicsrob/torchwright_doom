@@ -369,8 +369,10 @@ class SegProjection:
             "cursor_x",
             inp.is_set_cursor_x,
         )
-        cursor_x_key = cursor_x_row.pick(past, input_x_key_or_zero)
-        cursor_x_key_pub = past.publish("cursor_x_key_value", cursor_x_key)
+        # ClipMemory now keys on the column SCALAR (lifted scalar-id equality),
+        # not the screen-x one-hot, so recover/publish the cursor column scalar.
+        cursor_x_scalar = cursor_x_row.pick(past, input_x_or_zero)
+        cursor_x_scalar_pub = past.publish("cursor_x_scalar_value", cursor_x_scalar)
         # Late input sidecar (emitted after cursor_x in protocol order).
         input_xtova_cos_or_zero = past.publish(
             "seg_input_xtova_cos_or_zero",
@@ -477,9 +479,9 @@ class SegProjection:
         clip = ClipMemory.publish(
             past,
             inp,
-            cursor_x_key,
+            cursor_x_scalar,
             clip_update_row,
-            cursor_x_key_pub,
+            cursor_x_scalar_pub,
         )
         find_run_x = SCREEN_X_CLAMP(find_run_row.pick(past, input_x_or_zero))
         recent_drawseg = RecentDrawsegState.read_from_recent_rows(

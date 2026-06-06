@@ -40,13 +40,17 @@ from torchwright_doom.past import GraphPast
 from torchwright_doom.render_main import forward
 
 # compile_to_onnx streams, so d only sets the cramming point, not peak memory.
-# d=4096, d_head=64. The visplane R_CheckPlane occupied_key's (plane, vp) instance
-# match is now a lifted scalar-id equality (40 one-hot cols -> 3), so the key is
-# lifted_instance[3] + screen-x one-hot[60] = d_qk 63 (was ~100). The ClipMemory
-# per-column key (d_qk=62) is the runner-up. Both still scale with SCREEN_WIDTH
-# via the x one-hot; the next reduction is radixing that column read.
+# d=4096, d_head=32. The two screen-width-sized attention keys that used to set
+# the d_head floor are both radixed/lifted now:
+#   * the visplane R_CheckPlane occupied_key (was d_qk 63) is an instance-filtered
+#     radix successor over occupied columns (visplane_state.py), widest Q/K ~21;
+#   * the ClipMemory per-column clip read (was d_qk 62 = SCREEN_WIDTH+1+1) is a
+#     width-3 lifted scalar-id column equality (wall_column_state.ClipMemory),
+#     d_qk 4.
+# So the binding key is now the visplane radix (~21) and d_head drops 64 -> 32
+# (the next power-of-two divisor of 4096 above 21).
 _D = 4096
-_D_HEAD = 64
+_D_HEAD = 32
 
 
 def test_forward_compiles_to_onnx(tmp_path) -> None:

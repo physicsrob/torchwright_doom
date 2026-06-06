@@ -19,15 +19,14 @@ from __future__ import annotations
 MATCH_GAIN_LONG = 300_000.0
 
 # Wall-column per-column clip-array recovery (``ClipMemory.pick_most_recent``,
-# Phase H). Same magnitude as ``MATCH_GAIN_LONG`` — the clip key is one unit of
-# content gap (a screen-x one-hot match) and must dominate the recency span over
-# a full rollout. Plain float (no graph node), import-safe.
+# Phase H). The radix column key's match dot is ``bucket_match + digit_match``
+# (one-hot products, no cancellation), so the gained matched logit is an exact
+# ``2 * match_gain``; this must dominate the recency span, exceeding
+# ``SCORE_GAIN (8) * max_recency_span`` (8500-pos rollout, 32768-pos regression).
+# 300_000 > 8 * 32768 with headroom. (An earlier lifted-key form needed a power
+# of two to keep its ``match_gain*c^2`` cancellation fp32-exact; the radix key
+# has no such cancellation, so any sufficiently large gain works.)
 MATCH_GAIN_CLIP = 300_000.0
-
-# Weight on the sentinel column of the ClipMemory query, so a column with no
-# prior clip-update falls through to the ``DEFAULT_CLIP_KEY`` sentinel record
-# (the initial ``(-1, SCREEN_HEIGHT)`` open clip) rather than a garbage blend.
-CLIP_SENTINEL_QUERY_WEIGHT = 0.5
 
 # NOTE: the sandbox keeps ``ONE``/``ZERO``/``FALSE`` as module-level
 # ``constant`` Vecs. On the real side a ``constant`` is a graph ``Node`` with a

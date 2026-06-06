@@ -15,13 +15,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import math
+
 from torchwright.graph import Node
+from torchwright.ops.arithmetic_ops import mod_const, thermometer_floor_div
 
 from .assets import _H_IDX_OH_WIDTH
 from .attention_handles import RecentMarkerHandle
 from .constants import CENTER_Y, SCREEN_HEIGHT, SCREEN_WIDTH
 from .past import PastHandle, PastHandleScope
-from .render_constants import CLIP_SENTINEL_QUERY_WEIGHT, MATCH_GAIN_CLIP
+from .render_constants import MATCH_GAIN_CLIP
 from .render_ops import (
     CEIL_Y,
     CEIL_Y_WIDE,
@@ -46,6 +49,7 @@ from .render_ops import (
 from .std import (
     concat,
     constant,
+    gate,
     indicator_to_bool,
     linear,
     one_hot,
@@ -63,6 +67,39 @@ if TYPE_CHECKING:
 _PART_IS_MID_LINEAR = [[1.0], [0.0], [0.0]]
 _PART_IS_UPPER_LINEAR = [[0.0], [1.0], [0.0]]
 
+# Radix split for the ClipMemory column key: the screen column c becomes a
+# (bucket = c // B, digit = c % B) pair of one-hots so exact column equality
+# needs only B + N_BUCKETS cols (16 fixture / 26 real) instead of SCREEN_WIDTH+1.
+# Unlike a width-3 lifted key, the one-hot dot is a sum of non-negative one-hot
+# products — NO large-magnitude cancellation — so the gained matched dot is exact
+# (2 * MATCH_GAIN_CLIP, computed without subtracting ~1e9 terms) and the
+# 8-per-position recency tiebreak survives under any fp32 matmul accumulation
+# order (the lifted key's match_gain*c^2 cancellation lost it on A100).
+_CLIP_RADIX_BASE = math.ceil(math.sqrt(SCREEN_WIDTH + 1))  # 8 at SW=60, 13 at 160
+_CLIP_N_BUCKETS = SCREEN_WIDTH // _CLIP_RADIX_BASE + 1
+# Column scalar published on rows that are NOT a clip update. Any value that can
+# never equal a real column (0..SCREEN_WIDTH) works: a query recovers it and the
+# same_int presence test reads ABSENT, so the column falls to the default clip.
+_ABSENT_COLUMN = -1.0
+
+
+def _radix_col_key(col_scalar: Node) -> Node:
+    """Column equality key: ``concat(one_hot(c // B), one_hot(c % B))`` (width
+    ``N_BUCKETS + B``). The dot of two such keys is ``bucket_match + digit_match``
+    — 2 on an exact column match, <= 1 otherwise.
+
+    The column may be the soft (~0.02 leak) output of a ``pick_most_recent``
+    recovery: ``thermometer_floor_div`` (ramps at ``k*B - 0.5``) and the
+    bucket-consistent ``mod_const`` keep the leaked value on the right digit, and
+    ``one_hot`` rounds it to a clean integer one-hot — so no pre-snap is needed
+    and a matched key's dot is exactly 2."""
+    hi = thermometer_floor_div(col_scalar, _CLIP_RADIX_BASE, SCREEN_WIDTH)
+    lo = mod_const(col_scalar, _CLIP_RADIX_BASE, SCREEN_WIDTH)
+    return concat(
+        one_hot(hi, _CLIP_N_BUCKETS),
+        one_hot(lo, _CLIP_RADIX_BASE),
+    )
+
 
 def _part_is_mid(part_oh: Node) -> Node:
     return indicator_to_bool(linear(part_oh, _PART_IS_MID_LINEAR))
@@ -74,7 +111,7 @@ def _part_is_upper(part_oh: Node) -> Node:
 
 @dataclass(frozen=True)
 class ClipMemory:
-    """Current column's vertical clip read with sentinel default fallback.
+    """Current column's vertical clip, defaulting to the open clip when unset.
 
     DOOM: ceilingclip[]/floorclip[] (r_plane.c) — per-column occlusion arrays
     read each R_RenderSegLoop column; walls mark both as fully opaque.
@@ -88,44 +125,61 @@ class ClipMemory:
         cls,
         past: PastHandleScope,
         inp: ProtocolTokenView,
-        current_x_key: Node,
+        current_x_scalar: Node,
         clip_update_row: RecentMarkerHandle,
-        cursor_x_key: PastHandle,
+        cursor_x_scalar_pub: PastHandle,
     ) -> "ClipMemory":
-        clip_query_sentinel = constant(CLIP_SENTINEL_QUERY_WEIGHT)
+        """Recover the current column's (ceiling, floor) clip, defaulting to the
+        open clip ``(-1, SCREEN_HEIGHT)`` when the column has no prior update.
+
+        The per-column key is a radix (bucket, digit) pair of one-hots (was a
+        width-(SCREEN_WIDTH+1) one-hot; width N_BUCKETS+B = 16/26). The dot has
+        no orthogonal "no match" within a bucket, so the default fallback is
+        recovered explicitly: each clip row carries its own column scalar, the
+        recovered scalar is compared to the query column, and a mismatch (no real
+        update for this column) selects the default open clip. The recency
+        tiebreak in ``pick_most_recent`` makes the most recent update to a column
+        win, and also prevents a symmetric blend of columns ``x-1`` / ``x+1``
+        from averaging to ``x`` (distinct positions break the tie).
+        """
         clip_ceiling_initial = constant(-1.0)
         clip_floor_initial = constant(float(SCREEN_HEIGHT))
-        default_clip_key = constant([0.0] * SCREEN_WIDTH + [1.0])
-        zero = constant(0.0)
+        absent_column = constant(_ABSENT_COLUMN)
 
-        query = concat(current_x_key, clip_query_sentinel)
+        query_col = SCREEN_X_CLAMP(current_x_scalar)
+        query = _radix_col_key(query_col)
 
-        clip_x_key = clip_update_row.pick(past, cursor_x_key)
+        clip_x_col = clip_update_row.pick(past, cursor_x_scalar_pub)
         range_active = inp.screen_range_after_clip_update
 
+        # Key gated to zero on non-clip-update rows: validity is carried by the
+        # column scalar in the value (recovered + same_int below), not a sentinel
+        # slot. A gated-zero key scores 0, below any real column's >= 1.
         clip_key = past.publish(
             "clip_range_key",
-            select(range_active, concat(clip_x_key, zero), default_clip_key),
+            gate(range_active, _radix_col_key(clip_x_col)),
         )
         clip_value = past.publish(
             "clip_range_value",
             concat(
                 select(range_active, inp.screen_range_y1, clip_ceiling_initial),
                 select(range_active, inp.screen_range_y2, clip_floor_initial),
+                select(range_active, clip_x_col, absent_column),
             ),
         )
-        ceiling, floor = split(
+        recovered_ceiling, recovered_floor, recovered_col = split(
             past.pick_most_recent(
                 query,
                 clip_key,
                 clip_value,
                 match_gain=MATCH_GAIN_CLIP,
             ),
-            [1, 1],
+            [1, 1, 1],
         )
+        present = same_int(recovered_col, query_col)
         return cls(
-            ceiling=ceiling,
-            floor=floor,
+            ceiling=select(present, recovered_ceiling, clip_ceiling_initial),
+            floor=select(present, recovered_floor, clip_floor_initial),
         )
 
 
