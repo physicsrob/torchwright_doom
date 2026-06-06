@@ -1,72 +1,169 @@
-"""Asset index — Plan D scope boundary (D5).
+"""Compiled texture and flat lookup helpers (Plan I2).
 
-``SceneIndex.build`` constructs ``AssetIndex()`` as a field so the real build
-matches the sandbox build shape, but the weight-side texture/flat palette
-lookup internals (``table_lookup_2d`` / ``table_lookup_3d`` over the compiled
-``WALL_BANKS`` / ``FLAT_TABLE``, with **zero** ``past.publish``) are the
-**lookup track's** deliverable (``plan_lookup3d.md`` / ``torchwright_lookup``),
-not ported by Plan D. The read-side oracle gate (``view``/``nodes``/
-``subsectors``/``segs``/``planes``) does not exercise assets.
+Real-side port of ``doom_sandbox/implementation/forward/assets.py``: the
+``WallAssets`` / ``FlatAssets`` metadata accessors and full-resolution
+``palette_index`` lookups, wired onto the zero-``past.publish`` ``AssetIndex``
+shell that ``scene_index.py`` constructs.
 
-The placeholder ``WallAssets`` / ``FlatAssets`` carry no lookup methods yet;
-touching one from the read-side raises ``AttributeError`` loudly rather than
-silently returning a wrong value.
+``Vec`` -> ``Node`` and the sandbox ``...api`` imports become ``.std``; the
+compiled banks come from :mod:`.asset_banks` (data-source **B**). Per the
+no-import-time-nodes rule, module-level state is **raw data only** — numpy
+``table`` reshapes, row-address lists, and ``pwl_def`` closures (which build no
+node until called). The sandbox's module-level ``constant(...)`` selection
+tables are instead wrapped *inside* the accessor methods, so ``global_node_id``
+stays ``0`` after import.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 
 from torchwright.graph import Node
 
+from .std import (
+    concat,
+    constant,
+    indicator_to_bool,
+    linear,
+    one_hot,
+    pick_by_index,
+    pick_by_one_hot,
+    pwl_def,
+    table_lookup_2d,
+)
+from .asset_banks import (
+    FLAT_IS_SKY,
+    FLAT_TABLE,
+    N_FLATS,
+    N_WALL_TEXTURES,
+    WALL_BANKS,
+    WALL_HEIGHT_BANK,
+    WALL_TEX_BANK_ID,
+    WALL_TEX_H_IDX_OH,
+    WALL_TEX_HEIGHT,
+    WALL_TEX_LOCAL_ID,
+    WALL_TEX_WIDTH,
+)
 
-# Number of distinct wall-texture heights in the WAD asset book
-# (``len(WALL_HEIGHT_BANK)`` = sorted{16, 56, 72, 128}); the width of the
-# per-texture height-index one-hot ``h_idx_oh`` returns.
-_H_IDX_OH_WIDTH = 4
+_N_TEX_ID_SLOTS = N_WALL_TEXTURES + 1
+
+# Width of the per-texture height-index one-hot ``h_idx_oh`` returns
+# (= number of distinct wall-texture heights in the WAD: sorted{16, 56, 72,
+# 128}). Consumed by ``wall_column_state`` for the span h_idx_oh payload width.
+_H_IDX_OH_WIDTH = len(WALL_HEIGHT_BANK)
+
+# Module-level RAW data only (no graph nodes — see module docstring). The
+# sandbox wraps these in ``constant(...)`` at module scope; the real side keeps
+# them as plain Python/numpy and wraps inside the accessors below.
+_WALL_LOCAL_ID_VALUES_BY_BANK = tuple(
+    [float(i) for i in range(len(bank.global_ids))] for bank in WALL_BANKS
+)
+_WALL_BANK_TABLE_2D = tuple(
+    bank.table.reshape(len(bank.global_ids) * bank.height, bank.width)
+    for bank in WALL_BANKS
+)
+_WALL_BANK_ROW_ADDR = tuple([[float(bank.height)], [1.0]] for bank in WALL_BANKS)
+_FLAT_ID_VALUES = [float(i) for i in range(N_FLATS)]
+_FLAT_TABLE_2D = FLAT_TABLE.reshape(N_FLATS * 64, 64)
+_FLAT_ROW_ADDR = [[64.0], [1.0]]
+
+
+def _python_floor_mod(v: float, h: int) -> float:
+    iv = math.floor(v)
+    return float(iv - h * math.floor(iv / h))
+
+
+# ``pwl_def`` returns a closure, so this tuple builds no graph node at import.
+_U_MOD_BY_BANK = tuple(
+    pwl_def(
+        (lambda v, width=bank.width: _python_floor_mod(v, width)),
+        breakpoints=2049,
+        input_range=(-1024.0, 1024.0),
+    )
+    for bank in WALL_BANKS
+)
+
+
+def _snap_index(index: Node, n: int, values: list[float]) -> Node:
+    """Round ``index`` to its exact integer value via ``one_hot`` -> pick.
+
+    ``values`` is raw data (the sandbox passes a ``constant(...)`` node); the
+    ``constant`` is built here, inside the call, not at module level.
+    """
+    return pick_by_one_hot(one_hot(index, n), constant(values))
 
 
 @dataclass(frozen=True)
 class WallAssets:
-    """Wall texture metadata + palette lookup (lookup-track deliverable)."""
+    """Wall texture metadata and full-resolution palette-index lookup."""
 
-    def h_idx_oh(self, tex_id: Node) -> Node:
-        """Per-texture height-index one-hot (sandbox ``WallAssets.h_idx_oh`` ->
-        ``pick_by_index(tex_id, WALL_TEX_H_IDX_OH, ..., d_fill=len(WALL_HEIGHT_BANK))``).
+    def bank_id(self, tex_id: Node) -> Node:
+        return pick_by_index(tex_id, constant(list(WALL_TEX_BANK_ID)), _N_TEX_ID_SLOTS)
 
-        Stubbed to a width-``_H_IDX_OH_WIDTH`` zero vector for Phase H. The real
-        per-texture height-index table is the lookup track's deliverable
-        (``plan_lookup3d.md``); the real-side WAD loader does not parse texture
-        lumps yet. Safe on the geometry fixtures: ``h_idx_oh`` only feeds the
-        wall-span height / texel sawtooth consumed by the Phase-J pixel pass — it
-        never lands on a compared Phase-H next-token (the H gate caps before the
-        first PIXEL), so the value is published-for-coherence and discarded.
-        """
-        from .std import constant
+    def local_id(self, tex_id: Node) -> Node:
+        return pick_by_index(tex_id, constant(list(WALL_TEX_LOCAL_ID)), _N_TEX_ID_SLOTS)
 
-        return constant([0.0] * _H_IDX_OH_WIDTH)
+    def width(self, tex_id: Node) -> Node:
+        return pick_by_index(tex_id, constant(list(WALL_TEX_WIDTH)), _N_TEX_ID_SLOTS)
 
     def height(self, tex_id: Node) -> Node:
-        """Native texture height for ``dc_texturemid`` pegging (sandbox
-        ``WallAssets.height`` -> ``pick_by_index(tex_id, WALL_TEX_HEIGHT, ...)``).
+        return pick_by_index(tex_id, constant(list(WALL_TEX_HEIGHT)), _N_TEX_ID_SLOTS)
 
-        Stubbed to 0 for Phase F. The full per-texture height table is the
-        lookup track's deliverable (``plan_lookup3d.md``) and the real-side WAD
-        loader does not parse texture lumps yet. This is safe on the geometry
-        fixtures: ``dc_tmid_compute`` only consumes ``height`` inside a
-        ``select(dontpegtop/dontpegbottom, ...)`` arm, and every textured seg in
-        ``e1m1_subset`` sets its pegging flag in the height-bypassing direction
-        — so the value built from this stub is computed but discarded. The Phase
-        F gate compares the SEG_DC_TMID next-tokens, which verifies this.
-        """
-        from .std import constant
+    def h_idx_oh(self, tex_id: Node) -> Node:
+        return pick_by_index(
+            tex_id,
+            constant(list(WALL_TEX_H_IDX_OH)),
+            _N_TEX_ID_SLOTS,
+            d_fill=len(WALL_HEIGHT_BANK),
+        )
 
-        return constant(0.0)
+    def palette_index(self, tex_id: Node, u_native: Node, v_mod_h: Node) -> Node:
+        bank_id = self.bank_id(tex_id)
+        local_id = self.local_id(tex_id)
+        bank_mask = one_hot(bank_id, len(WALL_BANKS))
+        candidates = concat(
+            *(
+                table_lookup_2d(
+                    linear(
+                        concat(
+                            _snap_index(
+                                local_id,
+                                len(bank.global_ids),
+                                _WALL_LOCAL_ID_VALUES_BY_BANK[bank.bank_id],
+                            ),
+                            v_mod_h,
+                        ),
+                        _WALL_BANK_ROW_ADDR[bank.bank_id],
+                    ),
+                    _U_MOD_BY_BANK[bank.bank_id](u_native),
+                    _WALL_BANK_TABLE_2D[bank.bank_id],
+                    sharpness=1000.0,
+                )
+                for bank in WALL_BANKS
+            )
+        )
+        return pick_by_one_hot(bank_mask, candidates)
 
 
 @dataclass(frozen=True)
 class FlatAssets:
-    """Flat metadata + palette lookup (lookup-track deliverable)."""
+    """Flat metadata and full-resolution palette-index lookup."""
+
+    def is_sky(self, flat_id: Node) -> Node:
+        return indicator_to_bool(
+            pick_by_index(flat_id, constant(list(FLAT_IS_SKY)), N_FLATS)
+        )
+
+    def palette_index(self, flat_id: Node, u: Node, v: Node) -> Node:
+        row = linear(
+            concat(
+                _snap_index(flat_id, N_FLATS, _FLAT_ID_VALUES),
+                v,
+            ),
+            _FLAT_ROW_ADDR,
+        )
+        return table_lookup_2d(row, u, _FLAT_TABLE_2D, sharpness=1000.0)
 
 
 @dataclass(frozen=True)

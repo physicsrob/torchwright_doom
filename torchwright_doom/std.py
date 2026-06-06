@@ -17,6 +17,8 @@ These are graph-construction helpers: each returns a torchwright
 
 from __future__ import annotations
 
+from typing import Callable
+
 import torch
 
 from torchwright.graph import Concatenate, Linear, Node
@@ -29,11 +31,14 @@ from torchwright.ops import (
     sum_nodes,
 )
 from torchwright.ops.arithmetic_ops import clamp as _clamp
+from torchwright.ops.arithmetic_ops import piecewise_linear as _piecewise_linear
 from torchwright.ops.inout_nodes import create_literal_value
 from torchwright.ops.map_select import (
     broadcast_select as _broadcast_select,
+    dynamic_extract as _dynamic_extract,
     select as _select,
     switch as _switch,
+    table_lookup_2d as _table_lookup_2d,
 )
 
 from .emit import (
@@ -64,6 +69,9 @@ __all__ = [
     "extract_derived",
     "indicator_to_bool",
     "pick_by_one_hot",
+    "pick_by_index",
+    "pwl_def",
+    "table_lookup_2d",
     "clamp",
     "clamp_to_slot",
     "ScalarEmit",
@@ -258,6 +266,65 @@ def pick_by_one_hot(mask: Node, table: Node, d_fill: int = 1) -> Node:
         for c in range(d_fill):
             weights[s * d_fill + c, c] = 1.0
     return Linear(selected, weights, name="pick_by_one_hot_sum")
+
+
+def pick_by_index(index: Node, table: Node, n_slots: int, d_fill: int = 1) -> Node:
+    """Select slot value(s) from a slot-major runtime table by a scalar index
+    (sandbox ``pick_by_index``).
+
+    ``index`` is a width-1 scalar carrying an integer in ``[0, n_slots)``;
+    ``table`` is width ``n_slots * d_fill`` (slot-major). Lowers directly to
+    torchwright ``dynamic_extract`` (the porting target named in
+    ``docs/sandbox/translation_table.md``), which is itself
+    ``in_range`` -> ``broadcast_select`` -> fixed ``Linear`` sum. Result width
+    is ``d_fill``.
+    """
+    return _dynamic_extract(table, index, n_slots, d_fill)
+
+
+def pwl_def(
+    fn, breakpoints: int, input_range: tuple[float, float], *, name: str = "pwl"
+) -> Callable[[Node], Node]:
+    """Build a reusable 1D piecewise-linear function (sandbox ``pwl_def``).
+
+    Returns a callable that applies the PWL to a scalar node, mirroring the
+    sandbox ``PWLDef`` pattern: construct once at module level, apply many times
+    inside the graph builders. ``breakpoints`` is the grid resolution (an int);
+    the grid spans ``input_range`` uniformly. ``fn`` is sampled at each
+    breakpoint and the result linearly interpolates between them, lowering to
+    torchwright ``piecewise_linear`` (translation_table row ``pwl_def``).
+
+    The returned callable — not this factory — is what builds a graph node, so
+    the tuple-of-PWLs module-level pattern (``_U_MOD_BY_BANK``,
+    ``_COLORMAP_ROW_PWLS``) stays node-free at import (no ``constant``/op nodes;
+    ``global_node_id`` unchanged), satisfying the no-import-time-nodes rule.
+    """
+    lo, hi = float(input_range[0]), float(input_range[1])
+    if breakpoints < 2:
+        raise ValueError(f"pwl_def breakpoints must be >= 2, got {breakpoints}")
+    grid = [lo + (hi - lo) * i / (breakpoints - 1) for i in range(breakpoints)]
+
+    def apply(node: Node) -> Node:
+        return _piecewise_linear(node, grid, fn, name=name)
+
+    return apply
+
+
+def table_lookup_2d(
+    i: Node, j: Node, table, *, index_scale: float = 1.0, sharpness: float = 100.0
+) -> Node:
+    """Compile-time constant 2D table lookup by scaled integer indices (sandbox
+    ``table_lookup_2d``).
+
+    Thin re-export of torchwright core ``table_lookup_2d`` so a ported renderer
+    file reaches it through the same sandbox-api-equivalent ``std`` surface as
+    its other ops. ``table`` is plain numpy/array weight data (not a node), the
+    real-graph weight analog — torchwright's builder accepts the raw array.
+    Inputs near integer ``k`` select index ``k``; out-of-range indices clamp to
+    the table edge (cancellation-free after the I0 fix). The ``eps = 1 /
+    sharpness`` transition bands are centered at half-integer boundaries.
+    """
+    return _table_lookup_2d(i, j, table, index_scale=index_scale, sharpness=sharpness)
 
 
 def make_token(token_type: TokenType, **slot_value_nodes: Node) -> Node:
