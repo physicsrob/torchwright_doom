@@ -1,4 +1,4 @@
-"""Read-only branch owner for R_StoreWallRange / drawseg setup (Plan F / F5).
+"""Read-only branch owner for R_StoreWallRange / drawseg setup.
 
 Ported from ``doom_sandbox/implementation/forward/wall_range_builder.py``. Owns
 the drawseg/range transitions: from ``R_STORE_WALL_RANGE`` it emits the
@@ -7,20 +7,15 @@ the drawseg/range transitions: from ``R_STORE_WALL_RANGE`` it emits the
 sequence, computing per-segment perspective scale, texture origins, and
 sprite-clipping silhouette heights.
 
+At the end of that sequence it hands off to the downstream owners:
+``after_drawseg_u_angle_value`` starts the visplane check (``VisplaneMarker``);
+the ``is_value_after_wall_column`` arm of ``after_drawseg_value`` emits a wall
+column's ``SCREEN_Y_VALUE`` (``WallColumnRenderer``); and the
+``is_value_after_set_cursor_y`` arm emits a ``PIXEL`` (``PixelDispatcher``).
+
 Changes from the sandbox source: ``Vec`` -> ``Node``; ``make_token`` ->
 ``make_token_head`` (the dispatch folds over emit heads); module-level
-``constant`` sentinels move inside the methods (import-time node rule); and the
-**three deferred seams** route to ``NO_OP`` instead of the Phase-H/J owners:
-
-* ``after_drawseg_u_angle_value`` (would build ``VisplaneMarker``),
-* the ``is_value_after_wall_column`` arm of ``after_drawseg_value`` (would build
-  ``WallColumnRenderer`` → ``SCREEN_Y_VALUE``),
-* the ``is_value_after_set_cursor_y`` arm of ``after_drawseg_value`` (would build
-  ``PixelDispatcher`` → ``PIXEL``).
-
-None of the three is ever on a Phase-F compared position (the gate caps before
-the first wall-column / pixel token), so a ``NO_OP`` head is sound; Phase H/J
-replace them with the real owners.
+``constant`` sentinels move inside the methods (import-time node rule).
 """
 
 from __future__ import annotations
@@ -240,7 +235,7 @@ class WallRangeBuilder:
         return angle_scalar(u_phase_angle)
 
     def after_drawseg_u_angle_value(self) -> Node:
-        # Phase H: the DRAWSEG_U_PHASE -> ANGLE_VALUE handoff starts the visplane
+        # The DRAWSEG_U_PHASE -> ANGLE_VALUE handoff starts the visplane
         # find/check chain (or the wall-column pass if no plane is marked).
         from .visplane_marker import VisplaneMarker
 
@@ -256,7 +251,7 @@ class WallRangeBuilder:
             wall_kind=self.wall_kind(seg_i),
             silhouette=self.silhouette(seg_i),
         )
-        # Phase H: a VALUE after a wall column (SCREEN_Y_VALUE marker carrier)
+        # A VALUE after a wall column (SCREEN_Y_VALUE marker carrier)
         # emits the new ceiling clip bound for the next column.
         from .vocab import SCREEN_Y_VALUE
         from .wall_column_renderer import WallColumnRenderer
@@ -314,7 +309,7 @@ class WallRangeBuilder:
                 ),
             ),
         )
-        # Phase J: a VALUE after SET_CURSOR_Y (the per-span v0 carrier) emits the
+        # A VALUE after SET_CURSOR_Y (the per-span v0 carrier) emits the
         # span's first wall pixel (pixel_index 0).
         from .pixel_dispatcher import PixelDispatcher
 

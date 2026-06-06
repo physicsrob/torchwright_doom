@@ -1,4 +1,4 @@
-"""Structural header context for scene indexing (Plan D / D3).
+"""Structural header context for scene indexing.
 
 The prefill stream groups facts by the most recent structural header. A `NODE`
 header provides the context for following node fields, an `SS` header provides

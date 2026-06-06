@@ -8,7 +8,7 @@ index after COLORMAP indirection).
 Pure integer/float math with no project dependencies — ported as the
 source of truth for the ``wall_scale_diminish`` VALUE-derived column
 (see :func:`value_ranges.value_derived_columns`) and for the forward
-renderer's lighting (Plan D). Kept faithful to the sandbox so the
+renderer's lighting. Kept faithful to the sandbox so the
 translation table maps 1:1.
 """
 

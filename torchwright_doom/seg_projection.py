@@ -1,5 +1,4 @@
-"""Project visited subsector segs into emitted screen-space columns
-(Plan F / F4 — the **reduced** build).
+"""Project visited subsector segs into emitted screen-space columns.
 
 The BSP traversal reaches geometry through subsectors; from there this module
 owns the local seg-scanning protocol::
@@ -10,16 +9,14 @@ owns the local seg-scanning protocol::
     ANGLE_VALUE(theta_b) -> EMIT_X2               or advance/return
     EMIT_X2 -> R_STORE_WALL_RANGE -> ... drawseg scalars ... -> DRAWSEG_U_PHASE
 
-Ported from ``doom_sandbox/implementation/forward/seg_projection.py``, **reduced
-to the Phase-F write side**: it builds the per-position context the seg scan
-and drawseg-scalar chain read (Phases 1-7) and **omits** the wall-column /
-visplane / flat subsystems (Phases 8-13 — Phase H). Concretely it drops the
-imports of ``wall_column_state`` / ``visplane_state`` / ``flat_state`` and the
-``wall`` / ``planes`` / ``flats`` subcontexts, and skips ``ClipMemory``
-(Phase 7's wall-column occlusion arrays — nothing in the reduced build reads
-``clip``; it lives in the deferred ``wall_column_state``). The seam is a
-publish-ordering cut: Phases 1-6 are built whole, Phase 7 keeps only
-``recent_drawseg`` + the clamped ``find_run_x``.
+Ported from ``doom_sandbox/implementation/forward/seg_projection.py``.
+``SegProjection.publish`` builds the whole per-position projection context as a
+sequence of numbered publish phases (the ``# Phase N —`` comments in its body):
+the input side channels and seg-scan recovery (phases 1-6), the per-column clip
+memory and recent-drawseg state (phase 7), then the wall-column state, runtime
+visplane occupancy, seg facts, wall-span draft, and flat pass (phases 8-13). The
+``wall`` / ``planes`` / ``flats`` subcontexts on the returned record carry those
+later subsystems.
 
 Changes from the sandbox source: ``Vec`` -> ``Node``; sandbox-``api`` / ``.ops``
 imports map to the real ``std`` / ``render_ops`` shims; the module-level
@@ -300,9 +297,9 @@ class WallColumnRenderScalars:
 class SegProjection:
     """Published per-position render context for the subsector/R_AddLine protocol.
 
-    Phase H un-reduces this to add the ``wall`` and ``planes`` subcontexts (the
-    wall-column rasterizer + runtime visplane occupancy). Phase J adds the
-    ``flats`` subcontext (the flat span/visplane pixel pass — ``FlatPassState``).
+    The ``wall`` and ``planes`` subcontexts carry the wall-column rasterizer and
+    runtime visplane occupancy; the ``flats`` subcontext carries the flat
+    span/visplane pixel pass (``FlatPassState``).
     """
 
     core: CoreContext
@@ -336,9 +333,8 @@ class SegProjection:
             "seg_drawseg_scale_or_zero",
             input_drawseg_scale_vec,
         )
-        # Two per-column scale sidecars (Phase 11 / Phase-H consumers via
-        # attend_to_offset(-1)); published here to keep their channel names live
-        # for when the wall-column renderer lands. Harmless in the reduced build.
+        # Two per-column scale sidecars (consumed by the wall-column state at
+        # phase 11 via attend_to_offset(-1)).
         input_column_scale_diminish_or_zero = past.publish(
             "seg_column_scale_diminish_or_zero",
             inp.value_wall_scale_diminish5,
@@ -559,7 +555,7 @@ class SegProjection:
             recent_drawseg.store_i,
             wallcol_render_state,
         )
-        # Phase 13 — two independent late publishes: the flat pass (Phase J) and
+        # Phase 13 — two independent late publishes: the flat pass and
         # the wall-span K-row finish. ``finish()`` gates the K-row y1 state at the
         # SCREEN_Y_VALUE row and does not read flat-pass state, so the order is
         # free; ``FlatPassState`` reads the runtime visplanes (Phase 10).

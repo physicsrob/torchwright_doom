@@ -1,4 +1,4 @@
-"""Runtime helpers for DOOM wall COLORMAP application (Plan I3).
+"""Runtime helpers for DOOM wall COLORMAP application.
 
 Real-side port of ``doom_sandbox/implementation/forward/lighting.py``: the
 in-graph ``256x32`` ``COLORMAP[row][palette_index]`` indirection (r_data.c

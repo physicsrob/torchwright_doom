@@ -1,6 +1,6 @@
 """Minimal compiled-asset surface for the prefill vocab + prompt builder.
 
-Plan A / A4c. The spec09 prefill contract is asset-coupled in three places:
+The prefill contract is asset-coupled in three places:
 ``PLANE_DEF.flat_id`` ranges over ``N_FLATS``, ``seg.texture.*`` over
 ``N_WALL_TEXTURES + 1``, and ``PIXEL.color`` carries ``pixel_r/g/b``
 derived columns read off the 256-entry ``PLAYPAL`` palette. The prompt

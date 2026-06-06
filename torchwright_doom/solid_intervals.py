@@ -1,5 +1,4 @@
-"""Past-published solid wall fragments used as horizontal occlusion state
-(Plan F / F3).
+"""Past-published solid wall fragments used as horizontal occlusion state.
 
 Ported from ``doom_sandbox/implementation/forward/solid_intervals.py``. The
 seg scan fills this channel at ``R_STORE_WALL_RANGE`` and queries it at

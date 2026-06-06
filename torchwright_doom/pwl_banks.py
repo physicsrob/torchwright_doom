@@ -1,4 +1,4 @@
-"""Module-level PWL banks for the J pixel pass (Plan J / J0).
+"""Module-level PWL banks for the pixel pass.
 
 Real-side port of ``doom_sandbox/implementation/pwl_banks.py`` — the two PWL
 banks the wall texel pass and the flat span pass read:
@@ -11,7 +11,7 @@ banks the wall texel pass and the flat span pass read:
 called), so these module-level tuples are node-free at import — ``global_node_id``
 stays ``0`` — exactly like ``assets._U_MOD_BY_BANK`` /
 ``lighting._COLORMAP_ROW_PWLS``. The sandbox's ``INV_COS_PWL`` is **not** ported:
-J's ``u_native`` rides the already-landed ``u_tan_by_column`` derived column, not
+``u_native`` rides the already-landed ``u_tan_by_column`` derived column, not
 an in-graph inverse-cosine.
 """
 

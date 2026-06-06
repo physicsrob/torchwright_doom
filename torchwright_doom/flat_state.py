@@ -1,4 +1,4 @@
-"""Flat-pass publish state for the SegProjection ``flats`` subcontext (Plan J2).
+"""Flat-pass publish state for the SegProjection ``flats`` subcontext.
 
 Real-side port of ``doom_sandbox/implementation/forward/flat_state.py`` — the
 ``FlatPassState`` that owns two things:

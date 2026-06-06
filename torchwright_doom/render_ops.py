@@ -1,17 +1,18 @@
-"""Forward/render PWL-adjacent ops (Plan D / D0, extended for Plan E / F).
-
-Real-side mirror of the read-side + traversal subset of
+"""Forward/render math ops, mirroring the read-side + write-side subset of
 ``doom_sandbox/implementation/forward/constants.py`` / ``forward/ops.py``.
 
-- Plan D (read side): ``MARKER_PRESENT`` / ``and_`` / ``one_minus``.
-- Plan E (BSP traversal): ``sub`` / ``neg`` / ``add_const`` (affine glue),
-  ``mul_side`` (the ``R_PointOnSide`` cross-product multiply), and the
-  ``SIDE_POSITIVE`` / ``IS_SUBSECTOR`` / ``DEPTH_NONZERO`` comparators.
-- Plan F (projection): ``signed_world_angle`` / ``wrap_signed_angle`` (the
-  R_PointToAngle BAM-atan2 octant builder, deferred by Plan E's E5).
+Grouped by what they compute:
 
-The visplane/flat write-side of ``forward/ops.py`` (the y-clamp staircases,
-the scale products) stays out of scope until Phase H.
+- Read side: ``MARKER_PRESENT`` / ``and_`` / ``one_minus``.
+- BSP traversal: ``sub`` / ``neg`` / ``add_const`` (affine glue), ``mul_side``
+  (the ``R_PointOnSide`` cross-product multiply), and the ``SIDE_POSITIVE`` /
+  ``IS_SUBSECTOR`` / ``DEPTH_NONZERO`` comparators.
+- Seg projection: ``signed_world_angle`` / ``wrap_signed_angle`` (the
+  ``R_PointToAngle`` BAM-atan2 octant builder).
+- Wall-column rasterization: the screen-y clamp staircases (``CEIL_Y`` /
+  ``FLOOR_Y``) and the perspective-scale products.
+- Pixel pass: the per-pixel texture-coordinate products and native-coordinate
+  rounding.
 """
 
 from __future__ import annotations
@@ -89,7 +90,7 @@ def SCREEN_X_CLAMP(x: Node) -> Node:
 
 
 # ---------------------------------------------------------------------------
-# Plan E: affine glue + the R_PointOnSide cross product
+# Affine glue + the R_PointOnSide cross product
 # ---------------------------------------------------------------------------
 
 
@@ -158,7 +159,7 @@ def DEPTH_NONZERO(depth: Node) -> Node:
 
 
 # ---------------------------------------------------------------------------
-# Plan F: R_PointToAngle BAM-atan2 octant + one-turn angle wrap
+# R_PointToAngle BAM-atan2 octant + one-turn angle wrap
 # ---------------------------------------------------------------------------
 #
 # Mirrors ``forward/ops.py:signed_world_angle`` / ``wrap_signed_angle``. The
@@ -274,7 +275,7 @@ def _ray_count(rays: Node) -> Node:
 
 
 # ---------------------------------------------------------------------------
-# Plan F: screen-coordinate product (solid-interval coverage key)
+# Screen-coordinate product (solid-interval coverage key)
 # ---------------------------------------------------------------------------
 
 
@@ -335,7 +336,7 @@ def wrap_signed_angle(delta: Node) -> Node:
 
 
 # ---------------------------------------------------------------------------
-# Plan F: screen comparators, integer-equality, and the backface cross product
+# Screen comparators, integer-equality, and the backface cross product
 # ---------------------------------------------------------------------------
 #
 # Mirror of the corresponding ``forward/ops.py`` helpers. The sandbox
@@ -384,7 +385,7 @@ def same_int(a: Node, b: Node) -> Node:
 
 
 # ---------------------------------------------------------------------------
-# Plan G: R_CheckBBox region classifier
+# R_CheckBBox region classifier
 # ---------------------------------------------------------------------------
 #
 # DOOM: R_CheckBBox boxx/boxy region computation (r_bsp.c lines 404-418) — the
@@ -420,7 +421,7 @@ def MUL_CROSS(a: Node, b: Node) -> Node:
 
 
 # ---------------------------------------------------------------------------
-# Plan F (F5): the drawseg perspective-scale chain — products, clamps, and
+# The drawseg perspective-scale chain — products, clamps, and
 # comparators feeding the DRAWSEG_SCALE* / DRAWSEG_*SILHEIGHT VALUE carriers.
 # ---------------------------------------------------------------------------
 #
@@ -564,7 +565,7 @@ def mul_scalestep(diff: Node, inverse_width: Node) -> Node:
 
 
 # ---------------------------------------------------------------------------
-# Phase H — wall-column rasterizer screen-y ops
+# Wall-column rasterizer screen-y ops
 # ---------------------------------------------------------------------------
 # Per-column wall projection: ``top_y_raw = CENTER_Y − worldheight × scale``,
 # then round to an integer scanline. The ``mul_height_scale`` product feeds the
@@ -731,7 +732,7 @@ def MAX_SCALE_VALUE(_: Node) -> Node:
 
 
 # ---------------------------------------------------------------------------
-# Phase J — the pixel pass: per-pixel texture-coordinate products + the native
+# The pixel pass: per-pixel texture-coordinate products + the native
 # coordinate floor. Each mirrors a sandbox module-level ``multiply(...)`` /
 # ``floor_int(...)`` definition (``uv_compute`` / ``pixel_dispatcher`` /
 # ``flat_state``), lowered to ``_mul_grid`` / ``floor_int`` here so the J files

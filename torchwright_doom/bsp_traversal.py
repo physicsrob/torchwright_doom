@@ -1,4 +1,4 @@
-"""BSP traversal protocol for the wall-pass forward pass (Plan E / E3).
+"""BSP traversal protocol for the wall-pass forward pass.
 
 This module owns the autoregressive token transitions that correspond to
 DOOM's `R_RenderBSPNode` tree walk:
@@ -17,7 +17,7 @@ Ported from ``doom_sandbox/implementation/forward/bsp_traversal.py``. Changes
 from the sandbox source: the import block (``Vec`` -> ``Node``; ``Past`` ->
 ``GraphPast``; std helpers / ``make_token`` -> ``make_token_head`` / the side ops
 from the real-side shim); ``ZERO`` is created inline as ``constant(0.0)`` (no
-import-time nodes). Plan G restores the R_CheckBBox coupling: ``publish`` builds
+import-time nodes). The R_CheckBBox coupling: ``publish`` builds
 the :class:`~.bbox_pruning.BBoxPruner` over the now-populated occlusion state and
 ``after_between`` / the ``after_bbox_*`` delegators route the bbox sub-protocol's
 branches to it. The ``SideTable``, ``_think_side_compute`` cross product, the

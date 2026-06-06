@@ -1,4 +1,4 @@
-"""Dynamic traversal edges for BSP return handling (Plan E / E2).
+"""Dynamic traversal edges for BSP return handling.
 
 The AR protocol walks the BSP tree depth-first. `TRAVERSE_ENTER` and
 `TRAVERSE_BETWEEN` choose a child and descend one depth level; later

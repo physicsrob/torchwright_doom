@@ -1,4 +1,4 @@
-"""Per-pixel v coordinate decode for texture sampling (Plan J / J1a).
+"""Per-pixel v coordinate decode for texture sampling.
 
 Real-side port of ``doom_sandbox/implementation/forward/uv_compute.py``. The
 chain mirrors DOOM ``R_DrawColumn`` texture stepping (r_draw.c:132-145)::

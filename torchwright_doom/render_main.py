@@ -1,36 +1,25 @@
-"""Autoregressive renderer dispatch — reduced to the BSP-traversal spine
-(Plan E / E1).
+"""Autoregressive renderer dispatch: the per-token forward pass.
 
 Mirrors ``doom_sandbox/implementation/forward/main.py``: ``forward()`` builds
 the read-side ``SceneIndex`` + ``ProtocolTokenView``, publishes the runtime
-protocol owners, builds each branch's next-token, then dispatches by token type.
+protocol owners (BSP traversal, seg projection, and the payload router), builds
+each branch's next-token, then dispatches by the current input token's type.
 
 **The output head (the fan-out fix).** The sandbox dispatch sums one type-gated
 *full* ``d_embed`` row per transition; at ~64 transitions that needs a huge
 residual and will not compile. The port replaces it (see ``dispatch_next_token``):
 branches are built as emit *heads* (``head_width()`` — the constant derived tail
-dropped, ≈ 19 cols under the shared-slot-column embedding), transitions that
-select the same head are grouped with their predicates OR-ed, the ~8 distinct
-gated heads are summed (``max_fanout=2`` so the gated copies free incrementally),
-and one shared ``emit_derived_zero`` is concatenated at the end. The full row is
-byte-identical to the sandbox's, so the teacher-forced oracle is unchanged. With
-the shared-slot-column layout the whole forward compiles at d≈1600 (peak ~1432);
-heads are ~19 cols each, so the dispatch width barely grows with token count.
-
-**Single-pass scoping (Plan E).** A literal port of ``main.py`` would drag in
-the whole renderer (``SegProjection`` and seven owners). This reduced spine
-publishes **only** ``BspTraversal`` and builds the **traversal/begin/no_op/done**
-heads for real; every deferred branch (the bbox sub-protocol and the projection /
-wall / flat / payload owners) shares the one ``no_op`` head. The projection owner
-lands in a later phase, at which point its real branches split out of that shared
-term. A free-run therefore walks the BSP tree and stops at the first subsector
-(``test_forward_ar_rollout``); pixels arrive with projection.
+dropped, ≈ 19 cols), transitions that select the same head are grouped with
+their predicates OR-ed, the distinct gated heads are summed (see
+``dispatch_next_token`` for the ``max_fanout`` depth/width trade-off), and one
+shared ``emit_derived_zero`` is concatenated at the end. The full row is
+byte-identical to a per-transition ``make_token`` row, so the teacher-forced
+oracle is unchanged, and the dispatch width barely grows with the token count.
 
 Changes from the sandbox source: ``Vec`` -> ``Node``; ``Past`` -> ``GraphPast``
 / ``PastHandleScope``; ``make_token`` -> ``make_token_head`` + a shared derived
-tail; ``ForwardOutput`` -> the next-token ``Node`` returned directly; the reduced
-``RuntimeProtocols`` / ``publish_runtime_protocols`` / ``build_branch_outputs``;
-and the prefill-replay ``select`` is deferred (see ``dispatch_next_token``).
+tail; ``ForwardOutput`` -> the next-token ``Node`` returned directly. The
+sandbox's prefill-replay ``select`` is not ported (see ``dispatch_next_token``).
 """
 
 from __future__ import annotations
@@ -78,14 +67,10 @@ BranchOutputs = Mapping[str, Node]
 
 @dataclass(frozen=True)
 class RuntimeProtocols:
-    """Published protocol owners needed by branch construction.
-
-    Plan F grows this from traversal-only to traversal + the reduced
-    seg-projection owner + the payload router. Plan G restores R_CheckBBox
-    visibility pruning: ``BspTraversal`` now publishes the ``BBoxPruner`` over the
-    populated occlusion state, and the payload router routes the bbox ANGLE arm to
-    it. The wall-column / visplane / flat owners (Phase H/J) are still deferred, so
-    their branches collapse into the shared NO_OP head."""
+    """Published protocol owners needed by branch construction: the BSP traversal
+    (which also publishes the ``BBoxPruner`` for R_CheckBBox visibility pruning),
+    the seg projection, and the payload router that routes numeric-carrier tokens
+    by the preceding marker."""
 
     traversal: BspTraversal
     projection: SegProjection
@@ -102,9 +87,9 @@ def publish_runtime_protocols(
     """Publish runtime protocol channels before branch candidates consume them.
 
     Order matters: ``input_angle_or_zero`` and ``SolidIntervals`` are published
-    before the owners that read them. Plan G threads both (plus ``input_vec``)
-    into ``BspTraversal.publish`` so its ``BBoxPruner`` can scan the occlusion
-    state, and the payload router is built with the bbox arm
+    before the owners that read them. Both (plus ``input_vec``) are threaded into
+    ``BspTraversal.publish`` so its ``BBoxPruner`` can scan the occlusion state,
+    and the payload router is built with the bbox arm
     (``is_bbox_angle`` -> ``BBoxPruner.after_bbox_angle_value``)."""
     input_angle_or_zero = past.publish(
         "input_angle_or_zero",
@@ -252,18 +237,18 @@ def forward(input_vec: Node, past: GraphPast, pos: PosEncoding) -> Node:
 def build_branch_outputs(
     inp: ProtocolTokenView, protocols: RuntimeProtocols
 ) -> dict[str, Node]:
-    """Build the traversal + Phase-F branch heads for real; stub the rest.
+    """Build each dispatch branch's next-token head from its owner.
 
     The dict's keys equal ``{t.branch for t in DISPATCH_TRANSITIONS}`` (so the
-    dispatch is well-formed). Plan F split the seg-projection / drawseg branches
-    out of the shared ``no_op`` head: the seg-scan loop (``visit`` … ``emit_x2``),
-    the drawseg-scalar chain (``store_wall_range`` … ``drawseg_u_phase``), and the
-    ``value`` / ``angle`` carriers route to the ``SegScanner`` / ``WallRangeBuilder``
-    / ``PayloadRouter`` owners. Plan G splits the R_CheckBBox sub-protocol
-    (``between`` + ``bbox_*``) out to the ``BBoxPruner`` (via the ``BspTraversal``
-    delegators). Still deferred to the *one shared* ``no_op`` head via the
-    ``setdefault`` loop: the wall-column / visplane / flat / pixel owners (Phase
-    H/J).
+    dispatch is well-formed). Each branch routes to its owner: the traversal /
+    begin / done heads; the seg-scan loop (``visit`` … ``emit_x2``) and the
+    drawseg-scalar chain (``store_wall_range`` … ``drawseg_u_phase``) to the
+    ``SegScanner`` / ``WallRangeBuilder``; the ``value`` / ``angle`` carriers to
+    the ``PayloadRouter``; the R_CheckBBox sub-protocol (``between`` + ``bbox_*``)
+    to the ``BBoxPruner`` (via the ``BspTraversal`` delegators); and the
+    wall-column / visplane / flat / pixel owners. Any registry branch left without
+    an explicit head falls back to the shared NO_OP head via the ``setdefault``
+    loop.
 
     Values are emit *heads* (``make_token_head`` / ``after_*``), not full rows;
     the dispatch stamps the shared derived tail after selection. Numeric-carrier
@@ -292,14 +277,14 @@ def build_branch_outputs(
         "no_op": no_op_out,
         "done": make_token_head(DONE),
         "begin": make_token_head(SET_CURSOR_DIRECTION_Y),
-        # BSP traversal (BspTraversal) — the Plan E branches.
+        # BSP traversal (BspTraversal).
         "think": traversal.after_think_side(),
         "side_record": traversal.after_side_record(),
         "enter": traversal.after_enter(),
         "between": traversal.after_between(),
         "return_": traversal.after_return(),
         "set_cursor_direction_y": traversal.after_set_cursor_direction_y(),
-        # R_CheckBBox visibility pruning (BBoxPruner via BspTraversal) — Plan G.
+        # R_CheckBBox visibility pruning (BBoxPruner via BspTraversal).
         "bbox_boxpos": traversal.after_bbox_boxpos(),
         "bbox_corner_x_a": traversal.after_bbox_corner_x_mark_a(),
         "bbox_corner_y_a": traversal.after_bbox_corner_y_mark_a(),
@@ -339,21 +324,21 @@ def build_branch_outputs(
         "drawseg_bsilheight": wall_range.after_drawseg_bsilheight(),
         "drawseg_tsilheight": wall_range.after_drawseg_tsilheight(),
         "drawseg_u_phase": wall_range.after_drawseg_u_phase(),
-        # Visplane check + plane marks (VisplaneMarker) — Phase H.
+        # Visplane check + plane marks (VisplaneMarker).
         "r_check_plane": visplanes.after_r_check_plane(),
         "r_check_plane_result": visplanes.after_r_check_plane_result(),
         "plane_mark": visplanes.after_plane_mark(),
-        # Wall columns / spans / clip (WallColumnRenderer) — Phase H.
+        # Wall columns / spans / clip (WallColumnRenderer).
         "wall_col_u": wall_cols.after_wall_col_u(),
         "wall_span_meta": wall_cols.after_wall_span_meta(),
         "clip_update": wall_cols.after_clip_update(),
         "screen_y": wall_cols.after_screen_y_value(no_op_out),
-        # Wall + flat pixels (PixelDispatcher) — Phase J. The three shared
+        # Wall + flat pixels (PixelDispatcher). The three shared
         # pixel/cursor branches fork on flat_span_seen (wall arm / flat arm).
         "wall_column": pixels.after_wall_column(),
         "set_cursor_y": pixels.after_set_cursor_y(),
         "pixel_color": pixels.after_pixel_color(),
-        # Flat floor/ceiling span pass (FlatPassRenderer) — Phase J2.
+        # Flat floor/ceiling span pass (FlatPassRenderer).
         "draw_planes_begin": flats.after_draw_planes_begin(),
         "set_cursor_direction_x": flats.after_set_cursor_direction_x(),
         "flat_next_plane": flats.after_flat_next_plane(),
@@ -362,12 +347,11 @@ def build_branch_outputs(
         "make_spans_col": flats.after_make_spans_col(),
         "span_close_slot": flats.after_span_close_slot(),
         "span_row": flats.after_span_row(),
-        # Host-visible screen-range merge (RangeDispatcher) — Phase H.
+        # Host-visible screen-range merge (RangeDispatcher).
         "screen_range": ranges.after_screen_range(no_op_out),
     }
-    # Every remaining registry branch — the deferred bbox sub-protocol (Phase G)
-    # and the wall-column / visplane / flat / pixel owners (Phase H/J) — shares
-    # the one NO_OP head.
+    # Any registry branch not built above falls back to the shared NO_OP head,
+    # keeping the dispatch well-formed.
     for transition in DISPATCH_TRANSITIONS:
         branches.setdefault(transition.branch, no_op_out)
     # Route the four world-angle branches' deferred atan inputs to one shared

@@ -293,15 +293,28 @@ def test_narrow_slot_high_byte_is_constant_no_floor() -> None:
         assert _project_and_argmax(value) == _row_for(NODE, {"j": k})
 
 
-def test_forward_keeps_only_two_wide_floors() -> None:
-    """Forward-level pin: the whole graph builds exactly two 255-wide
-    ``floor_int`` staircases — one each for the genuine two-byte carriers
-    (``value``, cardinality 65,536; ``angleValue``, cardinality 8,192). Every
+def test_forward_keeps_only_four_wide_floors() -> None:
+    """Forward-level pin: the whole graph builds exactly four 255-wide
+    ``floor_int`` staircases — one per genuine two-byte emitted carrier. Every
     other 2-digit emit is a narrow slot whose high byte is a skipped constant 0.
 
-    Guards the digit-quad floor-skip optimization against regression: if a
-    future change drops the narrow-slot short-circuit, this count jumps back to
-    38.
+    The four carriers (verified by tracing each floor to its ``emit_dq_*`` head):
+
+    * ``value`` (FloatSlot, cardinality 65,536) — the shared digit-quad VALUE
+      head that ``_collapse_scalar_emits`` folds every VALUE ScalarEmit into;
+    * ``angleValue`` (IntSlot, cardinality 8,192) — the shared ANGLE_VALUE head;
+    * a *second* ``value`` head — Phase J's EAGER R3 v0 carrier emitted in
+      ``PixelDispatcher.after_set_cursor_y``'s wall arm. It forks with
+      SET_CURSOR_X in a ``select``, so it is a head Node, not a collapsible
+      ScalarEmit, and stays a separate wide floor;
+    * ``wallColU`` (IntSlot(-1024, 1024), cardinality 2,048) — Phase J's wall
+      texel ``u_idx`` emit in ``PixelDispatcher.wall_column_output``.
+
+    H had only the first two (count 2); Phase J's wall texel pass added the
+    latter two genuine 2-byte carriers (count 4). Guards the digit-quad
+    floor-skip optimization against regression: dropping the narrow-slot
+    short-circuit jumps this back to ~40. A count other than 4 means a new wide
+    carrier (or a collapse change) — update this list consciously.
     """
     iv = create_input("iv", TOKEN_VOCAB.layout.d_embed)
     pos = create_pos_encoding()
@@ -315,7 +328,7 @@ def test_forward_keeps_only_two_wide_floors() -> None:
         for n in _all_nodes(nt)
         if getattr(n, "name", "") == "floor_int_step_linear2" and len(n) == 255
     ]
-    assert len(wide_floors) == 2, (
-        f"expected exactly 2 wide floor_int staircases (value, angleValue), "
-        f"found {len(wide_floors)}"
+    assert len(wide_floors) == 4, (
+        f"expected exactly 4 wide floor_int staircases (value x2, angleValue, "
+        f"wallColU), found {len(wide_floors)}"
     )

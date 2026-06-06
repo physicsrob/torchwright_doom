@@ -1,5 +1,4 @@
-"""Read-only branch owner for subsector seg scanning and endpoint projection
-(Plan F / F4).
+"""Read-only branch owner for subsector seg scanning and endpoint projection.
 
 Ported from ``doom_sandbox/implementation/forward/seg_scanner.py``. Owns the
 ``R_Subsector`` / ``R_AddLine`` scan-cycle transitions: start a subsector's seg
@@ -12,7 +11,7 @@ Changes from the sandbox source: ``Vec`` -> ``Node``; the sandbox-``api``
 ``make_token`` becomes the real ``make_token_head`` — the renderer's dispatch
 folds over emit *heads* and stamps one shared derived tail after selecting the
 winning branch, so every owner ``after_*`` returns a head (the convention the
-Plan-E ``bsp_traversal`` owner established). Ops come from the ``render_ops``
+``bsp_traversal`` owner established). Ops come from the ``render_ops``
 shim; token types from ``vocab``.
 """
 

@@ -12,8 +12,8 @@ The helpers cover three recurring shapes:
 - recency lookup: publish an active marker or dynamic key, then recover the
   most recent matching row.
 
-Ported from ``doom_sandbox/implementation/forward/attention_handles.py``
-(Plan D / D1). The only changes from the sandbox source are the import
+Ported from ``doom_sandbox/implementation/forward/attention_handles.py``.
+The only changes from the sandbox source are the import
 block (``Vec`` -> ``Node``; ``Past`` -> ``GraphPast``; the std helpers and
 constants now come from the real-side shim) — the dataclasses, the lifted-id
 key scheme, and the publish/pick structure are a line-for-line port.

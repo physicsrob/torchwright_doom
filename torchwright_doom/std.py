@@ -1,4 +1,4 @@
-"""Read-side std/helper shim (Plan D / D0).
+"""Read-side std/helper shim.
 
 Mirrors the sandbox ``...api`` std surface the ported renderer read-side
 imports (``concat``, ``split``, ``one_hot``, ``gate``, ``linear``,

@@ -506,8 +506,8 @@ def _any_type_pm1(input_vec: Node, types: list[TokenType]) -> Node:
 
 
 # ---------------------------------------------------------------------------
-# Token-compatibility helpers (Plan A / A7) — the surface Plan B's
-# GraphPast.input_type() / _input_type_matches consume.
+# Token-compatibility helpers — the surface GraphPast.input_type() /
+# _input_type_matches consume.
 # ---------------------------------------------------------------------------
 
 
@@ -524,7 +524,7 @@ def is_type_pm1(input_vec: Node, token_type: TokenType) -> Node:
 def input_type_code(input_vec: Node) -> Node:
     """Extract the 8-wide E8 category block (cols ``[0:8]``) of ``input_vec``.
 
-    The compact per-token type code. Plan B's ``GraphPast.input_type()``
+    The compact per-token type code. ``GraphPast.input_type()``
     returns a handle over this; :func:`type_matches` / :func:`type_matches_any`
     compare it against token types without re-reading the full
     ``input_vec``. Depth +1 (one fused ``Linear``).

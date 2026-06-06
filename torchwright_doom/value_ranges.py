@@ -1,4 +1,4 @@
-"""Numeric range bank for the shared ``VALUE`` carrier (Plan A / A4).
+"""Numeric range bank for the shared ``VALUE`` carrier.
 
 Ported from ``doom_sandbox/implementation/value_ranges.py``. The range id
 is Python/control-flow metadata only — it is never embedded as a token
@@ -23,8 +23,8 @@ Scope and layering:
   re-implemented here.
 * The graph-construction helpers the sandbox keeps here (``encode_vec``
   building a graph ``Node`` via ``linear``; ``make_value`` via
-  ``make_token``) are the forward-path runtime ``VALUE`` emitter (Plan F /
-  F2). They turn a *computed* node — not an embed-time derived column — into
+  ``make_token``) are the forward-path runtime ``VALUE`` emitter. They turn
+  a *computed* node — not an embed-time derived column — into
   an emitted ``VALUE`` row at run time. They lazy-import the graph helpers
   (``std`` / ``emit``) inside the function bodies so the module-load
   dependency stays one-way (``value_ranges`` is imported by ``vocab``, so it

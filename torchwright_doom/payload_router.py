@@ -1,15 +1,12 @@
-"""Route shared numeric payload carrier tokens (Plan F / F5; bbox arm restored
-in Plan G).
+"""Route shared numeric payload carrier tokens.
 
 ``VALUE`` / ``ANGLE_VALUE`` are carrier types: their meaning comes from the
 marker that precedes them, so this router is the handoff point that delegates a
 carrier row to the protocol owner of its marker sequence.
 
-Ported from ``doom_sandbox/implementation/forward/payload_router.py``. Phase F
-ran a reduced router with no bbox owner (the ``is_bbox_angle`` arm and the VALUE
-fallback both went to ``no_op_out``). Plan G restores the real coupling: the
-``BBoxPruner`` (published by ``BspTraversal``) is the VALUE fallback for the bbox
-corner rows and owns the ``is_bbox_angle`` ANGLE_VALUE arm.
+Ported from ``doom_sandbox/implementation/forward/payload_router.py``. The
+``BBoxPruner`` (published by ``BspTraversal``) is the VALUE fallback for the
+bbox corner rows and owns the ``is_bbox_angle`` ANGLE_VALUE arm.
 """
 
 from __future__ import annotations

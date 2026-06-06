@@ -1,4 +1,4 @@
-"""Current-token interpretation for the autoregressive protocol (Plan D / D7).
+"""Current-token interpretation for the autoregressive protocol.
 
 `SceneTokenView` interprets prefill tokens as serialized scene facts. This file
 interprets the same `input_vec` as the runtime control/render protocol:

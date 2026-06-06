@@ -12,8 +12,8 @@ Read order:
 3. `scene_facts`: queryable player/node/subsector/seg facts.
 4. `attention_handles`: generic GraphPast lookup plumbing.
 
-Ported from ``doom_sandbox/implementation/forward/scene_index.py`` (Plan D /
-D5). Changes from the sandbox source: the import block (``Vec`` -> ``Node``;
+Ported from ``doom_sandbox/implementation/forward/scene_index.py``. Changes
+from the sandbox source: the import block (``Vec`` -> ``Node``;
 ``Past`` -> ``GraphPast``; ``one_hot`` / ``N_PLANES_MAX`` from the real-side
 shim / vocab) and the ``SceneIndex.build`` ``pos`` annotation. The classmethod
 body, the four ``_publish_*_context`` recency helpers, and the published-field

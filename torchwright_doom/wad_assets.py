@@ -1,7 +1,7 @@
 """Load DOOM WAD assets the texture read-surface compiles into weights.
 
 Real-side port of ``doom_sandbox/implementation/wad_assets.py`` (data-source
-**B** of Plan I: a self-contained real-side WAD loader rather than reusing the
+**B**: a self-contained real-side WAD loader rather than reusing the
 sandbox's compiled banks). Narrowed to the asset payloads the forward path
 needs: PLAYPAL, COLORMAP, TEXTURE1/TEXTURE2 wall textures, patch pictures, and
 flats. The composite must byte-match the sandbox's ``ASSET_BOOK``

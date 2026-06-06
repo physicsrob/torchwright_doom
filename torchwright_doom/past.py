@@ -158,7 +158,7 @@ class GraphPast:
     ) -> Node:
         """Pick the most recent causal row whose key matches ``query``.
 
-        Plan C resolved the precision concern for long-span callers:
+        For long-span callers:
         torchwright's current attention paths run this matmul in fp32,
         so callers can pass ``MATCH_GAIN_LONG = 300_000.0``. At unit
         content gap that gain is safe up to roughly 37,500 positions;

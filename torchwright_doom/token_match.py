@@ -1,4 +1,4 @@
-"""Shared type-match helper for narrow input-type slices (Plan D / D2).
+"""Shared type-match helper for narrow input-type slices.
 
 ``SceneTokenView`` and ``ProtocolTokenView`` both need to compare a previous
 position's ``GraphPast.input_type()`` slice (the compact 8-wide E8 code)
@@ -11,7 +11,7 @@ views; kept at a neutral top-level path rather than scene-private because the
 protocol view reaches across to it too.
 
 The sandbox built a one-hot ``linear`` over ``VOCAB.types``; the real side
-repoints the body at Plan A's :func:`torchwright_doom.extract.type_matches`,
+repoints the body at :func:`torchwright_doom.extract.type_matches`,
 which does the E8 dot-product plus ``compare`` directly on the 8-wide code.
 """
 

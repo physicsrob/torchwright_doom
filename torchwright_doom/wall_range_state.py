@@ -1,14 +1,14 @@
-"""SEG-keyed wall-range facts (Plan F / F4 + F5).
+"""SEG-keyed wall-range facts.
 
-Ported from ``doom_sandbox/implementation/forward/wall_range_state.py``. The
-reduced Phase-F build needs only :class:`RecentDrawsegState` — the cached
-drawseg values (seg id, range start/stop, scale1) that the seg-scan loop and
-the drawseg-scalar chain reuse within one ``R_STORE_WALL_RANGE`` cycle.
+Ported from ``doom_sandbox/implementation/forward/wall_range_state.py``. Defines
+two records. :class:`RecentDrawsegState` holds the cached drawseg values (seg
+id, range start/stop, scale1) that the seg-scan loop and the drawseg-scalar
+chain reuse within one ``R_STORE_WALL_RANGE`` cycle.
 
-``SegLevelFacts`` (the SEG-keyed lifted lookups DOOM's ``R_StoreWallRange``
-derives for later wall-column access — texturemid, rw_distance, texture ids,
-texture height-index) is **Phase H** (``seg_projection`` Phase 11) and is ported
-below; the wall-column rasterizer recovers these per-seg by lifted-id lookup.
+:class:`SegLevelFacts` holds the SEG-keyed lifted lookups DOOM's
+``R_StoreWallRange`` derives for later wall-column access — texturemid,
+rw_distance, texture ids, texture height-index; the wall-column rasterizer
+recovers these per-seg by lifted-id lookup.
 """
 
 from __future__ import annotations

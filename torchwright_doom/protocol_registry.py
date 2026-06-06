@@ -1,4 +1,4 @@
-"""Declarative ownership table for the renderer token protocol (Plan D / D6).
+"""Declarative ownership table for the renderer token protocol.
 
 The graph still builds branch nodes in the owner modules. This registry owns the
 cross-cutting metadata that otherwise drifts: vocab phase, inert/replay policy,

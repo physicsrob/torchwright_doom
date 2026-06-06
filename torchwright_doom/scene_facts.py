@@ -1,4 +1,4 @@
-"""Scene facts exposed to render code (Plan D / D4).
+"""Scene facts exposed to render code.
 
 This module turns token/header interpretation into queryable scene data. It
 does not parse raw token embeddings itself; `SceneTokenView` names the current

@@ -64,19 +64,34 @@ user will find it later in a more frustrating way.
 
 # Current state of this submodule
 
-This submodule is being torn down for the spec09 port. Only
-`torchwright_doom/torchwright_doom/doom/embedding.py` survives — the
-E8 / Gray-code helpers it carries are design-independent and worth
-keeping. Everything else (the old walls-as-tokens graph, the
-reference renderer, the host loop, the walkthrough machinery, every
-test that exercised them, plus the design notes describing the old
-pipeline) has been deleted on the `port-prep` branch.
+This submodule is the active DOOM renderer: a computation graph that
+`torchwright` compiles into a transformer which renders DOOM
+autoregressively. `torchwright_doom/render_main.py` is the entry point —
+`forward(input_vec, past, pos)` builds the read-side scene and protocol
+views, publishes the runtime protocol owners, builds each dispatch
+branch's next-token, and selects one by the current input token's type.
 
-The spec09 port will rebuild this submodule on top of what survives.
-Until then, this file is mostly the project's general doctrine for
-reference (communication style, debugging, doctrine rules); the
-specific guidance for working in `doom/` no longer applies because
-`doom/` is empty.
+Rough layout of `torchwright_doom/`:
+
+- **Read side** — `vocab` / `tokens` / `value_ranges` (the token
+  vocabulary and value encodings), `embedding` / `emit` / `extract`
+  (token ↔ residual encode/decode), `scene_*` and `protocol_*` (static
+  map facts and the autoregressive protocol / dispatch table).
+- **Geometry write side** — `bsp_traversal` / `bbox_pruning` /
+  `traversal_edges` (BSP walk + visibility pruning), `seg_projection` /
+  `seg_scanner` / `seg_cycle` (wall-segment projection), `render_ops`
+  (shared math: atan2, distance, clamps).
+- **Rasterization** — `wall_range_*` / `wall_column_*` (wall columns),
+  `visplane_*` / `flat_*` (floor/ceiling planes), `solid_intervals`
+  (occlusion), `pixel_dispatcher` / `uv_compute` (final pixels).
+- **Assets + lighting** — `wad_assets` / `assets` / `asset_*` (textures
+  and flats compiled to lookup tables), `doom_lighting` / `lighting` /
+  `pwl_banks` (light levels and colormaps).
+- **Graph infrastructure** — `past` / `attention_handles` (reading
+  previously-emitted tokens) and `std` (the helper-op shim).
+
+Each renderer module is ported from a `doom_sandbox` counterpart; many
+docstrings note that provenance and the sandbox path.
 
 # Dumb host principle
 
@@ -107,11 +122,11 @@ the user immediately and stop other work until resolved.
 
 # Testing
 
-No tests live in this submodule today — the spec09 port will land its
-own tests. The `make test` / `make test-local` machinery and the
-sharding scaffold in `modal_test.py` survive for the port to fill in.
+Tests live under `tests/` (`tests/embedding/`, `tests/scene/`,
+`tests/past/`, …) and run via the `make test` / `make test-local`
+machinery (with sharding in `modal_test.py`).
 
-When tests do land:
+Rules for running them:
 
 - ALWAYS use `make test` to run them; NEVER invoke pytest directly.
 - NEVER run tests in the background; always foreground.

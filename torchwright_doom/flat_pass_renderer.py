@@ -1,4 +1,4 @@
-"""Read-only branch owner for R_DrawPlanes / R_MakeSpans transitions (Plan J2).
+"""Read-only branch owner for R_DrawPlanes / R_MakeSpans transitions.
 
 Real-side port of ``doom_sandbox/implementation/forward/flat_pass_renderer.py``:
 the flat-pass control spine that runs *after* the BSP walk completes
@@ -79,7 +79,7 @@ class FlatPassRenderer:
         )
 
     # DOOM: R_DrawPlanes sky special-case (r_plane.c:396-420) vs. regular flat
-    # path — sky visplanes are skipped (no span pass) in J; a column-drawn sky is
+    # path — sky visplanes are skipped (no span pass); a column-drawn sky is
     # a separate future phase.
     def after_flat_visplane_begin(self) -> "Node":
         projection = self.projection

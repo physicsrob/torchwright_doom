@@ -1,5 +1,4 @@
-"""Projection seg-cycle state records for the SegProjection ``seg`` subcontext
-(Plan F / F4).
+"""Projection seg-cycle state records for the SegProjection ``seg`` subcontext.
 
 Ported from ``doom_sandbox/implementation/forward/seg_cycle.py``. Each record
 is a frozen dataclass with a ``publish()`` classmethod that publishes the

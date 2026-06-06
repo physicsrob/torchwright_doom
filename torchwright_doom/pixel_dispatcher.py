@@ -1,4 +1,4 @@
-"""Read-only mixed branch owner for wall/flat pixel transitions (Plan J).
+"""Read-only mixed branch owner for wall/flat pixel transitions.
 
 Ported from ``doom_sandbox/implementation/forward/pixel_dispatcher.py``.
 

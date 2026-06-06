@@ -1,4 +1,4 @@
-"""Compiled texture and flat lookup helpers (Plan I2).
+"""Compiled texture and flat lookup helpers.
 
 Real-side port of ``doom_sandbox/implementation/forward/assets.py``: the
 ``WallAssets`` / ``FlatAssets`` metadata accessors and full-resolution

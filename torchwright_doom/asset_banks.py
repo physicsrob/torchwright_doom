@@ -1,4 +1,4 @@
-"""Compile-time WAD asset banks for the texture/flat read surface (Plan I1).
+"""Compile-time WAD asset banks for the texture/flat read surface.
 
 Real-side port of ``doom_sandbox/implementation/asset_banks.py``. Builds the
 per-``(width, height)`` wall banks, the per-texture metadata tables, the flat

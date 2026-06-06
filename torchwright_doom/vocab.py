@@ -162,7 +162,7 @@ _SCAN_X_DERIVED = {
 }
 
 # Public name of the lifted scalar-id key derived column (producer key
-# ``[id, -id**2, 1]``), referenced by the renderer read-side (Plan D).
+# ``[id, -id**2, 1]``), referenced by the renderer read-side.
 ID_LIFTED_KEY_DERIVED_NAME = "id_lifted_key"
 
 _ID_LIFTED_KEY_DERIVED = {

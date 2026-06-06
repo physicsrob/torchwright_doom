@@ -1,4 +1,4 @@
-"""Prefill token interpretation for scene indexing (Plan D / D2).
+"""Prefill token interpretation for scene indexing.
 
 The scene prefill stream is compact, so most facts are not self-contained
 tokens. Structural headers (`NODE`, `SS`, `SEG`) establish the current record,
@@ -9,7 +9,7 @@ that match the scene-index story.
 Ported from ``doom_sandbox/implementation/forward/scene_tokens.py``. The only
 changes from the sandbox source are the import block (``Vec`` -> ``Node``; the
 std helpers + token declarations now come from the real-side shim / vocab) and
-the shared ``input_type_matches`` body (Plan A's ``type_matches``); the
+the shared ``input_type_matches`` body (``type_matches``); the
 ``@cached_property`` token accessors are a line-for-line port. Those names are
 the prefill protocol's documentation — keep them explicit even where
 repetitive.
