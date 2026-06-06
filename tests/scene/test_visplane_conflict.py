@@ -31,6 +31,7 @@ from torchwright_doom.past import GraphPast
 from torchwright_doom.std import concat, constant, linear, one_hot
 from torchwright_doom.visplane_state import (
     RuntimeVisplaneState,
+    UsedPlaneSuccessor,
     _INSTANCE_IDX_LINEAR,
     _publish_occupancy_radix,
 )
@@ -64,6 +65,20 @@ def _build_graph(plane_id, candidate_vp, x1, x2, occ_cols):
     )
 
     dummy = past.publish("dummy", constant(0.0))
+    # check_conflict reads only ``occupancy``; the rest are dummy handles. The
+    # used-plane successor (next_plane_after) is unused here, so a dummy
+    # UsedPlaneSuccessor with the shared dummy handle suffices.
+    dummy_used_plane = UsedPlaneSuccessor(
+        validity=dummy,
+        lo=dummy,
+        hi_for_h2=dummy,
+        bucket_onehot=dummy,
+        above_lo=dummy,
+        hi_above_for_h2=dummy,
+        above_all=dummy,
+        same_payload=dummy,
+        carry_payload=dummy,
+    )
     rvs = RuntimeVisplaneState(
         occupancy=occupancy,
         occupied_x=dummy,
@@ -71,9 +86,7 @@ def _build_graph(plane_id, candidate_vp, x1, x2, occ_cols):
         bounds_max_key=dummy,
         col_key=dummy,
         col_range=dummy,
-        used_plane_score=dummy,
-        used_plane_above=dummy,
-        used_plane_value=dummy,
+        used_plane=dummy_used_plane,
         used_vp_key=dummy,
         used_vp_value=dummy,
     )

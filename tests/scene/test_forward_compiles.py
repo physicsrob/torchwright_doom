@@ -40,15 +40,25 @@ from torchwright_doom.past import GraphPast
 from torchwright_doom.render_main import forward
 
 # compile_to_onnx streams, so d only sets the cramming point, not peak memory.
-# d=4096, d_head=32. The two screen-width-sized attention keys that used to set
-# the d_head floor are both radixed/lifted now:
-#   * the visplane R_CheckPlane occupied_key (was d_qk 63) is an instance-filtered
-#     radix successor over occupied columns (visplane_state.py), widest Q/K ~21;
-#   * the ClipMemory per-column clip read (was d_qk 62 = SCREEN_WIDTH+1+1) is a
-#     width-3 lifted scalar-id column equality (wall_column_state.ClipMemory),
-#     d_qk 4.
-# So the binding key is now the visplane radix (~21) and d_head drops 64 -> 32
-# (the next power-of-two divisor of 4096 above 21).
+# d=4096, d_head=32 — Phase H's original working point. Phase J's flat-pass span
+# emission adds attention keys that were no_op in H, which both (a) exceeded the
+# d_head=32 floor and (b) raised the d_embed residual demand (Risk #8's expected
+# width bump). Radixing the flat keys fixes BOTH axes back to H's point:
+#   * column_range (was d_qk 101): lifted (plane, vp) instance + radix screen
+#     column + sentinel bias (visplane_state.py), d_qk 20;
+#   * min_x / max_x / next_vp_after (were 41-42): the plane equality radixed to a
+#     (bucket, digit) one-hot pair, d_qk 21-22;
+#   * next_plane_after (was a width-(N_PLANES_MAX+1) argmin-above, d_head 35): a
+#     3-stage radix successor over the used-plane set, heads d_qk <= 14;
+#   * flat_span_x1 (was d_qk 91): the SCREEN_HEIGHT-wide opening membership split
+#     into d_head-sized dense row-chunks (flat_state.py), heads d_qk 26.
+# Beyond holding d_head=32, narrowing those keys removed their wide
+# key-construction nodes from the residual, so the *real* forward_compile fits at
+# d=4096 again — bracketed: d=3584 deadlocks ("No progress"), d=4096 schedules.
+# (The standalone SCHED_ONLY heuristic is a CP-SAT warm-start seed, far more
+# conservative — it deadlocks ~4800 — and is NOT the real d_embed demand.) The
+# H-side keys (R_CheckPlane occupied_key, ClipMemory) were already radixed/lifted
+# to d_qk <= 32 in Phase H.
 _D = 4096
 _D_HEAD = 32
 
@@ -81,10 +91,13 @@ def test_forward_compiles_to_onnx(tmp_path) -> None:
     assert "past_len" in in_names, in_names
     assert "logits" in out_names, out_names
 
-    # Layer count: after the radix successor, the renderer lands at 45 layers.
-    # The successor intentionally replaces one wide successor head with H1/H2/H3
-    # plus predicate-feature presence recomputation; H2 -> H3 is a real data
-    # dependency, so the old 42 ceiling is no longer the right guard. Keep the
-    # ceiling tight enough to catch a fanout regression back toward ~66 layers.
+    # Layer count: Phase J's flat pass lands the forward at 85 layers at d=4096
+    # (H was ~45). The jump is the per-position flat-pass compute that was no_op
+    # in H — the R_MapPlane cursor PWL chain, R_MakeSpans open/close, and the
+    # next_plane_after radix successor's H2 -> H3 data dependency — not the
+    # dispatch fold (still max_fanout=8). It's a few layers deeper than at a
+    # looser d (81 at d=5120) because the tight residual forces more serialization.
+    # Keep the ceiling tight enough to catch a dispatch-fanout regression (a serial
+    # fold would add ~13).
     n_layers = sum(1 for n in in_names if n.startswith("past_K_"))
-    assert 26 <= n_layers <= 53, f"unexpected compiled layer count {n_layers}"
+    assert 26 <= n_layers <= 90, f"unexpected compiled layer count {n_layers}"

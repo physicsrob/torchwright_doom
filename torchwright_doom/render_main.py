@@ -43,8 +43,10 @@ from torchwright.graph import Node, PosEncoding
 
 from .bsp_traversal import BspTraversal
 from .emit import emit_derived_zero
+from .flat_pass_renderer import FlatPassRenderer
 from .past import GraphPast, PastHandleScope
 from .payload_router import PayloadRouter
+from .pixel_dispatcher import PixelDispatcher
 from .protocol_registry import DISPATCH_TRANSITIONS
 from .protocol_tokens import ProtocolTokenView
 from .render_ops import _ATAN_ABS_RANGE, signed_world_angle
@@ -95,7 +97,7 @@ def publish_runtime_protocols(
     past: PastHandleScope,
     inp: ProtocolTokenView,
     scene: SceneIndex,
-    pos: PosEncoding,
+    pos: Node,
 ) -> RuntimeProtocols:
     """Publish runtime protocol channels before branch candidates consume them.
 
@@ -237,7 +239,12 @@ def forward(input_vec: Node, past: GraphPast, pos: PosEncoding) -> Node:
         prev_prev_input_type,
     )
 
-    protocols = publish_runtime_protocols(input_vec, scope, inp, scene, pos)
+    # The projection texel path (Phase J) reads the position as a *scalar* value
+    # (sandbox ``pos`` is a 1-Vec): pixel_index = pos - span_v0.pos - 1, and the
+    # span-v0 / flat-cursor publishes stamp it. Extract the raw integer counter
+    # column from the PosEncoding (``SceneIndex.build``'s ``pos`` is unused).
+    pos_scalar = pos.get_position_scalar()
+    protocols = publish_runtime_protocols(input_vec, scope, inp, scene, pos_scalar)
     branches = build_branch_outputs(inp, protocols)
     return dispatch_next_token(input_vec, inp, branches)
 
@@ -276,6 +283,8 @@ def build_branch_outputs(
     seg_scan = SegScanner(projection)
     wall_range = WallRangeBuilder(projection)
     wall_cols = WallColumnRenderer(projection)
+    pixels = PixelDispatcher(projection)
+    flats = FlatPassRenderer(projection)
     visplanes = VisplaneMarker(projection)
     ranges = RangeDispatcher(projection)
     branches: dict[str, "Node | ScalarEmit | AngleInputEmit"] = {
@@ -339,6 +348,20 @@ def build_branch_outputs(
         "wall_span_meta": wall_cols.after_wall_span_meta(),
         "clip_update": wall_cols.after_clip_update(),
         "screen_y": wall_cols.after_screen_y_value(no_op_out),
+        # Wall + flat pixels (PixelDispatcher) — Phase J. The three shared
+        # pixel/cursor branches fork on flat_span_seen (wall arm / flat arm).
+        "wall_column": pixels.after_wall_column(),
+        "set_cursor_y": pixels.after_set_cursor_y(),
+        "pixel_color": pixels.after_pixel_color(),
+        # Flat floor/ceiling span pass (FlatPassRenderer) — Phase J2.
+        "draw_planes_begin": flats.after_draw_planes_begin(),
+        "set_cursor_direction_x": flats.after_set_cursor_direction_x(),
+        "flat_next_plane": flats.after_flat_next_plane(),
+        "flat_next_vp": flats.after_flat_next_vp(),
+        "flat_visplane_begin": flats.after_flat_visplane_begin(),
+        "make_spans_col": flats.after_make_spans_col(),
+        "span_close_slot": flats.after_span_close_slot(),
+        "span_row": flats.after_span_row(),
         # Host-visible screen-range merge (RangeDispatcher) — Phase H.
         "screen_range": ranges.after_screen_range(no_op_out),
     }

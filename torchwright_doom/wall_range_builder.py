@@ -81,7 +81,6 @@ from .vocab import (
     DRAWSEG_SCALESTEP_DEN,
     DRAWSEG_TSILHEIGHT,
     DRAWSEG_U_PHASE,
-    NO_OP,
     SEG_DC_TMID_LOWER,
     SEG_DC_TMID_MID,
     SEG_DC_TMID_UPPER,
@@ -315,11 +314,13 @@ class WallRangeBuilder:
                 ),
             ),
         )
-        # DEFERRED (Phase J): is_value_after_set_cursor_y -> PixelDispatcher(
-        # projection).make_first_pixel_color().
+        # Phase J: a VALUE after SET_CURSOR_Y (the per-span v0 carrier) emits the
+        # span's first wall pixel (pixel_index 0).
+        from .pixel_dispatcher import PixelDispatcher
+
         return select(
             inp.is_value_after_set_cursor_y,
-            make_token_head(NO_OP),
+            PixelDispatcher(projection).make_first_pixel_color(),
             drawseg_value_out,
         )
 

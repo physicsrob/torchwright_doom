@@ -58,6 +58,7 @@ from .std import (
 from .std import sum as vec_sum
 from torchwright.ops.arithmetic_ops import clamp
 from .render_constants import MATCH_GAIN_LONG
+from .flat_state import FlatPassState
 from .visplane_state import RuntimeVisplaneState
 from .wall_column_state import (
     ClipMemory,
@@ -222,6 +223,13 @@ class VisplaneRuntimeContext:
         )
 
 
+@dataclass(frozen=True)
+class FlatRuntimeContext:
+    """Published flat-pass state (Phase J)."""
+
+    flat_pass: FlatPassState
+
+
 class WallColumnRenderScalars:
     """Assemble the per-column wall-render scalars at the SCREEN_Y_VALUE row.
 
@@ -293,8 +301,8 @@ class SegProjection:
     """Published per-position render context for the subsector/R_AddLine protocol.
 
     Phase H un-reduces this to add the ``wall`` and ``planes`` subcontexts (the
-    wall-column rasterizer + runtime visplane occupancy). The ``flats``
-    subcontext (the flat *pixel* pass) stays deferred to Phase J.
+    wall-column rasterizer + runtime visplane occupancy). Phase J adds the
+    ``flats`` subcontext (the flat span/visplane pixel pass — ``FlatPassState``).
     """
 
     core: CoreContext
@@ -304,6 +312,7 @@ class SegProjection:
     drawseg: DrawsegScope
     wall: WallRuntimeContext
     planes: VisplaneRuntimeContext
+    flats: FlatRuntimeContext
 
     @classmethod
     def publish(
@@ -550,8 +559,17 @@ class SegProjection:
             recent_drawseg.store_i,
             wallcol_render_state,
         )
-        # Phase 13 (wall side) — wall-span K-row finish. The flat pass
-        # (FlatPassState) is Phase J and omitted.
+        # Phase 13 — two independent late publishes: the flat pass (Phase J) and
+        # the wall-span K-row finish. ``finish()`` gates the K-row y1 state at the
+        # SCREEN_Y_VALUE row and does not read flat-pass state, so the order is
+        # free; ``FlatPassState`` reads the runtime visplanes (Phase 10).
+        flat_pass = FlatPassState.publish(
+            past,
+            inp,
+            scene,
+            runtime_visplanes,
+            pos,
+        )
         wall_span_runtime = wall_span_draft.finish(past, inp)
 
         inputs = InputChannels(
@@ -606,4 +624,5 @@ class SegProjection:
                 check_result_vp_pub=check_result_vp_pub,
                 runtime_visplanes=runtime_visplanes,
             ),
+            flats=FlatRuntimeContext(flat_pass=flat_pass),
         )

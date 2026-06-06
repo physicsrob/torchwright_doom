@@ -49,13 +49,15 @@ from torchwright_doom.vocab import NO_OP
 
 from ..prefill_fixture import TINY_BSP_SCENE, row_index
 
-# Plan E's shared-slot layout shrank the residual peak to ~1432 (was ~4655); Plan
-# F's projection branches still fit in 2400. Plan G's BBoxPruner adds four more
-# signed_world_angle call sites (each carrying a 2x1024-wide ray-count
-# intermediate) plus its published occlusion/context recovery state, pushing the
-# peak past 2400 — 4800 restores margin.
-_D = 4800
-_D_HEAD = 160
+# Plan E's shared-slot layout shrank the residual peak; Plan F/G's projection +
+# BBoxPruner grew it; Plan J's flat-pass span emission grew it again AND raised
+# the d_head floor. Radixing the flat keys (see test_forward_compiles) brings the
+# whole forward back to H's d=4096 / d_head=32 working point, so this exercises
+# the compiled free-run at the real target config. (This compiles the full J
+# forward — 85 layers — so the in-process compile_headless run is heavier than the
+# pre-J traversal spine; it fits in ~12 GB.)
+_D = 4096
+_D_HEAD = 32
 _MAX_STEPS = 8  # plenty for set_cursor + side precompute + descent on a 1-node scene
 
 

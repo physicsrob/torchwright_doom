@@ -28,7 +28,7 @@ from torchwright.ops.arithmetic_ops import (
 )
 
 from .past import PastHandle, PastHandleScope
-from .render_ops import SCREEN_X_CLAMP, add_const, neg, or_, snap_bool
+from .render_ops import SCREEN_X_CLAMP, add_const, neg, one_minus, or_, snap_bool
 from .std import (
     bool_and,
     clamp,
@@ -66,19 +66,12 @@ def _scale_matrix(width: int, scale: float) -> list[list[float]]:
 
 
 _INSTANCE_IDX_LINEAR = [[float(N_VP_PER_PLANE_MAX)], [1.0]]
-_OCC_PLANE_SCALE = _scale_matrix(N_PLANES_MAX, 128.0)
 _OCC_VP_SCALE = _scale_matrix(N_VP_PER_PLANE_MAX, 128.0)
-_USED_PLANE_ABOVE = [
-    [1.0 if p > (threshold_idx - 1) else 0.0
-     for threshold_idx in range(N_PLANES_MAX + 1)]
-    for p in range(N_PLANES_MAX + 1)
-]
 _USED_VP_ABOVE = [
     [1.0 if vp > (threshold_idx - 1) else 0.0
      for threshold_idx in range(N_VP_PER_PLANE_MAX + 1)]
     for vp in range(N_VP_PER_PLANE_MAX + 1)
 ]
-_USED_PLANE_KEY_SCALE = _scale_matrix(N_PLANES_MAX, 64.0)
 _USED_VP_THRESHOLD_SCALE = _scale_matrix(N_VP_PER_PLANE_MAX + 1, 16.0)
 
 # --- R_CheckPlane overlap test: instance-filtered radix successor -------------
@@ -113,6 +106,64 @@ _HI_ABOVE_TABLE = [
     [1.0 if hi > t else 0.0 for t in range(_N_BUCKETS)]
     for hi in range(_N_BUCKETS)
 ]
+
+# --- Plane-id radix (min_x / max_x / next_vp_after / next_plane_after) --------
+#
+# The plane-keyed visplane reads used a full ``one_hot(plane, N_PLANES_MAX)``
+# query component (d_qk 41-42 for the argmax reads; d_head 35 for the
+# ``next_plane_after`` argmin-above basis), all above the d_head=32 floor. Radix
+# the plane id exactly the way ClipMemory / OccupancyRadix radix a screen column:
+# ``plane -> (bucket = p // B, digit = p % B)`` one-hots, so an EXACT plane
+# equality needs only ``NB + B`` cols (12 vs 32) and is a sum of one-hot products
+# — NO large-magnitude cancellation (the lifted-square form would, and these
+# heads resolve a small post-equality gap: argmin ``occupied_x`` / ``vp``, where
+# the cancellation noise blends the tie — see the d_head reduction notes). The
+# successor scan (``next_plane_after``) buckets the used-plane set and runs the
+# same/higher/carry search ``solid_intervals.next_start_after`` uses over columns.
+#
+# One config covers both ranges: real planes 0..N_PLANES_MAX-1 (min_x/max_x/
+# next_vp_after) and the scored set 0..N_PLANES_MAX (next_plane_after publishes
+# the sentinel plane as a used row), since 32 // 6 = 5 still fits bucket width 6.
+_PLANE_RADIX_BASE = math.ceil(math.sqrt(N_PLANES_MAX + 1))  # 6 at N_PLANES_MAX=32
+_PLANE_N_BUCKETS = N_PLANES_MAX // _PLANE_RADIX_BASE + 1  # 6
+_PLANE_RADIX_WIDTH = _PLANE_N_BUCKETS + _PLANE_RADIX_BASE  # 12
+_PLANE_RADIX_SCALE = _scale_matrix(_PLANE_RADIX_WIDTH, 128.0)
+_PLANE_INVALID_HI = _PLANE_N_BUCKETS
+
+# Strict-above tables for the plane successor (mirror ``solid_intervals``):
+#   _PLANE_LO_ABOVE_TABLE[lo][t]      = I(lo > t)  — same-bucket digit search.
+#   _PLANE_HI_FOR_H2_ABOVE_TABLE[hi][t] = I(hi > t) — next-non-empty-bucket search
+#                                        (row hi == _PLANE_INVALID_HI is all-zero).
+# width B+1: column j encodes I(lo > j - 1), so slot 0 is "above -1" (every
+# digit), used by next_plane_after's threshold == -1 find-first query.
+_PLANE_LO_ABOVE_TABLE = [
+    [1.0 if lo > (j - 1) else 0.0 for j in range(_PLANE_RADIX_BASE + 1)]
+    for lo in range(_PLANE_RADIX_BASE)
+]
+_PLANE_HI_FOR_H2_ABOVE_TABLE = [
+    [1.0 if hi > t else 0.0 for t in range(_PLANE_N_BUCKETS)]
+    for hi in range(_PLANE_N_BUCKETS + 1)
+]
+
+
+def _radix_plane_key(plane_scalar: Node) -> Node:
+    """Exact plane-equality key: ``concat(one_hot(p // B), one_hot(p % B))``
+    (width ``NB + B = 12``). Two such keys dot to ``bucket_match + digit_match``
+    — 2 on an exact plane match, <= 1 otherwise — a sum of one-hot products with
+    no large-magnitude cancellation."""
+    hi = thermometer_floor_div(plane_scalar, _PLANE_RADIX_BASE, N_PLANES_MAX)
+    lo = mod_const(plane_scalar, _PLANE_RADIX_BASE, N_PLANES_MAX)
+    return concat(one_hot(hi, _PLANE_N_BUCKETS), one_hot(lo, _PLANE_RADIX_BASE))
+
+
+def _radix_col_key(col_scalar: Node) -> Node:
+    """Exact screen-column-equality key for ``column_range``: ``concat(
+    one_hot(x // B), one_hot(x % B))`` over the occupancy radix base (width
+    ``N_BUCKETS + B = 16``). Same cancellation-free one-hot dot as the plane key.
+    """
+    hi = thermometer_floor_div(col_scalar, _RADIX_BASE, SCREEN_WIDTH)
+    lo = mod_const(col_scalar, _RADIX_BASE, SCREEN_WIDTH)
+    return concat(one_hot(hi, _N_BUCKETS), one_hot(lo, _RADIX_BASE))
 
 
 def _lifted_instance_key(instance_idx: Node) -> Node:
@@ -196,6 +247,29 @@ class OccupancyRadix:
 
 
 @dataclass(frozen=True)
+class UsedPlaneSuccessor:
+    """Radix-bucketed used-plane set read by ``next_plane_after``.
+
+    One row per used plane (every occupied column's plane, plus the sentinel
+    plane published at ``DRAW_PLANES_BEGIN``). The plane id is split into ``hi =
+    p // B`` (bucket) and ``lo = p % B`` (digit); ``next_plane_after`` runs the
+    same same/next-bucket/carry successor scan ``solid_intervals.next_start_after``
+    uses over screen columns. This replaces a single width-(N_PLANES_MAX+1)
+    ``pick_argmin_above`` (d_head 35) with three heads of d_qk <= 14.
+    """
+
+    validity: PastHandle  # +/-1 used marker (bucketed-argmin static validity)
+    lo: PastHandle  # plane digit p % B (score for the same/carry searches)
+    hi_for_h2: PastHandle  # bucket p // B, or _PLANE_INVALID_HI on invalid rows
+    bucket_onehot: PastHandle  # one_hot(p // B, NB)
+    above_lo: PastHandle  # I(lo > t-1), width B+1 (the t=-1 slot finds the first plane)
+    hi_above_for_h2: PastHandle  # I(hi > t), width NB (next-non-empty-bucket search)
+    above_all: PastHandle  # constant [1.0] (carry "above everything" threshold)
+    same_payload: PastHandle  # concat(plane, validity, bucket_oh, above_lo)
+    carry_payload: PastHandle  # concat(plane, validity, bucket_oh)
+
+
+@dataclass(frozen=True)
 class RuntimeVisplaneState:
     """Runtime visplane occupancy and used-instance scans."""
 
@@ -205,9 +279,7 @@ class RuntimeVisplaneState:
     bounds_max_key: PastHandle
     col_key: PastHandle
     col_range: PastHandle
-    used_plane_score: PastHandle
-    used_plane_above: PastHandle
-    used_plane_value: PastHandle
+    used_plane: UsedPlaneSuccessor
     used_vp_key: PastHandle
     used_vp_value: PastHandle
 
@@ -225,13 +297,11 @@ class RuntimeVisplaneState:
         neg_one_value = constant(-1.0)
         vp_sentinel = constant(float(N_VP_SENTINEL))
         plane_sentinel = constant(float(N_PLANE_SENTINEL))
-        zero_used_plane_above = constant([0.0] * (N_PLANES_MAX + 1))
 
         occupied_active = inp.screen_range_after_plane_mark
         occupied_p_value = past.attend_to_offset(plane_mark_p_or_zero, delta_pos=-1)
         occupied_vp_value = past.attend_to_offset(plane_mark_vp_or_zero, delta_pos=-1)
         occupied_x_value = wall_column.pick(past, wall_column.x)
-        occupied_x_oh_value = wall_column.pick(past, wall_column.x_key)
 
         occupied_instance_idx = linear(
             concat(occupied_p_value, occupied_vp_value),
@@ -246,12 +316,17 @@ class RuntimeVisplaneState:
             occupied_instance_oh_value,
         )
         occupied_x = past.publish("visplane_occupied_x", occupied_x_value)
+        # Radix the plane equality (was one_hot(plane, 32), the d_qk driver) into
+        # a (bucket, digit) pair; the vp one-hot (width 8) stays. Both query and
+        # key scale by 128, so a matched digit/vp column contributes 128*128 to
+        # the dot, dominating the +/-occupied_x term (<= SCREEN_WIDTH) so the
+        # (plane, vp) equality wins; among matches, +/-occupied_x picks min/max x.
         bounds_min_key = past.publish(
             "visplane_bounds_min_key",
             gate(
                 occupied_active,
                 concat(
-                    linear(one_hot(occupied_p_value, N_PLANES_MAX), _OCC_PLANE_SCALE),
+                    linear(_radix_plane_key(occupied_p_value), _PLANE_RADIX_SCALE),
                     linear(
                         one_hot(occupied_vp_value, N_VP_PER_PLANE_MAX),
                         _OCC_VP_SCALE,
@@ -265,7 +340,7 @@ class RuntimeVisplaneState:
             gate(
                 occupied_active,
                 concat(
-                    linear(one_hot(occupied_p_value, N_PLANES_MAX), _OCC_PLANE_SCALE),
+                    linear(_radix_plane_key(occupied_p_value), _PLANE_RADIX_SCALE),
                     linear(
                         one_hot(occupied_vp_value, N_VP_PER_PLANE_MAX),
                         _OCC_VP_SCALE,
@@ -274,10 +349,19 @@ class RuntimeVisplaneState:
                 ),
             ),
         )
+        # column_range key: lift the (plane, vp) instance to a width-3 scalar-id
+        # equality (the same form OccupancyRadix uses) and radix the screen column
+        # (was a width-(SCREEN_WIDTH+1) one_hot), so a (plane, vp, x) lookup needs
+        # 3 + 16 + 1 cols (was 101). The dot of a full match is
+        #   (1) instance + (2) col(hi+lo) - 2.5 (sentinel bias) = 0.5 > 0;
+        # any partial match is <= -0.5 and an inactive (gated-zero) row is 0, so a
+        # column with no occupancy picks an inactive row -> empty range. Identical
+        # separation to the old raw-one-hot form (instance lift contributes 1 on a
+        # match in place of the old plane(1)+vp(1)=2, and the col radix contributes
+        # 2 in place of the old x(1)=1 -> same total 3).
         col_key_value = concat(
-            one_hot(occupied_p_value, N_PLANES_MAX),
-            one_hot(occupied_vp_value, N_VP_PER_PLANE_MAX),
-            occupied_x_oh_value,
+            _lifted_instance_key(occupied_instance_idx),
+            _radix_col_key(occupied_x_value),
             visplane_col_sentinel_bias,
         )
         col_key = past.publish(
@@ -298,22 +382,8 @@ class RuntimeVisplaneState:
             plane_sentinel,
             occupied_p_value,
         )
-        used_plane_oh = one_hot(used_plane_value_raw, N_PLANES_MAX + 1)
-        used_plane_score = past.publish(
-            "used_plane_score",
-            select(used_plane_active, used_plane_value_raw, plane_sentinel),
-        )
-        used_plane_above = past.publish(
-            "used_plane_above",
-            select(
-                used_plane_active,
-                linear(used_plane_oh, _USED_PLANE_ABOVE),
-                zero_used_plane_above,
-            ),
-        )
-        used_plane_value = past.publish(
-            "used_plane_value",
-            select(used_plane_active, used_plane_value_raw, plane_sentinel),
+        used_plane = _publish_used_plane_successor(
+            past, used_plane_active, used_plane_value_raw
         )
 
         used_vp_sentinel_active = inp.is_plane_def
@@ -329,7 +399,7 @@ class RuntimeVisplaneState:
             _USED_VP_ABOVE,
         )
         used_vp_key_value = concat(
-            linear(one_hot(used_vp_p, N_PLANES_MAX), _USED_PLANE_KEY_SCALE),
+            linear(_radix_plane_key(used_vp_p), _PLANE_RADIX_SCALE),
             linear(used_vp_above, _USED_VP_THRESHOLD_SCALE),
             neg(used_vp_value_raw),
         )
@@ -349,9 +419,7 @@ class RuntimeVisplaneState:
             bounds_max_key=bounds_max_key,
             col_key=col_key,
             col_range=col_range,
-            used_plane_score=used_plane_score,
-            used_plane_above=used_plane_above,
-            used_plane_value=used_plane_value,
+            used_plane=used_plane,
             used_vp_key=used_vp_key,
             used_vp_value=used_vp_value,
         )
@@ -461,12 +529,79 @@ class RuntimeVisplaneState:
 
     # DOOM: R_DrawPlanes (r_plane.c) — iterate active visplanes (for pl = visplanes; pl < lastvisplane; pl++)
     def next_plane_after(self, past: PastHandleScope, threshold: Node) -> Node:
-        threshold_idx = add_const(threshold, 1.0)
-        return past.pick_argmin_above(
-            self.used_plane_score,
-            self.used_plane_above,
-            one_hot(threshold_idx, N_PLANES_MAX + 1),
-            self.used_plane_value,
+        """Smallest used plane STRICTLY greater than ``threshold``.
+
+        The plane-id successor over the bucketed used-plane set, mirroring
+        ``solid_intervals.next_start_after``: H1 finds the smallest digit above
+        ``threshold % B`` in ``threshold``'s bucket; H2 finds the next non-empty
+        bucket; H3 carries to that bucket's smallest digit. ``threshold == -1``
+        (R_DrawPlanes start, "find the first plane") works because ``threshold``'s
+        digit floor-divides/mods to ``(0, -1)`` and the ``above_lo`` table's
+        leading ``t == -1`` slot makes every digit in bucket 0 qualify. The
+        sentinel plane published at DRAW_PLANES_BEGIN keeps a successor always
+        present, so the ``plane_sentinel`` fallback is unreachable in practice."""
+        plane_sentinel = constant(float(N_PLANE_SENTINEL))
+        up = self.used_plane
+        query_hi = thermometer_floor_div(threshold, _PLANE_RADIX_BASE, N_PLANES_MAX)
+        query_lo = mod_const(threshold, _PLANE_RADIX_BASE, N_PLANES_MAX)
+        query_bucket_oh = one_hot(query_hi, _PLANE_N_BUCKETS)
+        # Digit threshold shifted +1: slot 0 = "above -1" (find-first), slots
+        # 1..B = "above 0..B-1". So threshold == -1 -> query_lo == -1 -> slot 0.
+        query_lo_threshold = one_hot(
+            add_const(query_lo, 1.0), _PLANE_RADIX_BASE + 1
+        )
+
+        same = past.pick_argmin_above_in_bucket(
+            up.lo,
+            up.validity,
+            up.bucket_onehot,
+            up.above_lo,
+            query_bucket_oh,
+            query_lo_threshold,
+            up.same_payload,
+        )
+        same_plane, same_valid, same_bucket_oh, same_above_lo = split(
+            same, [1, 1, _PLANE_N_BUCKETS, _PLANE_RADIX_BASE + 1]
+        )
+        same_present = bool_and(
+            snap_bool(same_valid),
+            compare(pick_by_one_hot(query_bucket_oh, same_bucket_oh), 0.9),
+            compare(pick_by_one_hot(query_lo_threshold, same_above_lo), 0.9),
+        )
+
+        higher_hi = past.pick_argmin_above(
+            up.hi_for_h2,
+            up.hi_above_for_h2,
+            query_bucket_oh,
+            up.hi_for_h2,
+        )
+        higher_bucket_query = one_hot(
+            clamp(higher_hi, 0.0, float(_PLANE_N_BUCKETS - 1)), _PLANE_N_BUCKETS
+        )
+
+        carry = past.pick_argmin_above_in_bucket(
+            up.lo,
+            up.validity,
+            up.bucket_onehot,
+            up.above_all,
+            higher_bucket_query,
+            constant([1.0]),
+            up.carry_payload,
+        )
+        carry_plane, carry_valid, carry_bucket_oh = split(
+            carry, [1, 1, _PLANE_N_BUCKETS]
+        )
+        higher_is_real = one_minus(compare(higher_hi, float(_PLANE_N_BUCKETS) - 0.5))
+        carry_present = bool_and(
+            higher_is_real,
+            snap_bool(carry_valid),
+            compare(pick_by_one_hot(higher_bucket_query, carry_bucket_oh), 0.9),
+        )
+
+        return select(
+            same_present,
+            same_plane,
+            select(carry_present, carry_plane, plane_sentinel),
         )
 
     # DOOM: R_DrawPlanes (r_plane.c) — nested iteration over a plane's visplane instances (merge slots)
@@ -474,7 +609,7 @@ class RuntimeVisplaneState:
         one = constant(1.0)
         threshold_idx = add_const(threshold, 1.0)
         query = concat(
-            linear(one_hot(plane_id, N_PLANES_MAX), _USED_PLANE_KEY_SCALE),
+            linear(_radix_plane_key(plane_id), _PLANE_RADIX_SCALE),
             linear(
                 one_hot(threshold_idx, N_VP_PER_PLANE_MAX + 1),
                 _USED_VP_THRESHOLD_SCALE,
@@ -487,7 +622,7 @@ class RuntimeVisplaneState:
     def min_x(self, past: PastHandleScope, plane_id: Node, vp: Node) -> Node:
         one = constant(1.0)
         query = concat(
-            linear(one_hot(plane_id, N_PLANES_MAX), _OCC_PLANE_SCALE),
+            linear(_radix_plane_key(plane_id), _PLANE_RADIX_SCALE),
             linear(one_hot(vp, N_VP_PER_PLANE_MAX), _OCC_VP_SCALE),
             one,
         )
@@ -497,7 +632,7 @@ class RuntimeVisplaneState:
     def max_x(self, past: PastHandleScope, plane_id: Node, vp: Node) -> Node:
         one = constant(1.0)
         query = concat(
-            linear(one_hot(plane_id, N_PLANES_MAX), _OCC_PLANE_SCALE),
+            linear(_radix_plane_key(plane_id), _PLANE_RADIX_SCALE),
             linear(one_hot(vp, N_VP_PER_PLANE_MAX), _OCC_VP_SCALE),
             one,
         )
@@ -570,11 +705,60 @@ def _publish_occupancy_radix(
     )
 
 
+def _publish_used_plane_successor(
+    past: PastHandleScope,
+    used_plane_active: Node,
+    used_plane_value_raw: Node,
+) -> UsedPlaneSuccessor:
+    """Publish the per-used-plane radix rows ``next_plane_after`` scans.
+
+    Mirrors ``solid_intervals._publish_successor_fields`` over plane ids: the
+    plane splits into ``hi = p // B`` / ``lo = p % B``; the same/carry searches
+    use ``validity`` (= ``used_plane_active``) as the bucketed-argmin static
+    validity, so the bucket keys are published raw (no gate). The ``above_lo``
+    table is width ``B + 1`` (a leading ``t == -1`` slot) so a ``threshold == -1``
+    query — R_DrawPlanes' find-first — admits every digit in bucket 0. Invalid
+    rows get ``hi = _PLANE_INVALID_HI`` so the H2 next-bucket argmin returns that
+    sentinel when no higher bucket exists (``next_plane_after`` reads it as absent).
+    """
+    plane_hi = thermometer_floor_div(
+        used_plane_value_raw, _PLANE_RADIX_BASE, N_PLANES_MAX
+    )
+    plane_lo = mod_const(used_plane_value_raw, _PLANE_RADIX_BASE, N_PLANES_MAX)
+    bucket_onehot = one_hot(plane_hi, _PLANE_N_BUCKETS)
+    above_lo = linear(one_hot(plane_lo, _PLANE_RADIX_BASE), _PLANE_LO_ABOVE_TABLE)
+    hi_for_h2 = select(
+        used_plane_active, plane_hi, constant(float(_PLANE_INVALID_HI))
+    )
+    hi_above_for_h2 = linear(
+        one_hot(hi_for_h2, _PLANE_N_BUCKETS + 1),
+        _PLANE_HI_FOR_H2_ABOVE_TABLE,
+    )
+    same_payload = concat(
+        used_plane_value_raw, used_plane_active, bucket_onehot, above_lo
+    )
+    carry_payload = concat(used_plane_value_raw, used_plane_active, bucket_onehot)
+    return UsedPlaneSuccessor(
+        validity=past.publish("used_plane_validity", used_plane_active),
+        lo=past.publish("used_plane_lo", plane_lo),
+        hi_for_h2=past.publish("used_plane_hi_for_h2", hi_for_h2),
+        bucket_onehot=past.publish("used_plane_bucket_onehot", bucket_onehot),
+        above_lo=past.publish("used_plane_above_lo", above_lo),
+        hi_above_for_h2=past.publish("used_plane_hi_above_for_h2", hi_above_for_h2),
+        above_all=past.publish("used_plane_above_all", constant([1.0])),
+        same_payload=past.publish("used_plane_same_payload", same_payload),
+        carry_payload=past.publish("used_plane_carry_payload", carry_payload),
+    )
+
+
 def _visplane_col_query(plane_id: Node, vp: Node, x: Node) -> Node:
+    """Query matching the radixed ``col_key`` (see ``publish``): the lifted
+    ``(plane, vp)`` instance equality, the radixed screen column, and a ``1`` for
+    the ``-2.5`` sentinel bias. Dot of a full match is ``1 + 2 - 2.5 = 0.5``."""
     one = constant(1.0)
+    query_instance = linear(concat(plane_id, vp), _INSTANCE_IDX_LINEAR)
     return concat(
-        one_hot(plane_id, N_PLANES_MAX),
-        one_hot(vp, N_VP_PER_PLANE_MAX),
-        one_hot(SCREEN_X_CLAMP(x), SCREEN_WIDTH),
+        _lifted_instance_query(query_instance),
+        _radix_col_key(SCREEN_X_CLAMP(x)),
         one,
     )
