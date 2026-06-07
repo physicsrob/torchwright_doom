@@ -18,10 +18,11 @@ from torchwright.graph import Node
 from .std import concat, pick_by_index, pwl_def
 from .doom_lighting import NUMCOLORMAPS
 from .asset_banks import COLORMAP_ROWS
+from .wad_assets import PALETTE_SIZE
 
 
 def _palette_index(value: float) -> int:
-    return max(0, min(255, int(round(float(value)))))
+    return max(0, min(PALETTE_SIZE - 1, int(round(float(value)))))
 
 
 def _colormap_row_pwl(row: int):
@@ -30,8 +31,8 @@ def _colormap_row_pwl(row: int):
         lambda palette_index, values=values: float(
             values[_palette_index(palette_index)]
         ),
-        breakpoints=256,
-        input_range=(0.0, 255.0),
+        breakpoints=PALETTE_SIZE,
+        input_range=(0.0, float(PALETTE_SIZE - 1)),
         name=f"colormap_row_{row}",
     )
 

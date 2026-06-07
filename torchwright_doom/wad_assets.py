@@ -26,6 +26,10 @@ from .asset_config import FLAT_NAMES, WALL_TEXTURE_NAMES
 # The DOOM1 IWAD lives at the submodule root (same file the sandbox loads).
 DOOM1_WAD_PATH = Path(__file__).resolve().parent.parent / "doom1.wad"
 
+# DOOM asset dimensions.
+PALETTE_SIZE = 256  # colors in a PLAYPAL palette
+FLAT_SIZE = 64  # a flat (floor/ceiling texture) is FLAT_SIZE x FLAT_SIZE pixels
+
 
 @dataclass(frozen=True)
 class TextureImage:
@@ -115,7 +119,7 @@ class WADReader:
         """Return the first PLAYPAL palette as 256 RGB triples."""
 
         playpal = self.lump("PLAYPAL")
-        if len(playpal) < 256 * 3:
+        if len(playpal) < PALETTE_SIZE * 3:
             raise ValueError("PLAYPAL is too short for one 256-color palette")
         return tuple(
             (
@@ -123,17 +127,17 @@ class WADReader:
                 int(playpal[i * 3 + 1]),
                 int(playpal[i * 3 + 2]),
             )
-            for i in range(256)
+            for i in range(PALETTE_SIZE)
         )
 
     def colormap(self) -> tuple[tuple[int, ...], ...]:
         """Return the 33 COLORMAP rows."""
 
         colormap = self.lump("COLORMAP")
-        if len(colormap) < 33 * 256:
+        if len(colormap) < 33 * PALETTE_SIZE:
             raise ValueError("COLORMAP is too short for 33 rows")
         return tuple(
-            tuple(int(v) for v in colormap[row * 256 : (row + 1) * 256])
+            tuple(int(v) for v in colormap[row * PALETTE_SIZE : (row + 1) * PALETTE_SIZE])
             for row in range(33)
         )
 
@@ -175,10 +179,15 @@ class WADReader:
     def flat(self, name: str) -> TextureImage:
         key = name.upper()
         flat = self.lump(key)
-        if len(flat) != 64 * 64:
-            raise ValueError(f"flat {key!r} has size {len(flat)}, expected 4096")
-        pixels = [[int(flat[y * 64 + x]) for y in range(64)] for x in range(64)]
-        return TextureImage(name=key, width=64, height=64, pixels=pixels)
+        if len(flat) != FLAT_SIZE * FLAT_SIZE:
+            raise ValueError(
+                f"flat {key!r} has size {len(flat)}, expected {FLAT_SIZE * FLAT_SIZE}"
+            )
+        pixels = [
+            [int(flat[y * FLAT_SIZE + x]) for y in range(FLAT_SIZE)]
+            for x in range(FLAT_SIZE)
+        ]
+        return TextureImage(name=key, width=FLAT_SIZE, height=FLAT_SIZE, pixels=pixels)
 
     def _find_lump(self, name: str) -> LumpInfo:
         key = name.upper()

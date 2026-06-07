@@ -20,11 +20,16 @@ from dataclasses import dataclass
 import numpy as np
 
 from .asset_config import FLAT_NAMES, WALL_TEXTURE_NAMES
-from .wad_assets import load_asset_book
+from .doom_lighting import NUMCOLORMAPS
+from .wad_assets import FLAT_SIZE, load_asset_book
 
 ASSET_BOOK = load_asset_book()
 PLAYPAL = tuple(tuple(int(c) for c in rgb) for rgb in ASSET_BOOK.palette)
-COLORMAP_ROWS = tuple(tuple(int(v) for v in row) for row in ASSET_BOOK.colormap[:32])
+# COLORMAP has NUMCOLORMAPS light maps (rows 0..NUMCOLORMAPS-1) followed by the
+# invulnerability map; the renderer only uses the light maps.
+COLORMAP_ROWS = tuple(
+    tuple(int(v) for v in row) for row in ASSET_BOOK.colormap[:NUMCOLORMAPS]
+)
 
 
 def _is_sky_flat(flat_name: str) -> bool:
@@ -153,15 +158,15 @@ def _build_wall_metadata() -> tuple[
 ) = _build_wall_metadata()
 
 
-FLAT_TABLE = np.zeros((len(FLAT_NAMES), 64, 64), dtype=np.float32)
+FLAT_TABLE = np.zeros((len(FLAT_NAMES), FLAT_SIZE, FLAT_SIZE), dtype=np.float32)
 for flat_id, texture in enumerate(ASSET_BOOK.flat_textures):
-    if texture.width != 64 or texture.height != 64:
+    if texture.width != FLAT_SIZE or texture.height != FLAT_SIZE:
         raise ValueError(
             f"flat {texture.name!r} is {texture.width}x{texture.height}, "
             "expected 64x64"
         )
-    for u in range(64):
-        for v in range(64):
+    for u in range(FLAT_SIZE):
+        for v in range(FLAT_SIZE):
             FLAT_TABLE[flat_id, v, u] = float(texture.pixels[u][v])
 
 FLAT_IS_SKY = tuple(1.0 if _is_sky_flat(name) else 0.0 for name in FLAT_NAMES)
