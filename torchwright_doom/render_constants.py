@@ -2,10 +2,10 @@
 
 Real-side mirror of the read-side subset of
 ``doom_sandbox/implementation/forward/constants.py``. Kept separate from
-:mod:`.constants` (which holds the dependency-free vocab-scale
-``SCREEN_WIDTH`` / ``SCREEN_HEIGHT`` and must not gain a graph
-dependency): the literal nodes below need :func:`.std.constant`, a graph
-op.
+:mod:`.constants` (which holds the vocab-scale ``SCREEN_WIDTH`` /
+``SCREEN_HEIGHT`` and must stay dependency-free): the values here are
+render-domain magnitudes, wrapped by :func:`.std.constant` at their call
+sites (see the note below), not at import.
 """
 
 from __future__ import annotations
@@ -27,6 +27,26 @@ MATCH_GAIN_LONG = 300_000.0
 # of two to keep its ``match_gain*c^2`` cancellation fp32-exact; the radix key
 # has no such cancellation, so any sufficiently large gain works.)
 MATCH_GAIN_CLIP = 300_000.0
+
+# Renderer protocol enums and sentinels, shared by the wall-column and visplane
+# owners. All are plain floats wrapped by ``std.constant`` at their call sites
+# (see the note below).
+
+# R_CHECK_PLANE / PLANE_MARK ``kind`` slot: which plane a mark refers to.
+PLANE_KIND_CEILING = 0.0
+PLANE_KIND_FLOOR = 1.0
+
+# Wall-part index sentinel: no upper/mid/lower part to draw (valid parts 0/1/2).
+PART_NONE = 3.0
+
+# Open (unclipped) ceiling bound for a column's clip array — one row above the
+# top of the screen, so any real ceiling clips below it. The matching open floor
+# bound is ``SCREEN_HEIGHT``.
+OPEN_CLIP_CEILING = -1.0
+
+# A recovered one-hot dot scores ~1 when its row is present and ~0 when absent;
+# this threshold separates the two in the radix-successor presence checks.
+PRESENT_THRESHOLD = 0.9
 
 # NOTE: the sandbox keeps ``ONE``/``ZERO``/``FALSE`` as module-level
 # ``constant`` Vecs. On the real side a ``constant`` is a graph ``Node`` with a

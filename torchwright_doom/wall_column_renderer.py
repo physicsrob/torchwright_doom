@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .constants import CENTER_Y, SCREEN_HEIGHT
+from .render_constants import PART_NONE, PLANE_KIND_CEILING, PLANE_KIND_FLOOR
 from .render_ops import (
     CEIL_Y,
     CLIP_Y_CLAMP,
@@ -102,7 +103,7 @@ class WallColumnRenderer:
 
     def after_completed_plane_mark(self):
         projection = self.projection
-        plane_kind_floor = constant(1.0)
+        plane_kind_floor = constant(PLANE_KIND_FLOOR)
         prev_kind = projection.core.past.attend_to_offset(
             projection.planes.plane_mark_kind_or_zero, delta_pos=-1,
         )
@@ -171,7 +172,7 @@ class WallColumnRenderer:
 
     def make_ceiling_plane_mark_current(self):
         projection = self.projection
-        plane_kind_ceiling = constant(0.0)
+        plane_kind_ceiling = constant(PLANE_KIND_CEILING)
         return make_token_head(
             PLANE_MARK,
             p=projection.wall.wall_column.current_ceiling_plane_id,
@@ -183,7 +184,7 @@ class WallColumnRenderer:
 
     def make_floor_plane_mark_current(self):
         projection = self.projection
-        plane_kind_floor = constant(1.0)
+        plane_kind_floor = constant(PLANE_KIND_FLOOR)
         return make_token_head(
             PLANE_MARK,
             p=projection.wall.wall_column.current_floor_plane_id,
@@ -195,7 +196,7 @@ class WallColumnRenderer:
 
     def make_floor_plane_mark(self):
         projection = self.projection
-        plane_kind_floor = constant(1.0)
+        plane_kind_floor = constant(PLANE_KIND_FLOOR)
         return make_token_head(
             PLANE_MARK,
             p=projection.wall.wall_column.pick(
@@ -217,7 +218,7 @@ class WallColumnRenderer:
         )
 
     def part_idx_visible(self, part_idx, mid_visible, upper_visible, lower_visible):
-        part_sentinel = constant(3.0)
+        part_sentinel = constant(PART_NONE)
         part_oh = one_hot(part_idx, 3)
         part_is_mid = _part_is_mid(part_oh)
         part_is_upper = _part_is_upper(part_oh)

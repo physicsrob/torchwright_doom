@@ -33,6 +33,7 @@ from torchwright.ops.arithmetic_ops import compare, mod_const, thermometer_floor
 
 from .attention_handles import RecentMarkerHandle
 from .constants import SCREEN_WIDTH
+from .render_constants import PRESENT_THRESHOLD
 from .past import PastHandle, PastHandleScope
 from .protocol_tokens import ProtocolTokenView
 from .render_ops import MUL_SCREEN, add_const, and_, one_minus, snap_bool
@@ -199,8 +200,8 @@ class SolidIntervals:
         same_above_score = pick_by_one_hot(query_lo_threshold, same_above_lo)
         same_present = bool_and(
             snap_bool(same_solid),
-            compare(same_bucket_score, 0.9),
-            compare(same_above_score, 0.9),
+            compare(same_bucket_score, PRESENT_THRESHOLD),
+            compare(same_above_score, PRESENT_THRESHOLD),
         )
 
         higher_hi = self.past.pick_argmin_above(
@@ -228,7 +229,7 @@ class SolidIntervals:
         carry_present = bool_and(
             higher_is_real_bucket,
             snap_bool(carry_solid),
-            compare(carry_bucket_score, 0.9),
+            compare(carry_bucket_score, PRESENT_THRESHOLD),
         )
 
         return select(

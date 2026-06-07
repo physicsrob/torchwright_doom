@@ -52,6 +52,7 @@ from .vocab import (
 from torchwright.graph import Node
 
 from .constants import SCREEN_HEIGHT, SCREEN_WIDTH
+from .render_constants import PRESENT_THRESHOLD
 
 if TYPE_CHECKING:
     from .protocol_tokens import ProtocolTokenView
@@ -471,9 +472,9 @@ class RuntimeVisplaneState:
         # non-matching rows dotted against the query one-hots stays below 1).
         same_present = bool_and(
             snap_bool(same_valid),
-            compare(pick_by_one_hot(hi1_bucket_oh, same_bucket_oh), 0.9),
-            compare(pick_by_one_hot(lo1_threshold, same_lo_ge), 0.9),
-            compare(pick_by_one_hot(query_instance_oh, same_inst_oh), 0.9),
+            compare(pick_by_one_hot(hi1_bucket_oh, same_bucket_oh), PRESENT_THRESHOLD),
+            compare(pick_by_one_hot(lo1_threshold, same_lo_ge), PRESENT_THRESHOLD),
+            compare(pick_by_one_hot(query_instance_oh, same_inst_oh), PRESENT_THRESHOLD),
         )
 
         # H2 — next bucket: smallest bucket strictly above hi1 that this instance
@@ -492,8 +493,8 @@ class RuntimeVisplaneState:
         )
         higher_present = bool_and(
             snap_bool(higher_valid),
-            compare(pick_by_one_hot(query_instance_oh, higher_inst_oh), 0.9),
-            compare(pick_by_one_hot(hi1_threshold, higher_hi_above), 0.9),
+            compare(pick_by_one_hot(query_instance_oh, higher_inst_oh), PRESENT_THRESHOLD),
+            compare(pick_by_one_hot(hi1_threshold, higher_hi_above), PRESENT_THRESHOLD),
         )
         higher_bucket_oh = one_hot(
             clamp(higher_hi, 0.0, float(_N_BUCKETS - 1)), _N_BUCKETS
@@ -516,8 +517,8 @@ class RuntimeVisplaneState:
         carry_present = bool_and(
             higher_present,
             snap_bool(carry_valid),
-            compare(pick_by_one_hot(higher_bucket_oh, carry_bucket_oh), 0.9),
-            compare(pick_by_one_hot(query_instance_oh, carry_inst_oh), 0.9),
+            compare(pick_by_one_hot(higher_bucket_oh, carry_bucket_oh), PRESENT_THRESHOLD),
+            compare(pick_by_one_hot(query_instance_oh, carry_inst_oh), PRESENT_THRESHOLD),
         )
 
         # c* = smallest instance column >= x1: the same-bucket hit if present,
@@ -565,8 +566,8 @@ class RuntimeVisplaneState:
         )
         same_present = bool_and(
             snap_bool(same_valid),
-            compare(pick_by_one_hot(query_bucket_oh, same_bucket_oh), 0.9),
-            compare(pick_by_one_hot(query_lo_threshold, same_above_lo), 0.9),
+            compare(pick_by_one_hot(query_bucket_oh, same_bucket_oh), PRESENT_THRESHOLD),
+            compare(pick_by_one_hot(query_lo_threshold, same_above_lo), PRESENT_THRESHOLD),
         )
 
         higher_hi = past.pick_argmin_above(
@@ -595,7 +596,7 @@ class RuntimeVisplaneState:
         carry_present = bool_and(
             higher_is_real,
             snap_bool(carry_valid),
-            compare(pick_by_one_hot(higher_bucket_query, carry_bucket_oh), 0.9),
+            compare(pick_by_one_hot(higher_bucket_query, carry_bucket_oh), PRESENT_THRESHOLD),
         )
 
         return select(

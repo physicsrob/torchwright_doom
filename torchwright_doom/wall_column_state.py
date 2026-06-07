@@ -24,7 +24,7 @@ from .assets import _H_IDX_OH_WIDTH
 from .attention_handles import RecentMarkerHandle
 from .constants import CENTER_Y, SCREEN_HEIGHT, SCREEN_WIDTH
 from .past import PastHandle, PastHandleScope
-from .render_constants import MATCH_GAIN_CLIP
+from .render_constants import MATCH_GAIN_CLIP, OPEN_CLIP_CEILING, PART_NONE
 from .render_ops import (
     CEIL_Y,
     CEIL_Y_WIDE,
@@ -142,7 +142,7 @@ class ClipMemory:
         win, and also prevents a symmetric blend of columns ``x-1`` / ``x+1``
         from averaging to ``x`` (distinct positions break the tie).
         """
-        clip_ceiling_initial = constant(-1.0)
+        clip_ceiling_initial = constant(OPEN_CLIP_CEILING)
         clip_floor_initial = constant(float(SCREEN_HEIGHT))
         absent_column = constant(_ABSENT_COLUMN)
 
@@ -250,7 +250,7 @@ class WallColumnState:
         center_y = constant(float(CENTER_Y))
         screen_height = constant(float(SCREEN_HEIGHT))
         screen_height_m1 = constant(float(SCREEN_HEIGHT - 1))
-        clip_ceiling_initial = constant(-1.0)
+        clip_ceiling_initial = constant(OPEN_CLIP_CEILING)
         one = constant(1.0)
 
         row = RecentMarkerHandle.publish(
@@ -640,7 +640,7 @@ class WallSpanRuntimeDraft:
         recent_drawseg_i: Node,
         wallcol_render_state: PastHandle,
     ) -> "WallSpanRuntimeDraft":
-        part_sentinel = constant(3.0)
+        part_sentinel = constant(PART_NONE)
         span_ordinal_0 = constant(0.0)
         span_ordinal_1 = constant(1.0)
         span_ordinal_2 = constant(2.0)

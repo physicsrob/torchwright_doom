@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from .render_constants import PLANE_KIND_CEILING, PLANE_KIND_FLOOR
 from .render_ops import add_const, and_, gt_height, one_minus, same_int
 from .std import constant, make_token_head, select
 from .vocab import (
@@ -59,7 +60,7 @@ class VisplaneMarker:
 
     def after_r_check_plane_result(self):
         projection = self.projection
-        plane_kind_floor = constant(1.0)
+        plane_kind_floor = constant(PLANE_KIND_FLOOR)
         vp_zero = constant(0.0)
         was_ceiling = one_minus(
             same_int(projection.core.inp.r_check_plane_result_kind, plane_kind_floor)
@@ -72,7 +73,7 @@ class VisplaneMarker:
 
     def after_plane_mark(self):
         projection = self.projection
-        plane_kind_floor = constant(1.0)
+        plane_kind_floor = constant(PLANE_KIND_FLOOR)
         is_floor = same_int(projection.core.inp.plane_mark_kind, plane_kind_floor)
         ranges = projection.wall.wall_column.plane_range_values(projection.core.past)
         return make_token_head(
@@ -82,8 +83,8 @@ class VisplaneMarker:
         )
 
     def first_check_or_start_wall_columns(self):
-        plane_kind_ceiling = constant(0.0)
-        plane_kind_floor = constant(1.0)
+        plane_kind_ceiling = constant(PLANE_KIND_CEILING)
+        plane_kind_floor = constant(PLANE_KIND_FLOOR)
         vp_zero = constant(0.0)
         return select(
             self.ceiling_check_needed(),
@@ -103,7 +104,7 @@ class VisplaneMarker:
 
     def plane_id_for_kind(self, kind):
         projection = self.projection
-        plane_kind_floor = constant(1.0)
+        plane_kind_floor = constant(PLANE_KIND_FLOOR)
         return select(
             same_int(kind, plane_kind_floor),
             projection.wall.wall_column.current_floor_plane_id,
