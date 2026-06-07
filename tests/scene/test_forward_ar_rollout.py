@@ -38,12 +38,13 @@ from __future__ import annotations
 
 import torch
 
-from torchwright.compiler.export import compile_headless
 from torchwright.debug.probe import reference_eval
 from torchwright.ops.inout_nodes import create_input, create_pos_encoding
 
-from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED, build_doom_embedding
+from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
 from torchwright_doom.past import GraphPast
+from torchwright_doom.render.compiled_model import build_compiled
+from torchwright_doom.render.pure_ar import pure_ar_rollout
 from torchwright_doom.render_main import forward
 from torchwright_doom.vocab import NO_OP
 
@@ -86,32 +87,21 @@ def _exact_math_rollout(prefill_ids: list[int]) -> list[int]:
 
 
 def _compiled_rollout(prefill_ids: list[int], device) -> list[int]:
-    """Free-run the compiled transformer: ids in, argmax out, id fed back."""
-    emb = build_doom_embedding("token_ids")
-    pos = create_pos_encoding()
-    nt = forward(emb, GraphPast(input_vec=emb, pos_encoding=pos), pos)
-    compiled = compile_headless(
-        nt, pos, d=_D, d_head=_D_HEAD, max_layers=200, verbose=False, device=str(device)
-    )
+    """Free-run the compiled transformer: ids in, argmax out, id fed back.
 
-    w_embed_t = W_EMBED.t()
-    past = compiled.empty_past()
-    # Prefill in one shot, then decode one token at a time.
-    prefill = torch.tensor([[float(i)] for i in prefill_ids], dtype=torch.float32)
-    out, past = compiled.step(prefill, past, past_len=0)
-    cur = int(torch.argmax(out[-1].cpu() @ w_embed_t).item())  # emission at BEGIN
-    emitted = [cur]
-    seq_pos = len(prefill_ids)
-    for _ in range(_MAX_STEPS - 1):
-        if cur == row_index(NO_OP, {}):
-            break
-        out, past = compiled.step(
-            torch.tensor([[float(cur)]], dtype=torch.float32), past, past_len=seq_pos
-        )
-        seq_pos += 1
-        cur = int(torch.argmax(out[-1].cpu() @ w_embed_t).item())
-        emitted.append(cur)
-    return emitted
+    Drives the shipped Plan-K driver (``render.pure_ar.pure_ar_rollout`` over
+    ``render.compiled_model.build_compiled``) so this gate also validates that
+    the autoregressive harness wraps ``compiled.step`` correctly — the compiled
+    free-run it produces must reproduce the exact-math free-run token for token.
+    """
+    compiled, _ = build_compiled(device, d=_D, d_head=_D_HEAD, max_layers=200)
+    result = pure_ar_rollout(
+        compiled,
+        prefill_ids,
+        max_positions=_MAX_STEPS,
+        terminal_row=row_index(NO_OP, {}),
+    )
+    return result.emitted_rows
 
 
 def test_compiled_forward_free_runs_bsp_traversal(device) -> None:

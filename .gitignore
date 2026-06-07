@@ -10,3 +10,5 @@ __pycache__
 .claude/worktrees/
 .python-version
 .codex
+out/
+token_dump*.json
