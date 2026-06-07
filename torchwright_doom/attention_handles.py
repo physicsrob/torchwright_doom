@@ -12,6 +12,10 @@ The helpers cover three recurring shapes:
 - recency lookup: publish an active marker or dynamic key, then recover the
   most recent matching row.
 
+The keyed lookups use *lifted* id keys: an integer id is encoded as
+``[id, -id^2, 1]`` so one attention dot-product peaks at exact id equality (see
+:func:`lifted_id_query` and ``GLOSSARY.md``), instead of a width-N one-hot.
+
 Ported from ``doom_sandbox/implementation/forward/attention_handles.py``.
 The only changes from the sandbox source are the import
 block (``Vec`` -> ``Node``; ``Past`` -> ``GraphPast``; the std helpers and

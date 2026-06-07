@@ -1,5 +1,9 @@
 """In-graph emit helpers for token construction.
 
+Terms (see ``GLOSSARY.md``): a *carrier* is a token whose payload is a wide
+numeric value; the *digit-quad* is that value's 2-or-4-number byte encoding; an
+emit *head* is a token's own columns without the shared constant derived tail.
+
 The graph's ``forward()`` produces a token at each AR step by writing
 a residual row matching one row of ``W_EMBED`` — the host argmaxes
 that row against ``W_EMBED.T`` to pick the next token ID. The helpers

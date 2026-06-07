@@ -6,6 +6,13 @@ seg scan fills this channel at ``R_STORE_WALL_RANGE`` and queries it at
 DOOM's ``solidsegs`` horizontal occlusion, expressed as a queryable union of
 prior one-sided drawseg fragments.
 
+The query is a *radix successor* search: screen columns in ``[0, SCREEN_WIDTH]``
+are split into a high *bucket* digit and a low digit (``_RADIX_BASE =
+ceil(sqrt(width))``), so a "next occupied column after X" key fits ~``2*sqrt``
+columns instead of ``width``. The answer is the next occupied column in the same
+bucket, or — if that bucket is exhausted — the lowest in the next non-empty
+higher bucket (a *carry*). See ``GLOSSARY.md``.
+
 Changes from the sandbox source: ``Vec`` -> ``Node``; the sandbox-``api``
 imports map to the real ``std`` / ``past`` / ``render_ops`` shims; and the
 module-level ``constant(...)`` sentinels (``_SENTINEL_KEY`` etc.) are built

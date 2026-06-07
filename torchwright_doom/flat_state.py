@@ -1,5 +1,9 @@
 """Flat-pass publish state for the SegProjection ``flats`` subcontext.
 
+A *flat* is DOOM's floor/ceiling texture (as opposed to a wall texture); the
+flat pass fills floor/ceiling pixels. See ``GLOSSARY.md`` for the other coined
+terms (visplane, span, marker).
+
 Real-side port of ``doom_sandbox/implementation/forward/flat_state.py`` — the
 ``FlatPassState`` that owns two things:
 

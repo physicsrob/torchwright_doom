@@ -93,6 +93,9 @@ Rough layout of `torchwright_doom/`:
 Each renderer module is ported from a `doom_sandbox` counterpart; many
 docstrings note that provenance and the sandbox path.
 
+See `GLOSSARY.md` for the coined vocabulary (carrier, head, lifted key,
+radix, digit-quad, flat, visplane, …).
+
 # Dumb host principle
 
 The DOOM renderer is an exercise in extreme constraints. The goal is
