@@ -52,12 +52,9 @@ Each row carries:
                                  their function output by sampling at
                                  construction time.
 
-The digit-quad block replaces the older 16-wide Gray-code payload and
-the 1-wide K column. The Gray-code design needed a 4096 / 8192 / 16384-
-peak triangle-wave PWL chain on the producer side (~3 MLP sublayers)
-to lay down a matching pattern from a computed ``q``. The digit-quad
-encoder is one vector-PWL staircase (the high byte) plus affine math
-(the low byte) — ~2 sublayers, and every slot uses the same recipe.
+The digit-quad encoder is one vector-PWL staircase (the high byte) plus
+affine math (the low byte) — ~2 MLP sublayers, and every slot uses the same
+recipe.
 """
 
 from __future__ import annotations

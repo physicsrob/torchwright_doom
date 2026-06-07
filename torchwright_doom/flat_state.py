@@ -6,11 +6,11 @@ Real-side port of ``doom_sandbox/implementation/forward/flat_state.py`` — the
 1. **R_MakeSpans span open/close** (``r_plane.c:338-359``). Iterating columns
    ``minx..maxx+1``, it compares the previous column's coverage (``t1/b1``)
    against the current column's (``t2/b2``) and emits close/open row ranges.
-   *Preserved verbatim from the sandbox* (DIVERGENCE #1): the reference threads
-   ``t1_after``/``b1_after`` between the four sub-steps; the sandbox instead uses
-   the **raw** ``t1/b1/t2/b2`` in all four and compensates with two
-   ``*_non_empty`` guards. The packed ``make_spans_state`` names ``slot0 =
-   close_top`` / ``slot1 = close_bottom`` positionally (DIVERGENCE #2).
+   This uses the **raw** ``t1/b1/t2/b2`` in all four sub-steps (rather than
+   threading updated ``t1_after``/``b1_after`` between them) and compensates with
+   two ``*_non_empty`` guards; it holds because the four row-ranges are disjoint
+   (checked by the equivalence test). The packed ``make_spans_state`` names
+   ``slot0 = close_top`` / ``slot1 = close_bottom`` positionally.
 
 2. **R_MapPlane affine cursor** (``r_plane.c:144-169``). ``(xfrac0, yfrac0)`` is
    the flat-texture ``(u, v)`` at the span's first pixel; ``(xstep, ystep)`` the
@@ -264,9 +264,9 @@ class FlatPassState:
         prev_non_empty = le_span_y(t1, b1)
         cur_non_empty = le_span_y(t2, b2)
 
-        # DIVERGENCE #1 — RAW t1/b1/t2/b2 in all four sub-steps (the reference
-        # threads t1_after/b1_after); the *_non_empty guards compensate. Holds
-        # only because the four row-ranges are disjoint (see equivalence test).
+        # RAW t1/b1/t2/b2 in all four sub-steps (not threaded t1_after/b1_after);
+        # the *_non_empty guards compensate. Holds only because the four
+        # row-ranges are disjoint (see equivalence test).
         close_top_lo = t1
         close_top_hi = min_screen(add_const(t2, -1.0), b1)
         close_top_valid = le_span_y(close_top_lo, close_top_hi)
@@ -322,8 +322,8 @@ class FlatPassState:
             "make_spans",
             inp.is_make_spans_col,
         )
-        # DIVERGENCE #2 — packed slot0 = close_top, slot1 = close_bottom
-        # positionally; the recovered MakeSpansValues names them slot0/slot1.
+        # Packed slot0 = close_top, slot1 = close_bottom positionally; the
+        # recovered MakeSpansValues names them slot0/slot1.
         make_spans_state_pub = past.publish(
             "make_spans_state",
             concat(

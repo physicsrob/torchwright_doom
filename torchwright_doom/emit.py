@@ -101,10 +101,7 @@ from .tokens import FloatSlot, IntSlot, TokenType
 # (`BASE/sharpness` wide in q-space) must be narrower than that:
 # `256/sharpness < 0.0156` ⇒ `sharpness > 16400`. 32768 gives a 0.0078-wide ramp
 # (~2× clearance on the worst carrier value); raising it shrinks the residual
-# boundary sliver further but steepens the ramp for compiled fp32. (Was 8192
-# with a `+0.5` round-to-nearest high-byte floor whose ramp at `m·BASE − 0.5` a
-# 33-column drawseg sat dead-center of, recovering a fractional high byte that
-# amplified into a ~128-step miss; see the near-miss + carrier gates.)
+# boundary sliver further but steepens the ramp for compiled fp32.
 _DQ_HI_SHARPNESS: int = 32768
 
 __all__ = [
@@ -666,18 +663,13 @@ def _digit_quad_payload(
         )
     else:
         # Robust carry-free byte split. The high byte is floor(q/BASE) with its
-        # floor_int ramp AT the byte boundary m·BASE (no +0.5 offset). A
-        # continuous step index for a range-encoded integer carrier lands just
-        # BELOW a boundary (q = m·BASE − k for small k) — squarely in the floor's
-        # flat zone — so the high byte stays a clean integer and the shared low
-        # byte recovery 2·(q − BASE·hi_q) below is exact. Only a value within
-        # BASE/sharpness of a boundary itself is soft, and the low byte then
-        # truncates (no carry into the high byte): a ±1-step round-DOWN, never the
-        # ~128-step miss the old +0.5 round-to-nearest produced when its
-        # boundary−0.5 ramp caught a 33-column drawseg dead-center. _DQ_HI_SHARP-
-        # NESS sets the (now narrow) ramp. (A two-stage mod BASE·16 / mod BASE
-        # sawtooth would be narrower but its outer ramp is 16× wider in q-space,
-        # re-opening a ~128-step zone at every BASE·16 boundary — rejected.)
+        # floor_int ramp AT the byte boundary m·BASE. A continuous step index for
+        # a range-encoded integer carrier lands just BELOW a boundary (q = m·BASE
+        # − k for small k) — squarely in the floor's flat zone — so the high byte
+        # stays a clean integer and the shared low byte recovery 2·(q − BASE·hi_q)
+        # below is exact. Only a value within BASE/sharpness of a boundary itself
+        # is soft, and the low byte then truncates (no carry into the high byte):
+        # a ±1-step round-DOWN. _DQ_HI_SHARPNESS sets the ramp width.
         q_over_base = _affine_1d(q_node, 1.0 / float(BASE), 0.0, name=f"{name}_hi_div")
         hi_q = floor_int(q_over_base, 0, max_q // BASE, sharpness=_DQ_HI_SHARPNESS)
     hi_c_2 = _affine_1d(hi_q, 2.0, -2.0 * CENTER, name=f"{name}_hi_c2")

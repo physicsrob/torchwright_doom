@@ -408,8 +408,7 @@ def _node_presence_lookup(
     Lifted form: recover the matched node id and test equality to the query
     (see ``LiftedKeyPresenceHandle``). A sentinel/early-exit query id past the
     last real node has no exact producer, so its nearest-neighbour recovery
-    reads absent -- the same answer the old ``+1`` one-hot sentinel slot gave,
-    without the width-65 key.
+    reads absent.
     """
     handle = LiftedKeyPresenceHandle.publish(
         past,
@@ -478,7 +477,7 @@ class SubsectorIndex:
         """Publish SS-backed channels and return subsector lookups.
 
         Keyed by the lifted subsector id (``current_key`` = ``[ss,-ss^2,1]``,
-        already carried by the header context) instead of a width-64 one_hot.
+        already carried by the header context).
         The first-seg VALUE rides a lifted value lookup (queried only for present
         subsectors, so the bare lifted query is fine); presence rides a lifted
         presence lookup that recovers the matched subsector id and compares it to
@@ -775,8 +774,8 @@ def _seg_presence_lookup(
     """Publish SEG presence keyed by seg id (lifted-equality, width-3 key).
 
     Lifted form: recover the matched seg id and test equality to the query (see
-    ``LiftedKeyPresenceHandle``). Replaces the width-129 one-hot key; a query
-    for an absent seg recovers its nearest neighbour and reads absent.
+    ``LiftedKeyPresenceHandle``). A query for an absent seg recovers its nearest
+    neighbour and reads absent.
     """
     handle = LiftedKeyPresenceHandle.publish(
         past,
