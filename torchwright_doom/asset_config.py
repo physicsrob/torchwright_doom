@@ -18,6 +18,8 @@ dimension banks (wall/flat pixel tables, ``WALL_HEIGHT_BANK`` etc., the
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 WALL_TEXTURE_NAMES = (
     "BROWN1",
     "BROWN144",
@@ -45,6 +47,51 @@ FLAT_ID_BY_NAME = {name: idx for idx, name in enumerate(FLAT_NAMES)}
 
 N_WALL_TEXTURES = len(WALL_TEXTURE_NAMES)
 N_FLATS = len(FLAT_NAMES)
+
+
+@dataclass(frozen=True)
+class AssetConfig:
+    """Ordered wall/flat names for one compiled renderer artifact."""
+
+    wall_names: tuple[str, ...] = WALL_TEXTURE_NAMES
+    flat_names: tuple[str, ...] = FLAT_NAMES
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "wall_names", tuple(name.upper() for name in self.wall_names)
+        )
+        object.__setattr__(
+            self, "flat_names", tuple(name.upper() for name in self.flat_names)
+        )
+        if len(set(self.wall_names)) != len(self.wall_names):
+            raise ValueError(f"duplicate wall texture names: {self.wall_names!r}")
+        if len(set(self.flat_names)) != len(self.flat_names):
+            raise ValueError(f"duplicate flat names: {self.flat_names!r}")
+
+    @property
+    def wall_id_by_name(self) -> dict[str, int]:
+        return {name: idx + 1 for idx, name in enumerate(self.wall_names)}
+
+    @property
+    def flat_id_by_name(self) -> dict[str, int]:
+        return {name: idx for idx, name in enumerate(self.flat_names)}
+
+    @property
+    def n_wall_textures(self) -> int:
+        return len(self.wall_names)
+
+    @property
+    def n_flats(self) -> int:
+        return len(self.flat_names)
+
+    def wall_name_by_id(self) -> dict[int, str]:
+        return {idx + 1: name for idx, name in enumerate(self.wall_names)}
+
+    def flat_name_by_id(self) -> dict[int, str]:
+        return {idx: name for idx, name in enumerate(self.flat_names)}
+
+
+DEFAULT_ASSET_CONFIG = AssetConfig()
 
 # Static DOOM1 PLAYPAL (256 RGB triples) — snapshot of the sandbox's
 # WAD-loaded palette (asset_banks.PLAYPAL; checksum sum-of-channels =

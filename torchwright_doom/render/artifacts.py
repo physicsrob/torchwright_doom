@@ -42,6 +42,8 @@ def build_token_dump(
     emitted_rows: list[int],
     mode: str,
     spec_decode_stats: dict[str, Any] | None = None,
+    label: str | None = None,
+    config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the K ``token_dump`` payload (one case)."""
     n_prefill = len(prefill_rows)
@@ -50,7 +52,7 @@ def build_token_dump(
         _row_entry(n_prefill + i, r, "rollout") for i, r in enumerate(emitted_rows)
     ]
     case: dict[str, Any] = {
-        "label": f"{fixture}__pose{pose_index:02d}",
+        "label": label or f"{fixture}__pose{pose_index:02d}",
         "fixture": fixture,
         "pose_index": pose_index,
         "pose": pose,
@@ -66,6 +68,8 @@ def build_token_dump(
     }
     if spec_decode_stats is not None:
         case["spec_decode_stats"] = spec_decode_stats
+    if config is not None:
+        case["config"] = config
     return {
         "schema_version": 1,
         "implementation": "torchwright_doom_compiled",

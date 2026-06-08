@@ -36,19 +36,24 @@ def _python_floor_mod(v: float, h: int) -> float:
     return float(iv - h * math.floor(iv / h))
 
 
+def build_sawtooth_bank(wall_height_bank: tuple[int, ...]) -> tuple:
+    """Build per-height ``v mod H`` PWLs for one wall-height bank."""
+    return tuple(
+        pwl_def(
+            (lambda v, h=h: _python_floor_mod(v, h)),
+            breakpoints=_V_SCALED_BREAKPOINTS,
+            input_range=(_V_SCALED_LO, _V_SCALED_HI),
+            name="sawtooth",
+        )
+        for h in wall_height_bank
+    )
+
+
 # Per-H sawtooth PWLs for ``v_scaled mod H``. Bank entries are aligned to
 # ``WALL_HEIGHT_BANK`` (= the sandbox ``H_BANK``, the sorted distinct wall-texture
 # heights; (16, 56, 72, 128) for the committed wad), so a ``pick_by_one_hot`` over
 # the per-texture ``h_idx_oh`` selects the matching height's mod.
-SAWTOOTH_BANK = tuple(
-    pwl_def(
-        (lambda v, h=h: _python_floor_mod(v, h)),
-        breakpoints=_V_SCALED_BREAKPOINTS,
-        input_range=(_V_SCALED_LO, _V_SCALED_HI),
-        name="sawtooth",
-    )
-    for h in WALL_HEIGHT_BANK
-)
+SAWTOOTH_BANK = build_sawtooth_bank(WALL_HEIGHT_BANK)
 
 
 # Native flat x/y -> floor -> mod 64. Wall U instead uses the per-bank sawtooth

@@ -1,7 +1,75 @@
+CONFIG ?= configs/e1m1_start_room.yaml
+OUT_DIR ?= out/render
+RENDER_X ?= 1056.0
+RENDER_Y ?= -3616.0
+RENDER_ANGLE ?= 64
+RENDER_VIEWZ ?= 41.0
+RENDER_MODE ?= spec_decode
+RENDER_MAX_POSITIONS ?= 8000
+RENDER_DRAFT_WINDOW ?= 0
+PREFILL_CHUNK_SIZE ?= 65536
+RENDER_PROGRESS_EVERY ?= 250
+PNG_ZOOM ?= 8
+
+_RENDER_VERBOSE_COMPILE := $(if $(VERBOSE_COMPILE),--verbose-compile)
+_RENDER_PNG := $(if $(PNG),--png)
+_RENDER_COMPARE := $(if $(COMPARE),--compare)
+_RENDER_COMPILE_ARGS = $(strip \
+	--config $(CONFIG) \
+	$(_RENDER_VERBOSE_COMPILE) \
+)
+_RENDER_RUN_ARGS = $(strip \
+	--config $(CONFIG) \
+	--x $(RENDER_X) \
+	--y $(RENDER_Y) \
+	--angle $(RENDER_ANGLE) \
+	--viewz $(RENDER_VIEWZ) \
+	--mode $(RENDER_MODE) \
+	--out-dir $(OUT_DIR) \
+	--max-positions $(RENDER_MAX_POSITIONS) \
+	--draft-window $(RENDER_DRAFT_WINDOW) \
+	--prefill-chunk-size $(PREFILL_CHUNK_SIZE) \
+	--progress-every $(RENDER_PROGRESS_EVERY) \
+	--png-zoom $(PNG_ZOOM) \
+	$(_RENDER_PNG) \
+	$(_RENDER_COMPARE) \
+	$(_RENDER_VERBOSE_COMPILE) \
+)
+_RENDER_MODAL_ARGS = $(strip \
+	$(_RENDER_RUN_ARGS) \
+	$(if $(RUN_NAME),--run-name $(RUN_NAME)) \
+)
+
 .PHONY: lint
 lint:
 	uv run black --check .
 	uv run mypy .
+
+.PHONY: render-compile compile
+render-compile compile:
+	uv run python -m torchwright_doom.render compile $(_RENDER_COMPILE_ARGS)
+
+.PHONY: render-run run
+render-run run:
+	@bash -c ' \
+		LOGFILE=/tmp/torchwright_doom-render-run-$$(date +%Y%m%d-%H%M%S).log ; \
+		ln -sfn "$$LOGFILE" /tmp/torchwright_doom-render-run.log ; \
+		echo "=== Log file: $$LOGFILE ===" | tee "$$LOGFILE" ; \
+		echo "=== Running render on Modal ===" | tee -a "$$LOGFILE" ; \
+		start=$$(date +%s) ; \
+		uv run modal run modal_render.py $(_RENDER_MODAL_ARGS) \
+			2>&1 | tee -a "$$LOGFILE" ; \
+		rc=$${PIPESTATUS[0]} ; \
+		end=$$(date +%s) ; \
+		echo "" | tee -a "$$LOGFILE" ; \
+		echo "=== Render finished in $$((end - start))s (exit $$rc) ===" | tee -a "$$LOGFILE" ; \
+		echo "=== Log file: $$LOGFILE ===" | tee -a "$$LOGFILE" ; \
+		exit $$rc \
+	'
+
+.PHONY: render-run-local run-local
+render-run-local run-local:
+	uv run python -m torchwright_doom.render run $(_RENDER_RUN_ARGS)
 
 .PHONY: test
 test:
@@ -66,4 +134,3 @@ modal-run:
 		echo "=== Log file: $$LOGFILE ===" | tee -a "$$LOGFILE" ; \
 		exit $$rc \
 	'
-

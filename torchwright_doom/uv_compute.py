@@ -38,12 +38,14 @@ def compute_v_at_pixel(
     dc_iscale: Node,
     v_0_at_top: Node,
     h_idx_oh: Node,
+    sawtooth_bank: tuple | None = None,
 ) -> Node:
     """Return ``v_scaled_mod_H`` for one pixel."""
+    sawtooth_bank = SAWTOOTH_BANK if sawtooth_bank is None else sawtooth_bank
     v_offset = mul_pixel_dc_iscale(pixel_index_vec, dc_iscale)
     v_native = vec_sum(v_offset, v_0_at_top)
     v_scaled = FLOOR_NATIVE(v_native)
-    bank = concat(*[pwl(v_scaled) for pwl in SAWTOOTH_BANK])
+    bank = concat(*[pwl(v_scaled) for pwl in sawtooth_bank])
     return pick_by_one_hot(h_idx_oh, bank)
 
 

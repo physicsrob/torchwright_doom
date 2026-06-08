@@ -10,11 +10,12 @@ targets it). Graph nodes are built **inside** ``build_compiled`` — never at im
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
-import torch
-
-from ..embedding import W_EMBED
+from ..asset_banks import build_asset_banks
+from ..asset_config import DEFAULT_ASSET_CONFIG, AssetConfig
+from ..assets import AssetIndex
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from torchwright.compiler.export import CompiledHeadless
@@ -25,20 +26,6 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 DEFAULT_D = 4096
 DEFAULT_D_HEAD = 32
 
-# W_EMBED.t() cached per device (a tensor transpose, not a graph node). Decode runs
-# on the outputs' own device so inference keeps it on-GPU and only the argmax ids
-# cross back to host.
-_W_EMBED_T_BY_DEVICE: dict[str, torch.Tensor] = {}
-
-
-def _w_embed_t(device: torch.device) -> torch.Tensor:
-    key = str(device)
-    t = _W_EMBED_T_BY_DEVICE.get(key)
-    if t is None:
-        t = W_EMBED.t().contiguous().to(device)
-        _W_EMBED_T_BY_DEVICE[key] = t
-    return t
-
 
 def build_compiled(
     device,
@@ -47,6 +34,8 @@ def build_compiled(
     d_head: int = DEFAULT_D_HEAD,
     max_layers: int = 200,
     verbose: bool = False,
+    asset_config: AssetConfig | None = None,
+    wad_path: str | Path | None = None,
 ) -> tuple["CompiledHeadless", "Node"]:
     """Compile the token-id forward. Returns ``(compiled, output_node)``."""
     from torchwright.compiler.export import compile_headless
@@ -56,9 +45,21 @@ def build_compiled(
     from ..past import GraphPast
     from ..render_main import forward
 
+    asset_config = asset_config or DEFAULT_ASSET_CONFIG
+    asset_banks = build_asset_banks(
+        wad_path=wad_path or None,
+        wall_names=asset_config.wall_names,
+        flat_names=asset_config.flat_names,
+    )
+    asset_index = AssetIndex(asset_banks)
     emb = build_doom_embedding("token_ids")
     pos = create_pos_encoding()
-    next_token = forward(emb, GraphPast(input_vec=emb, pos_encoding=pos), pos)
+    next_token = forward(
+        emb,
+        GraphPast(input_vec=emb, pos_encoding=pos),
+        pos,
+        asset_index=asset_index,
+    )
     compiled = compile_headless(
         next_token,
         pos,
@@ -71,12 +72,70 @@ def build_compiled(
     return compiled, next_token
 
 
-def argmax_rows(outputs: torch.Tensor) -> list[int]:
-    """Argmax-decode ``compiled.step`` outputs ``(n, d_embed)`` to ``W_EMBED`` row ids.
+def compile_to_onnx_path(
+    output_path: str | Path,
+    *,
+    d: int = DEFAULT_D,
+    d_head: int = DEFAULT_D_HEAD,
+    max_layers: int = 200,
+    max_seq_len: int = 65536,
+    verbose: bool = False,
+    trim_heads: bool = True,
+    optimize: int = 0,
+    assume_zero_init: bool = True,
+    d_hidden: int | None = None,
+    asset_config: AssetConfig | None = None,
+    wad_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Compile the token-id forward to ONNX and return basic build metadata."""
+    from torchwright.compiler.export import compile_to_onnx
+    from torchwright.ops.inout_nodes import create_pos_encoding
 
-    The standard LLM decode: nearest ``W_EMBED`` row by dot product. Runs on the
-    outputs' device; only the resulting ids cross to host.
-    """
-    o = outputs.detach()
-    wt = _w_embed_t(o.device).to(o.dtype)
-    return (o @ wt).argmax(dim=-1).cpu().tolist()
+    from ..embedding import TOKEN_VOCAB, build_doom_embedding
+    from ..past import GraphPast
+    from ..render_main import forward
+
+    asset_config = asset_config or DEFAULT_ASSET_CONFIG
+    asset_banks = build_asset_banks(
+        wad_path=wad_path or None,
+        wall_names=asset_config.wall_names,
+        flat_names=asset_config.flat_names,
+    )
+    asset_index = AssetIndex(asset_banks)
+    emb = build_doom_embedding("token_ids")
+    pos = create_pos_encoding()
+    next_token = forward(
+        emb,
+        GraphPast(input_vec=emb, pos_encoding=pos),
+        pos,
+        asset_index=asset_index,
+    )
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    kwargs: dict[str, Any] = {
+        "d": d,
+        "d_head": d_head,
+        "max_seq_len": max_seq_len,
+        "max_layers": max_layers,
+        "verbose": verbose,
+        "trim_heads": trim_heads,
+        "optimize": optimize,
+        "assume_zero_init": assume_zero_init,
+    }
+    if d_hidden is not None:
+        kwargs["d_hidden"] = d_hidden
+    compile_to_onnx(
+        next_token,
+        pos,
+        embedding=emb,
+        output_path=str(output_path),
+        **kwargs,
+    )
+    return {
+        "n_rows": TOKEN_VOCAB.n_rows,
+        "d_embed": TOKEN_VOCAB.layout.d_embed,
+        "asset_banks": asset_banks,
+    }
+
+
+from .inference import OnnxTokenRuntime, argmax_rows  # noqa: E402,F401

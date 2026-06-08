@@ -1,0 +1,319 @@
+"""YAML render-job config and cache-key helpers."""
+
+from __future__ import annotations
+
+import ast
+import hashlib
+import json
+import os
+import subprocess
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
+
+from ..asset_config import (
+    FLAT_NAMES,
+    N_FLATS,
+    N_WALL_TEXTURES,
+    WALL_TEXTURE_NAMES,
+    AssetConfig,
+)
+
+
+@dataclass(frozen=True)
+class ModelConfig:
+    d: int = 4096
+    d_head: int = 32
+    scale: int = 4
+    d_hidden: int | None = None
+    max_layers: int = 200
+    trim_heads: bool = True
+    assume_zero_init: bool = True
+    max_seq_len: int = 65536
+    optimize: int = 0
+
+
+@dataclass(frozen=True)
+class RegionConfig:
+    x1: float = 627.2
+    y1: float = -3760.0
+    x2: float = 1395.2
+    y2: float = -2800.0
+
+    @property
+    def bbox(self) -> tuple[float, float, float, float]:
+        return (self.x1, self.y1, self.x2, self.y2)
+
+
+@dataclass(frozen=True)
+class TextureConfig:
+    wall: tuple[str, ...] = WALL_TEXTURE_NAMES
+    flat: tuple[str, ...] = FLAT_NAMES
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "wall", tuple(name.upper() for name in self.wall))
+        object.__setattr__(self, "flat", tuple(name.upper() for name in self.flat))
+
+    def asset_config(self) -> AssetConfig:
+        return AssetConfig(wall_names=self.wall, flat_names=self.flat)
+
+
+@dataclass(frozen=True)
+class RenderConfig:
+    wad: str = "doom1.wad"
+    map: str = "E1M1"
+    model: ModelConfig = ModelConfig()
+    region: RegionConfig = RegionConfig()
+    textures: TextureConfig = TextureConfig()
+
+    @property
+    def screen(self) -> tuple[int, int]:
+        return screen_dims_for_scale(self.model.scale)
+
+    def asset_config(self) -> AssetConfig:
+        return self.textures.asset_config()
+
+
+def screen_dims_for_scale(scale: int) -> tuple[int, int]:
+    if scale not in (2, 4):
+        raise ValueError("scale must be 4 (80x50) or 2 (160x100); scale=1 is deferred")
+    return 320 // scale, 200 // scale
+
+
+def apply_screen_env(config: RenderConfig) -> None:
+    """Set renderer + sandbox screen env vars before graph modules import."""
+    width, height = config.screen
+    os.environ["TORCHWRIGHT_DOOM_RENDER_SCALE"] = str(config.model.scale)
+    os.environ["TORCHWRIGHT_DOOM_SCREEN_WIDTH"] = str(width)
+    os.environ["TORCHWRIGHT_DOOM_SCREEN_HEIGHT"] = str(height)
+    os.environ["DOOM_SANDBOX_SCREEN_WIDTH"] = str(width)
+    os.environ["DOOM_SANDBOX_SCREEN_HEIGHT"] = str(height)
+
+
+def load_render_config(path: str | Path) -> RenderConfig:
+    path = Path(path)
+    data = _load_yaml_subset(path)
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: top-level YAML value must be a mapping")
+    model = _mapping(data.get("model") or {}, "model")
+    region = _mapping(data.get("region") or {}, "region")
+    textures = _mapping(data.get("textures") or {}, "textures")
+    cfg = RenderConfig(
+        wad=str(data.get("wad", "doom1.wad")),
+        map=str(data.get("map", "E1M1")),
+        model=ModelConfig(
+            d=int(model.get("d", 4096)),
+            d_head=int(model.get("d_head", 32)),
+            scale=int(model.get("scale", 4)),
+            d_hidden=_optional_int(model.get("d_hidden")),
+            max_layers=int(model.get("max_layers", 200)),
+            trim_heads=bool(model.get("trim_heads", True)),
+            assume_zero_init=bool(model.get("assume_zero_init", True)),
+            max_seq_len=int(model.get("max_seq_len", 65536)),
+            optimize=int(model.get("optimize", 0)),
+        ),
+        region=RegionConfig(
+            x1=float(region.get("x1", 627.2)),
+            y1=float(region.get("y1", -3760.0)),
+            x2=float(region.get("x2", 1395.2)),
+            y2=float(region.get("y2", -2800.0)),
+        ),
+        textures=TextureConfig(
+            wall=tuple(str(v) for v in textures.get("wall", WALL_TEXTURE_NAMES)),
+            flat=tuple(str(v) for v in textures.get("flat", FLAT_NAMES)),
+        ),
+    )
+    _validate_config(cfg)
+    return cfg
+
+
+def resolve_wad_path(config: RenderConfig, *, base_dir: str | Path | None = None) -> Path:
+    wad = Path(config.wad)
+    candidates = []
+    if wad.is_absolute():
+        candidates.append(wad)
+    else:
+        if base_dir is not None:
+            candidates.append(Path(base_dir) / wad)
+        candidates.append(Path.cwd() / wad)
+        candidates.append(Path(__file__).resolve().parents[2] / wad)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+    raise FileNotFoundError(
+        f"WAD {config.wad!r} not found. Checked: {[str(c) for c in candidates]}"
+    )
+
+
+def compile_cache_dir(config: RenderConfig, wad_path: str | Path) -> Path:
+    return Path.home() / ".cache" / "torchwright_doom" / "compiled" / cache_key(
+        config, wad_path
+    )
+
+
+def cache_key(config: RenderConfig, wad_path: str | Path) -> str:
+    payload = canonical_compile_payload(config, wad_path)
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def canonical_compile_payload(config: RenderConfig, wad_path: str | Path) -> dict[str, Any]:
+    wad_path = Path(wad_path)
+    return {
+        "wad": str(wad_path.resolve()),
+        "wad_sha256": _file_sha256(wad_path),
+        "map": config.map,
+        "region": asdict(config.region),
+        "wall_names": list(config.textures.wall),
+        "flat_names": list(config.textures.flat),
+        "model": asdict(config.model),
+        "screen": {"width": config.screen[0], "height": config.screen[1]},
+        "git": {
+            "torchwright_doom": _git_sha(Path(__file__).resolve().parents[2]),
+            "torchwright": _git_sha(Path(__file__).resolve().parents[3] / "torchwright"),
+        },
+    }
+
+
+def _validate_config(config: RenderConfig) -> None:
+    screen_dims_for_scale(config.model.scale)
+    if len(config.textures.wall) != N_WALL_TEXTURES:
+        raise ValueError(
+            "this graph still requires exactly "
+            f"{N_WALL_TEXTURES} wall textures; got {len(config.textures.wall)}"
+        )
+    if len(config.textures.flat) != N_FLATS:
+        raise ValueError(
+            f"this graph still requires exactly {N_FLATS} flats; "
+            f"got {len(config.textures.flat)}"
+        )
+
+
+def _optional_int(value) -> int | None:
+    return None if value is None else int(value)
+
+
+def _mapping(value: Any, name: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be a mapping")
+    return value
+
+
+def _load_yaml_subset(path: Path) -> dict[str, Any]:
+    root: dict[str, Any] = {}
+    stack: list[tuple[int, dict[str, Any]]] = [(-1, root)]
+    for lineno, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = _strip_comment(raw_line).rstrip()
+        if not line:
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent % 2:
+            raise ValueError(f"{path}:{lineno}: indentation must use multiples of two")
+        text = line.strip()
+        if ":" not in text:
+            raise ValueError(f"{path}:{lineno}: expected key: value")
+        key, value_text = text.split(":", 1)
+        key = key.strip()
+        value_text = value_text.strip()
+        while stack and indent <= stack[-1][0]:
+            stack.pop()
+        parent = stack[-1][1]
+        if not value_text:
+            child: dict[str, Any] = {}
+            parent[key] = child
+            stack.append((indent, child))
+        else:
+            parent[key] = _parse_scalar(value_text)
+    return root
+
+
+def _strip_comment(line: str) -> str:
+    in_quote: str | None = None
+    for i, ch in enumerate(line):
+        if ch in ("'", '"'):
+            in_quote = None if in_quote == ch else ch if in_quote is None else in_quote
+        elif ch == "#" and in_quote is None:
+            return line[:i]
+    return line
+
+
+def _parse_scalar(text: str) -> Any:
+    if text.startswith("[") or text.startswith("{"):
+        return ast.literal_eval(_quote_bare_words(text))
+    lowered = text.lower()
+    if lowered in ("true", "false"):
+        return lowered == "true"
+    if lowered in ("null", "none"):
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        pass
+    try:
+        return float(text)
+    except ValueError:
+        return text.strip("'\"")
+
+
+def _quote_bare_words(text: str) -> str:
+    out: list[str] = []
+    token: list[str] = []
+    in_quote: str | None = None
+
+    def flush() -> None:
+        if not token:
+            return
+        value = "".join(token).strip()
+        token.clear()
+        if not value:
+            return
+        lower = value.lower()
+        if lower in ("true", "false", "none", "null"):
+            out.append({"true": "True", "false": "False", "none": "None", "null": "None"}[lower])
+            return
+        try:
+            float(value)
+        except ValueError:
+            out.append(repr(value))
+        else:
+            out.append(value)
+
+    for ch in text:
+        if in_quote is not None:
+            out.append(ch)
+            if ch == in_quote:
+                in_quote = None
+            continue
+        if ch in ("'", '"'):
+            flush()
+            in_quote = ch
+            out.append(ch)
+        elif ch in "[]{}:,":
+            flush()
+            out.append(ch)
+        elif ch.isspace():
+            flush()
+            out.append(ch)
+        else:
+            token.append(ch)
+    flush()
+    return "".join(out)
+
+
+def _git_sha(repo: Path) -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return "unknown"
+
+
+def _file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()

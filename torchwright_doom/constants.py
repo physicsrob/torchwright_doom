@@ -17,7 +17,56 @@ bump stays a constant swap.
 
 from __future__ import annotations
 
-SCREEN_WIDTH = 60
-SCREEN_HEIGHT = 50
+import os
+
+_DEFAULT_SCREEN_WIDTH = 60
+_DEFAULT_SCREEN_HEIGHT = 50
+_SUPPORTED_RENDER_SCALES = {2, 4}
+
+
+def _screen_dim_from_env(name: str, default: int, *, minimum: int = 2) -> int:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer, got {raw!r}") from exc
+    if value < minimum:
+        raise ValueError(f"{name} must be >= {minimum}, got {value}")
+    return value
+
+
+def _screen_dims_from_scale() -> tuple[int, int] | None:
+    raw = os.environ.get("TORCHWRIGHT_DOOM_RENDER_SCALE")
+    if raw is None or raw == "":
+        return None
+    try:
+        scale = int(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"TORCHWRIGHT_DOOM_RENDER_SCALE must be an integer, got {raw!r}"
+        ) from exc
+    if scale not in _SUPPORTED_RENDER_SCALES:
+        allowed = ", ".join(str(v) for v in sorted(_SUPPORTED_RENDER_SCALES))
+        raise ValueError(
+            f"TORCHWRIGHT_DOOM_RENDER_SCALE must be one of {{{allowed}}}; "
+            f"got {scale}"
+        )
+    return 320 // scale, 200 // scale
+
+
+_scaled_dims = _screen_dims_from_scale()
+if _scaled_dims is None:
+    _default_width, _default_height = _DEFAULT_SCREEN_WIDTH, _DEFAULT_SCREEN_HEIGHT
+else:
+    _default_width, _default_height = _scaled_dims
+
+SCREEN_WIDTH = _screen_dim_from_env(
+    "TORCHWRIGHT_DOOM_SCREEN_WIDTH", _default_width, minimum=2
+)
+SCREEN_HEIGHT = _screen_dim_from_env(
+    "TORCHWRIGHT_DOOM_SCREEN_HEIGHT", _default_height, minimum=2
+)
 # Screen vertical centre (the projection horizon); sandbox ``reference.CENTER_Y``.
 CENTER_Y = SCREEN_HEIGHT / 2.0

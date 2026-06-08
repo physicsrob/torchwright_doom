@@ -60,7 +60,13 @@ class SceneIndex:
     planes: PlaneIndex
 
     @classmethod
-    def build(cls, input_vec: Node, past: GraphPast, pos: PosEncoding) -> "SceneIndex":
+    def build(
+        cls,
+        input_vec: Node,
+        past: GraphPast,
+        pos: PosEncoding,
+        assets: AssetIndex | None = None,
+    ) -> "SceneIndex":
         """Publish this position's scene-index channels and return queries.
 
         Construction is eager: every field group publishes its backing channels
@@ -88,7 +94,7 @@ class SceneIndex:
                 subsector_context,
                 seg_context,
             ),
-            assets=AssetIndex(),
+            assets=assets or AssetIndex(),
             planes=PlaneIndex.publish(past, token, plane_context),
         )
 

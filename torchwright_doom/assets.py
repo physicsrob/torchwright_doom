@@ -32,41 +32,23 @@ from .std import (
     pwl_def,
     table_lookup_2d,
 )
-from .asset_banks import (
-    FLAT_IS_SKY,
-    FLAT_TABLE,
-    N_FLATS,
-    N_WALL_TEXTURES,
-    WALL_BANKS,
-    WALL_HEIGHT_BANK,
-    WALL_TEX_BANK_ID,
-    WALL_TEX_H_IDX_OH,
-    WALL_TEX_HEIGHT,
-    WALL_TEX_LOCAL_ID,
-    WALL_TEX_WIDTH,
-)
-
-_N_TEX_ID_SLOTS = N_WALL_TEXTURES + 1
+from .asset_banks import DEFAULT_ASSET_BANKS, AssetBanks
+from .pwl_banks import build_sawtooth_bank
 
 # Width of the per-texture height-index one-hot ``h_idx_oh`` returns
 # (= number of distinct wall-texture heights in the WAD: sorted{16, 56, 72,
 # 128}). Consumed by ``wall_column_state`` for the span h_idx_oh payload width.
-_H_IDX_OH_WIDTH = len(WALL_HEIGHT_BANK)
+_H_IDX_OH_WIDTH = len(DEFAULT_ASSET_BANKS.wall_height_bank)
 
 # Module-level RAW data only (no graph nodes — see module docstring). The
 # sandbox wraps these in ``constant(...)`` at module scope; the real side keeps
 # them as plain Python/numpy and wraps inside the accessors below.
-_WALL_LOCAL_ID_VALUES_BY_BANK = tuple(
-    [float(i) for i in range(len(bank.global_ids))] for bank in WALL_BANKS
-)
-_WALL_BANK_TABLE_2D = tuple(
-    bank.table.reshape(len(bank.global_ids) * bank.height, bank.width)
-    for bank in WALL_BANKS
-)
-_WALL_BANK_ROW_ADDR = tuple([[float(bank.height)], [1.0]] for bank in WALL_BANKS)
-_FLAT_ID_VALUES = [float(i) for i in range(N_FLATS)]
-_FLAT_TABLE_2D = FLAT_TABLE.reshape(N_FLATS * 64, 64)
-_FLAT_ROW_ADDR = [[64.0], [1.0]]
+_WALL_LOCAL_ID_VALUES_BY_BANK = DEFAULT_ASSET_BANKS.wall_local_id_values_by_bank
+_WALL_BANK_TABLE_2D = DEFAULT_ASSET_BANKS.wall_bank_table_2d
+_WALL_BANK_ROW_ADDR = DEFAULT_ASSET_BANKS.wall_bank_row_addr
+_FLAT_ID_VALUES = DEFAULT_ASSET_BANKS.flat_id_values
+_FLAT_TABLE_2D = DEFAULT_ASSET_BANKS.flat_table_2d
+_FLAT_ROW_ADDR = DEFAULT_ASSET_BANKS.flat_row_addr
 
 
 def _python_floor_mod(v: float, h: int) -> float:
@@ -81,7 +63,7 @@ _U_MOD_BY_BANK = tuple(
         breakpoints=2049,
         input_range=(-1024.0, 1024.0),
     )
-    for bank in WALL_BANKS
+    for bank in DEFAULT_ASSET_BANKS.wall_banks
 )
 
 
@@ -98,30 +80,63 @@ def _snap_index(index: Node, n: int, values: list[float]) -> Node:
 class WallAssets:
     """Wall texture metadata and full-resolution palette-index lookup."""
 
+    banks: AssetBanks = DEFAULT_ASSET_BANKS
+    u_mod_by_bank: tuple = field(init=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "u_mod_by_bank",
+            tuple(
+                pwl_def(
+                    (lambda v, width=bank.width: _python_floor_mod(v, width)),
+                    breakpoints=2049,
+                    input_range=(-1024.0, 1024.0),
+                )
+                for bank in self.banks.wall_banks
+            ),
+        )
+
     def bank_id(self, tex_id: Node) -> Node:
-        return pick_by_index(tex_id, constant(list(WALL_TEX_BANK_ID)), _N_TEX_ID_SLOTS)
+        return pick_by_index(
+            tex_id,
+            constant(list(self.banks.wall_tex_bank_id)),
+            self.banks.n_wall_textures + 1,
+        )
 
     def local_id(self, tex_id: Node) -> Node:
-        return pick_by_index(tex_id, constant(list(WALL_TEX_LOCAL_ID)), _N_TEX_ID_SLOTS)
+        return pick_by_index(
+            tex_id,
+            constant(list(self.banks.wall_tex_local_id)),
+            self.banks.n_wall_textures + 1,
+        )
 
     def width(self, tex_id: Node) -> Node:
-        return pick_by_index(tex_id, constant(list(WALL_TEX_WIDTH)), _N_TEX_ID_SLOTS)
+        return pick_by_index(
+            tex_id,
+            constant(list(self.banks.wall_tex_width)),
+            self.banks.n_wall_textures + 1,
+        )
 
     def height(self, tex_id: Node) -> Node:
-        return pick_by_index(tex_id, constant(list(WALL_TEX_HEIGHT)), _N_TEX_ID_SLOTS)
+        return pick_by_index(
+            tex_id,
+            constant(list(self.banks.wall_tex_height)),
+            self.banks.n_wall_textures + 1,
+        )
 
     def h_idx_oh(self, tex_id: Node) -> Node:
         return pick_by_index(
             tex_id,
-            constant(list(WALL_TEX_H_IDX_OH)),
-            _N_TEX_ID_SLOTS,
-            d_fill=len(WALL_HEIGHT_BANK),
+            constant(list(self.banks.wall_tex_h_idx_oh)),
+            self.banks.n_wall_textures + 1,
+            d_fill=len(self.banks.wall_height_bank),
         )
 
     def palette_index(self, tex_id: Node, u_native: Node, v_mod_h: Node) -> Node:
         bank_id = self.bank_id(tex_id)
         local_id = self.local_id(tex_id)
-        bank_mask = one_hot(bank_id, len(WALL_BANKS))
+        bank_mask = one_hot(bank_id, len(self.banks.wall_banks))
         candidates = concat(
             *(
                 table_lookup_2d(
@@ -130,17 +145,17 @@ class WallAssets:
                             _snap_index(
                                 local_id,
                                 len(bank.global_ids),
-                                _WALL_LOCAL_ID_VALUES_BY_BANK[bank.bank_id],
+                                self.banks.wall_local_id_values_by_bank[bank.bank_id],
                             ),
                             v_mod_h,
                         ),
-                        _WALL_BANK_ROW_ADDR[bank.bank_id],
+                        self.banks.wall_bank_row_addr[bank.bank_id],
                     ),
-                    _U_MOD_BY_BANK[bank.bank_id](u_native),
-                    _WALL_BANK_TABLE_2D[bank.bank_id],
+                    self.u_mod_by_bank[bank.bank_id](u_native),
+                    self.banks.wall_bank_table_2d[bank.bank_id],
                     sharpness=1000.0,
                 )
-                for bank in WALL_BANKS
+                for bank in self.banks.wall_banks
             )
         )
         return pick_by_one_hot(bank_mask, candidates)
@@ -150,25 +165,38 @@ class WallAssets:
 class FlatAssets:
     """Flat metadata and full-resolution palette-index lookup."""
 
+    banks: AssetBanks = DEFAULT_ASSET_BANKS
+
     def is_sky(self, flat_id: Node) -> Node:
         return indicator_to_bool(
-            pick_by_index(flat_id, constant(list(FLAT_IS_SKY)), N_FLATS)
+            pick_by_index(
+                flat_id, constant(list(self.banks.flat_is_sky)), self.banks.n_flats
+            )
         )
 
     def palette_index(self, flat_id: Node, u: Node, v: Node) -> Node:
         row = linear(
             concat(
-                _snap_index(flat_id, N_FLATS, _FLAT_ID_VALUES),
+                _snap_index(flat_id, self.banks.n_flats, self.banks.flat_id_values),
                 v,
             ),
-            _FLAT_ROW_ADDR,
+            self.banks.flat_row_addr,
         )
-        return table_lookup_2d(row, u, _FLAT_TABLE_2D, sharpness=1000.0)
+        return table_lookup_2d(row, u, self.banks.flat_table_2d, sharpness=1000.0)
 
 
 @dataclass(frozen=True)
 class AssetIndex:
     """Weight-side asset lookups; constructed with zero ``past.publish``."""
 
-    walls: WallAssets = field(default_factory=WallAssets)
-    flats: FlatAssets = field(default_factory=FlatAssets)
+    banks: AssetBanks = DEFAULT_ASSET_BANKS
+    walls: WallAssets = field(init=False)
+    flats: FlatAssets = field(init=False)
+    sawtooth_bank: tuple = field(init=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "walls", WallAssets(self.banks))
+        object.__setattr__(self, "flats", FlatAssets(self.banks))
+        object.__setattr__(
+            self, "sawtooth_bank", build_sawtooth_bank(self.banks.wall_height_bank)
+        )

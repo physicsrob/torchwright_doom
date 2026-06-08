@@ -15,7 +15,7 @@ standalone flat tokens.
 
 from __future__ import annotations
 
-from ..asset_config import WALL_TEXTURE_ID_BY_NAME
+from ..asset_config import DEFAULT_ASSET_CONFIG, AssetConfig
 from ..doom_lighting import (
     doom_wall_light_static,
     doom_wall_orientation_light_bias,
@@ -173,11 +173,14 @@ def _seg_pegging_and_offset(md: MapData, seg_idx: int) -> tuple[int, int, int]:
     return (linedef.flags, y_offset, raw_seg.side)
 
 
-def build_prompt(md: MapData, state: GameState) -> list[Token]:
+def build_prompt(
+    md: MapData, state: GameState, asset_config: AssetConfig | None = None
+) -> list[Token]:
+    asset_config = asset_config or DEFAULT_ASSET_CONFIG
     segments = bake_segments(md)
-    plane_tables = build_plane_tables(md)
+    plane_tables = build_plane_tables(md, flat_ids=asset_config.flat_id_by_name)
     tokens: list[Token] = []
-    name_to_id = {"-": 0, "": 0, **WALL_TEXTURE_ID_BY_NAME}
+    name_to_id = {"-": 0, "": 0, **asset_config.wall_id_by_name}
 
     tokens.append(Token(PLAYER_X_MARK))
     tokens.append(prefill_value(ValueRange.R1, state.x))

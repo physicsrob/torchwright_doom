@@ -11,6 +11,7 @@ from __future__ import annotations
 import torch
 
 from torchwright_doom.render import pure_ar, spec_decode
+from torchwright_doom.render.inference import KVCache, _commit
 
 _TERMINAL = 999
 
@@ -34,7 +35,7 @@ class _MockCompiled:
     property the real artifact provides.
     """
 
-    def empty_past(self):
+    def empty_past(self, max_len=None):
         z = torch.zeros(1, 0, 1)
         return ((z,), (z,))
 
@@ -71,6 +72,40 @@ class _MockDrafter:
 
     def rollback(self, snap):
         self.i = snap
+
+
+class _MockKVCompiled:
+    """Owned-cache (``KVCache``) twin of ``_MockCompiled``.
+
+    Mimics ``OnnxTokenRuntime``'s contract: ``empty_past(max_len)`` returns a
+    preallocated ``KVCache``, and ``step`` writes each row's K/V into the cache
+    tail *in place* and advances ``length`` — exactly the production delta
+    write.  This exercises the spec-decode in-place commit/overwrite path
+    (``_commit`` lowering ``length``, the dead tail overwritten next step) that
+    the head-major tuple mock does not.  The model itself stays memoryless, so
+    batched decode is still row-wise identical to sequential.
+    """
+
+    def empty_past(self, max_len):
+        return KVCache(
+            k=[torch.zeros(max_len, 1, 1)],
+            v=[torch.zeros(max_len, 1, 1)],
+            length=0,
+            max_len=max_len,
+        )
+
+    def step(self, inputs, cache, past_len=None):
+        flat = inputs.reshape(-1)
+        n = int(flat.shape[0])
+        base = cache.length
+        preds = torch.tensor(
+            [[float(_model_next(int(round(float(flat[i])))))] for i in range(n)]
+        )
+        rows = flat.reshape(n, 1, 1).to(torch.float32)
+        cache.k[0][base : base + n] = rows
+        cache.v[0][base : base + n] = rows
+        cache.length = base + n
+        return preds, cache
 
 
 def _patch_decode(monkeypatch):
@@ -128,3 +163,47 @@ def test_spec_decode_matches_pure_ar_exactly(monkeypatch):
         terminal_row=_TERMINAL, draft_window=4,
     )
     assert spec.emitted_rows == pure.emitted_rows
+
+
+# ---------------------------------------------------------------------------
+# Owned-cache (KVCache) path: the spec-decode in-place commit/overwrite that
+# the production OnnxTokenRuntime uses. The head-major tuple mock above trims
+# a returned full cache; these drive the in-place delta-write + length-rollback.
+# ---------------------------------------------------------------------------
+
+
+def test_spec_decode_kvcache_in_place_is_bit_identical(monkeypatch):
+    _patch_decode(monkeypatch)
+    drafts = [100, 101, 102, 555, 104, 105, 777, 107, 108, 109, 110, 999]
+    res, stats = spec_decode.spec_decode_rollout(
+        _MockKVCompiled(), [50], _MockDrafter(drafts), max_positions=50,
+        terminal_row=_TERMINAL, draft_window=8,
+    )
+    # Same trajectory as pure-AR even though commits route through the owned
+    # cache (length rollback, no copy) instead of trimming a returned tensor.
+    assert res.emitted_rows == _EXPECTED
+    assert stats["mispredicts"] >= 1
+    assert stats["terminal_truncations"] >= 1
+
+
+def test_kvcache_reject_then_overwrite():
+    """The spec-decode reject primitive: lower length, then the next write
+    overwrites the abandoned tail — verified on the buffer contents."""
+    compiled = _MockKVCompiled()
+    cache = compiled.empty_past(max_len=10)
+
+    # Write a 4-row batch (e.g. one input + 3 drafts) at base 0.
+    _, cache = compiled.step(torch.tensor([[10.0], [11.0], [12.0], [13.0]]), cache)
+    assert cache.length == 4
+
+    # Accept only the first 2 — the spec reject is a pure length rollback.
+    cache = _commit(cache, 2)
+    assert cache.length == 2
+
+    # The next batch writes from the lowered length, overwriting rows 2..3.
+    _, cache = compiled.step(torch.tensor([[20.0], [21.0], [22.0]]), cache)
+    assert cache.length == 5
+
+    # Committed prefix is correct; the rejected drafts (12, 13) are gone.
+    got = cache.k[0][:5, 0, 0].tolist()
+    assert got == [10.0, 11.0, 20.0, 21.0, 22.0], got

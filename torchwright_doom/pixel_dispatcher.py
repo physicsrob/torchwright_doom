@@ -141,6 +141,7 @@ class PixelDispatcher:
             dc_iscale=span.dc_iscale,
             v_0_at_top=span_v0.v0_at_top,
             h_idx_oh=span.h_idx_oh,
+            sawtooth_bank=projection.core.scene.assets.sawtooth_bank,
         )
         raw_palette_index = projection.core.scene.assets.walls.palette_index(
             span.tex_id,
