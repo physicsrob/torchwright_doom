@@ -84,12 +84,23 @@ def test_forward_compiles_to_onnx(tmp_path) -> None:
     model = onnx.load(onnx_path)
     onnx.checker.check_model(model)  # structurally valid ONNX (I1–I4 already enforced)
 
-    # The token-I/O / KV-cache contract: token_ids + per-layer past in, logits out.
+    # The token-I/O static-cache contract: token_ids + cache_position +
+    # per-layer full-S past in, logits out (past_len/Concat is gone — the
+    # CUDA-graph-capturable contract, plan_cuda_graph_decode.md).
     in_names = {i.name for i in model.graph.input}
     out_names = {o.name for o in model.graph.output}
     assert "token_ids" in in_names, in_names
-    assert "past_len" in in_names, in_names
+    assert "cache_position" in in_names, in_names
+    assert "past_len" not in in_names, in_names
     assert "logits" in out_names, out_names
+
+    # The static slot count is baked into past_K_0's first dim.
+    past_k0 = next(i for i in model.graph.input if i.name == "past_K_0")
+    first_dim = past_k0.type.tensor_type.shape.dim[0]
+    assert first_dim.HasField("dim_value") and first_dim.dim_value >= 1, (
+        "past_K_0 first dim must be a static cache_stride, got "
+        f"{first_dim}"
+    )
 
     # Layer count: Phase J's flat pass lands the forward at 85 layers at d=4096
     # (H was ~45). The jump is the per-position flat-pass compute that was no_op

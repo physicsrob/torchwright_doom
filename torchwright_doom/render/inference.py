@@ -103,6 +103,24 @@ class OnnxTokenRuntime:
         self.onnx_path = Path(onnx_path)
         session_providers = providers or _default_ort_providers(ort)
         so = ort.SessionOptions()
+        if any(
+            isinstance(p, tuple) and p[1].get("enable_cuda_graph")
+            for p in session_providers
+        ):
+            # Memory-pattern pre-allocation requests one giant pattern buffer
+            # (7+ GiB at d=3072) and, when it fails on a tight GPU, the arena
+            # falls back to on-demand cudaMalloc — which, inside stream
+            # capture, invalidates the CUDA graph
+            # (cudaErrorStreamCaptureInvalidated).  The BFC arena's on-demand
+            # reuse peak is far smaller and is grown by ORT's internal
+            # warm-up runs BEFORE capture, so patterns off is what makes
+            # capture allocation-free.
+            so.enable_mem_pattern = False
+            print(
+                "[onnxruntime] enable_cuda_graph on: memory-pattern "
+                "optimization disabled (capture must not allocate)",
+                flush=True,
+            )
         if os.environ.get("TWDOOM_NO_OPT"):  # DIAGNOSTIC: disable ORT graph opt
             so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
             print("[onnxruntime] DIAGNOSTIC: graph optimization DISABLED", flush=True)
@@ -374,20 +392,32 @@ class OnnxTokenRuntime:
         self._decode_binding = (id(cache), binding)
         return binding
 
-    def _run_iobinding(self, io) -> None:
-        """All bound-buffer writes ordered, then run.
+    def _run_iobinding(self, io, gpu_graph_id: str) -> None:
+        """All bound-buffer writes ordered, then run with an EXPLICIT bucket.
 
-        ORT's io-binding Run does NOT synchronize inputs and its compute
-        stream is cudaStreamNonBlocking — no implicit ordering with torch's
-        stream.  The previous step's delta->cache persists and this step's
-        token/cache_position writes are async torch ops, so an explicit
-        stream sync before the run is REQUIRED or the run (and, later, the
-        captured-graph replay) can read a cache slot mid-copy: intermittent
-        stale tokens.  (Sharing one stream via user_compute_stream is the
-        later optimization; unexercised with capture as of 1.26.)
+        Stream ordering: ORT's io-binding Run does NOT synchronize inputs
+        and its compute stream is cudaStreamNonBlocking — no implicit
+        ordering with torch's stream.  The previous step's delta->cache
+        persists and this step's token/cache_position writes are async torch
+        ops, so an explicit stream sync before the run is REQUIRED or the
+        run (and the captured-graph replay especially) can read a cache slot
+        mid-copy: intermittent stale tokens.  (Sharing one stream via
+        user_compute_stream is the later optimization; unexercised with
+        capture as of 1.26.)
+
+        gpu_graph_id is MANDATORY on every run: an optionless run() on an
+        enable_cuda_graph session defaults to annotation id 0, which IS
+        capture-eligible — one stray call permanently consumes graph-pool
+        memory with whatever shape it had.  "-1" = run uncaptured;
+        "1" = the n_new=1 decode bucket (captures on its first annotated
+        call via ORT-internal warm-up reruns, replays afterwards).
         """
+        import onnxruntime as ort
+
         torch.cuda.current_stream().synchronize()
-        self._session.run_with_iobinding(io)
+        ro = ort.RunOptions()
+        ro.add_run_config_entry("gpu_graph_id", gpu_graph_id)
+        self._session.run_with_iobinding(io, ro)
 
     def _step_cuda_io(self, inputs, cache: KVCache, past_len: int, n_new: int, base: int):
         import numpy as np
@@ -399,7 +429,7 @@ class OnnxTokenRuntime:
                 inputs.detach().reshape(-1).to(device=self._device, dtype=torch.int64)
             )
             b["cache_position"].fill_(base)
-            self._run_iobinding(b["io"])
+            self._run_iobinding(b["io"], gpu_graph_id="1")
             for i in range(self._n_layers):
                 cache.k[i][base : base + 1] = b["delta_k"][i]
                 cache.v[i][base : base + 1] = b["delta_v"][i]
@@ -455,7 +485,7 @@ class OnnxTokenRuntime:
         )
         self._bind_cuda(io, "logits", logits, "out", device_id, np.float32)
 
-        self._run_iobinding(io)
+        self._run_iobinding(io, gpu_graph_id="-1")
         # Copy the freshly computed deltas into the owned cache slots (the run
         # is complete, so there is no input/output aliasing during execution).
         for i in range(self._n_layers):
@@ -479,6 +509,8 @@ class OnnxTokenRuntime:
 
 
 def _default_ort_providers(ort) -> list:
+    import os
+
     available = set(ort.get_available_providers())
     if "CUDAExecutionProvider" in available:
         # The DOOM graph's content-addressed attention resolves unit-score
@@ -486,8 +518,22 @@ def _default_ort_providers(ort) -> list:
         # collapses them and the softmax stops concentrating -> garbage tokens.
         # The whole graph is designed around "TF32 off" (see torchwright
         # attention_ops.py); disable it on the CUDA EP.
+        cuda_opts = {"use_tf32": "0"}
+        if not os.environ.get("TWDOOM_NO_CUDA_GRAPH"):
+            # CUDA-graph capture for the n_new=1 decode step: each decode
+            # replays one captured graph instead of ~1,750 kernel launches
+            # (the measured ~55%-of-wall dispatch overhead).  enable_cuda_graph
+            # and use_tf32 are independent provider options and compose.
+            # With this flag on, a surviving Memcpy node is a HARD ERROR at
+            # session creation ("This session cannot use the graph capture
+            # feature"); runs opt in/out per call via the gpu_graph_id run
+            # option ("-1" = uncaptured: prefill + variable-width spec
+            # batches; "1" = the captured decode bucket).  Capture lands on
+            # the first annotated call via ORT-internal warm-up reruns
+            # (~3x latency on that call; ORT 1.26 mechanics).
+            cuda_opts["enable_cuda_graph"] = "1"
         return [
-            ("CUDAExecutionProvider", {"use_tf32": "0"}),
+            ("CUDAExecutionProvider", cuda_opts),
             "CPUExecutionProvider",
         ]
     return ["CPUExecutionProvider"]
