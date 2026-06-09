@@ -55,6 +55,7 @@ def run_config(
     compare_images: bool = False,
     png_zoom: int = 8,
     verbose_compile: bool = False,
+    cache_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     config_path = Path(config_path)
     config = load_render_config(config_path)
@@ -91,11 +92,18 @@ def run_config(
         f"mode={mode}",
         flush=True,
     )
-    cache_dir = compile_cached(
-        config,
-        base_dir=config_path.parent,
-        verbose=verbose_compile,
-    )
+    if cache_dir is not None:
+        # Precompiled path (e.g. Modal renders a locally-compiled ONNX that was
+        # uploaded to the mounted cache volume): skip compilation entirely and
+        # render the handed-over directory directly.
+        cache_dir = Path(cache_dir)
+        print(f"[run] using precompiled ONNX from {cache_dir}", flush=True)
+    else:
+        cache_dir = compile_cached(
+            config,
+            base_dir=config_path.parent,
+            verbose=verbose_compile,
+        )
     print(f"[run] loading ONNX runtime from {cache_dir}", flush=True)
     compiled = load_cached_runtime(cache_dir)
     print("[run] ONNX runtime ready", flush=True)
@@ -141,12 +149,23 @@ def run_config(
         )
         attempted = spec_stats.get("attempted_drafts", 0)
         accepted = spec_stats.get("accepted_drafts", 0)
-        accept_rate = accepted / attempted if attempted else 0.0
+        n_tokens = len(spec.emitted_rows)
+        # Per-token acceptance is the canonical metric: the fraction of emitted
+        # tokens that came from an accepted draft (accepted_drafts / tokens).
+        # Do NOT headline accepted/attempted — on a mispredict the reuse buffer
+        # re-offers the window's tail as fresh drafts, so attempted_drafts
+        # inflates well past the token count at low acceptance (e.g. 18,647
+        # attempts for 8,000 tokens), deflating accepted/attempted into a
+        # misleading number. Keep accepted/attempted as a secondary
+        # draft-efficiency stat.
+        per_token_accept = accepted / n_tokens if n_tokens else 0.0
+        draft_efficiency = accepted / attempted if attempted else 0.0
         print(
-            f"[run] spec-decode: {len(spec.emitted_rows)} tokens in {spec.seconds:.0f}s, "
+            f"[run] spec-decode: {n_tokens} tokens in {spec.seconds:.0f}s, "
             f"{spec.n_forward_passes} forward passes "
-            f"({len(spec.emitted_rows) / max(1, spec.n_forward_passes):.2f} tok/pass), "
-            f"draft accept rate {accept_rate:.1%} ({accepted}/{attempted}), "
+            f"({n_tokens / max(1, spec.n_forward_passes):.2f} tok/pass), "
+            f"accept rate {per_token_accept:.1%} per-token ({accepted}/{n_tokens}); "
+            f"draft efficiency {draft_efficiency:.1%} ({accepted}/{attempted}), "
             f"stopped={spec.stopped}",
             flush=True,
         )

@@ -60,7 +60,12 @@ def compile_cached(
 
 
 def load_cached_runtime(cache_dir: str | Path) -> OnnxTokenRuntime:
-    return OnnxTokenRuntime(Path(cache_dir) / "model.onnx")
+    import os
+
+    providers = (
+        ["CPUExecutionProvider"] if os.environ.get("TWDOOM_FORCE_CPU") else None
+    )
+    return OnnxTokenRuntime(Path(cache_dir) / "model.onnx", providers=providers)
 
 
 def _write_render_meta(

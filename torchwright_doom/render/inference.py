@@ -79,13 +79,20 @@ class OnnxTokenRuntime:
     """Token-I/O ONNX wrapper with CPU fallback and CUDA I/O binding."""
 
     def __init__(self, onnx_path: str | Path, providers=None) -> None:
+        import os
+
         import onnxruntime as ort
 
         self.onnx_path = Path(onnx_path)
         session_providers = providers or _default_ort_providers(ort)
+        so = ort.SessionOptions()
+        if os.environ.get("TWDOOM_NO_OPT"):  # DIAGNOSTIC: disable ORT graph opt
+            so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+            print("[onnxruntime] DIAGNOSTIC: graph optimization DISABLED", flush=True)
         try:
             self._session = ort.InferenceSession(
                 str(self.onnx_path),
+                sess_options=so,
                 providers=session_providers,
             )
         except Exception:
@@ -100,6 +107,7 @@ class OnnxTokenRuntime:
             )
             self._session = ort.InferenceSession(
                 str(self.onnx_path),
+                sess_options=so,
                 providers=["CPUExecutionProvider"],
             )
         print(
@@ -125,6 +133,15 @@ class OnnxTokenRuntime:
             int(inputs[f"past_K_{i}"].shape[1]) for i in range(self._n_layers)
         ]
         self._d_head = int(inputs["past_K_0"].shape[2])
+        _total_heads = sum(self._per_layer_n_heads)
+        _bytes_per_tok = _total_heads * self._d_head * 2 * 4  # K+V, float32
+        print(
+            f"[kvcache] layers={self._n_layers} total_heads={_total_heads} "
+            f"d_head={self._d_head} per_layer_heads={self._per_layer_n_heads} "
+            f"bytes/token={_bytes_per_tok} ({_bytes_per_tok / 1e6:.3f} MB); "
+            f"tokens that fit in 50GB={int(50e9 / max(1, _bytes_per_tok))}",
+            flush=True,
+        )
         # Outputs are the per-layer KV *deltas* (new rows only); the runtime
         # writes them into its owned cache tail (no full-cache output).
         self._out_names = ["logits"]
@@ -328,10 +345,18 @@ class OnnxTokenRuntime:
         return self
 
 
-def _default_ort_providers(ort) -> list[str]:
+def _default_ort_providers(ort) -> list:
     available = set(ort.get_available_providers())
     if "CUDAExecutionProvider" in available:
-        return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        # The DOOM graph's content-addressed attention resolves unit-score
+        # logit gaps in full fp32; TF32 (the ORT CUDA default on Ampere+)
+        # collapses them and the softmax stops concentrating -> garbage tokens.
+        # The whole graph is designed around "TF32 off" (see torchwright
+        # attention_ops.py); disable it on the CUDA EP.
+        return [
+            ("CUDAExecutionProvider", {"use_tf32": "0"}),
+            "CPUExecutionProvider",
+        ]
     return ["CPUExecutionProvider"]
 
 
@@ -744,7 +769,8 @@ def spec_decode_rollout(
                 f"[spec_decode] {len(emitted)} tokens, {stats['forward_passes']} "
                 f"forward passes ({time.time() - t0:.1f}s), "
                 f"last_forward={step_dt:.1f}s, cache_len={_cache_len(past)}, "
-                f"accepted={stats['accepted_drafts']}/{stats['attempted_drafts']}",
+                f"accept={stats['accepted_drafts'] / max(1, len(emitted)):.0%} per-tok "
+                f"(drafts {stats['accepted_drafts']}/{stats['attempted_drafts']})",
                 flush=True,
             )
 

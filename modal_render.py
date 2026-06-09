@@ -60,7 +60,7 @@ CACHE_VOLUME = modal.Volume.from_name(
         "/root/.cache/torchwright_doom/compiled": CACHE_VOLUME,
     },
 )
-def render_remote(run_id: str, kwargs: dict) -> dict:
+def render_remote(run_id: str, kwargs: dict, cache_subdir: str) -> dict:
     import sys
 
     if "/root" not in sys.path:
@@ -68,9 +68,16 @@ def render_remote(run_id: str, kwargs: dict) -> dict:
 
     from torchwright_doom.render.cli import run_config
 
+    # Compilation now happens on the LOCAL machine (the local entrypoint
+    # compiles and uploads the ONNX into CACHE_VOLUME under ``cache_subdir``).
+    # Reload so the freshly-uploaded files are visible, then point the renderer
+    # straight at them — Modal is render-only and never compiles.
+    CACHE_VOLUME.reload()
+    cache_dir = f"/root/.cache/torchwright_doom/compiled/{cache_subdir}"
+    kwargs = {**kwargs, "cache_dir": cache_dir}
+
     out_dir = f"/artifacts/{run_id}"
     summary = run_config(out_dir=out_dir, **kwargs)
-    CACHE_VOLUME.commit()
     RENDER_VOLUME.commit()
 
     files = {
@@ -113,6 +120,33 @@ def main(
     config_path = Path(config)
     remote_config = _remote_config_path(config)
 
+    # --- Compile LOCALLY (CPU only; no GPU/VRAM needed) ------------------
+    # Compilation runs on the local machine, not on Modal, so the compile cache
+    # key sees the real submodule git SHAs.  (Modal containers have no ``.git``,
+    # so ``_git_sha`` collapsed to "unknown" and the key never changed on a code
+    # edit — silently reusing a stale model.)  The compiled ONNX is uploaded
+    # into CACHE_VOLUME and ``render_remote`` renders it; Modal never compiles.
+    #
+    # Reuse ``compile_config`` rather than calling ``compile_cached`` directly:
+    # the token vocab is screen-dependent and built when the vocab module is
+    # first imported, so ``apply_screen_env`` MUST run before that import.
+    # ``compile_config`` enforces that order (env first, then a deferred
+    # ``from .cache import compile_cached``); importing ``cache`` up here would
+    # build the vocab against the un-configured default screen and produce a
+    # model whose logits width disagrees with the renderer's embedding table.
+    from torchwright_doom.render.cli import compile_config
+
+    print(f"[local] compiling {config_path} locally (CPU)...", flush=True)
+    local_cache_dir = Path(
+        compile_config(config_path=config_path, verbose_compile=verbose_compile)[
+            "cache_dir"
+        ]
+    )
+    cache_subdir = local_cache_dir.name
+    print(f"[local] uploading compiled ONNX -> CACHE_VOLUME:/{cache_subdir}", flush=True)
+    with CACHE_VOLUME.batch_upload(force=True) as batch:
+        batch.put_directory(str(local_cache_dir), f"/{cache_subdir}")
+
     run_id = (
         run_name
         or f"{config_path.stem}__x{x:g}_y{y:g}_a{angle}__{mode}__{int(time.time())}"
@@ -134,7 +168,7 @@ def main(
         verbose_compile=verbose_compile,
     )
     print(f"[local] launching render_remote run_id={run_id} kwargs={kwargs}")
-    result = render_remote.remote(run_id, kwargs)
+    result = render_remote.remote(run_id, kwargs, cache_subdir)
 
     local_dir = _HERE / out_dir
     local_dir.mkdir(parents=True, exist_ok=True)
