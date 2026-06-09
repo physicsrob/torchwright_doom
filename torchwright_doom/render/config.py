@@ -318,14 +318,36 @@ def _quote_bare_words(text: str) -> str:
 
 
 def _git_sha(repo: Path) -> str:
+    """Committed HEAD sha, extended with a working-tree digest when dirty.
+
+    The compile cache key embeds this. Without the dirty suffix, an
+    uncommitted edit ships to the compile (``add_local_python_source`` sends
+    the working tree) while the key stays pinned at HEAD — every edit-run
+    cycle silently HITs the artifact compiled from the *first* iteration and
+    the gate "validates" code that was never compiled.  sha256 of
+    ``git diff HEAD`` covers tracked edits; ``git status --porcelain`` adds
+    untracked (non-ignored) file *names* so new files also move the key.
+    """
+    git = ["git", "-C", str(repo)]
     try:
-        return subprocess.check_output(
-            ["git", "-C", str(repo), "rev-parse", "HEAD"],
-            text=True,
-            stderr=subprocess.DEVNULL,
+        head = subprocess.check_output(
+            [*git, "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
         ).strip()
     except Exception:
         return "unknown"
+    try:
+        diff = subprocess.check_output(
+            [*git, "diff", "HEAD"], text=True, stderr=subprocess.DEVNULL
+        )
+        status = subprocess.check_output(
+            [*git, "status", "--porcelain"], text=True, stderr=subprocess.DEVNULL
+        )
+    except Exception:
+        return f"{head}-dirty.unknown"
+    if not diff and not status:
+        return head
+    digest = hashlib.sha256((diff + "\0" + status).encode("utf-8")).hexdigest()[:12]
+    return f"{head}-dirty.{digest}"
 
 
 def _file_sha256(path: Path) -> str:

@@ -173,7 +173,7 @@ def main(
     run_name: str = "",
     max_positions: int = 8000,
     draft_window: int = 0,
-    prefill_chunk_size: int = 65536,
+    prefill_chunk_size: int = 1024,
     progress_every: int = 250,
     png: bool = False,
     compare: bool = False,

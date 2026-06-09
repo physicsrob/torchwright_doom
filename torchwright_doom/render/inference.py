@@ -19,7 +19,11 @@ import torch
 from ..embedding import W_EMBED
 from .tokens_bridge import row_to_sandbox_token, rows_to_input, sandbox_token_to_row
 
-DEFAULT_PREFILL_CHUNK_SIZE = 65536
+# 1024-row prefill chunks bound the per-layer (n_heads, chunk, S) logits
+# transient under the static-S cache (unchunked prefill at n=3613, S=12288
+# peaks ~45 GB on the widest d=4096 layer).  Chunking is semantically
+# identical to a single pass; this is a memory knob, not an algorithm change.
+DEFAULT_PREFILL_CHUNK_SIZE = 1024
 
 _W_EMBED_T_BY_DEVICE: dict[str, torch.Tensor] = {}
 
@@ -141,7 +145,8 @@ class OnnxTokenRuntime:
                 providers=["CPUExecutionProvider"],
             )
         print(
-            f"[onnxruntime] active providers={self._session.get_providers()}",
+            f"[onnxruntime] version={ort.__version__} "
+            f"active providers={self._session.get_providers()}",
             flush=True,
         )
         self._use_cuda_io = (

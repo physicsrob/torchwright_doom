@@ -7,7 +7,11 @@ RENDER_VIEWZ ?= 41.0
 RENDER_MODE ?= spec_decode
 RENDER_MAX_POSITIONS ?= 8000
 RENDER_DRAFT_WINDOW ?= 8
-PREFILL_CHUNK_SIZE ?= 65536
+# 1024-row chunks bound the static-S prefill logits transient
+# ((n_heads, chunk, S) per layer; unchunked at n=3613, S=12288 the widest
+# layer is ~45 GB on the A100 and OOMs the L4 gate).  Chunking is
+# semantically identical — see plan_cuda_graph_decode.md "Memory budget".
+PREFILL_CHUNK_SIZE ?= 1024
 RENDER_PROGRESS_EVERY ?= 250
 PNG_ZOOM ?= 8
 
