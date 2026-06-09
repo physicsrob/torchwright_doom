@@ -14,6 +14,7 @@ PNG_ZOOM ?= 8
 _RENDER_VERBOSE_COMPILE := $(if $(VERBOSE_COMPILE),--verbose-compile)
 _RENDER_PNG := $(if $(PNG),--png)
 _RENDER_COMPARE := $(if $(COMPARE),--compare)
+_RENDER_PROFILE := $(if $(PROFILE),--profile)
 _RENDER_COMPILE_ARGS = $(strip \
 	--config $(CONFIG) \
 	$(_RENDER_VERBOSE_COMPILE) \
@@ -34,6 +35,7 @@ _RENDER_RUN_ARGS = $(strip \
 	$(_RENDER_PNG) \
 	$(_RENDER_COMPARE) \
 	$(_RENDER_VERBOSE_COMPILE) \
+	$(_RENDER_PROFILE) \
 )
 _RENDER_MODAL_ARGS = $(strip \
 	$(_RENDER_RUN_ARGS) \

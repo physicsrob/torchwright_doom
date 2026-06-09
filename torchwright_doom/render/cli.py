@@ -24,6 +24,8 @@ def compile_config(
     *,
     config_path: str | Path,
     verbose_compile: bool = False,
+    cache_dir: str | Path | None = None,
+    compile_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     config_path = Path(config_path)
     config = load_render_config(config_path)
@@ -34,6 +36,8 @@ def compile_config(
         config,
         base_dir=config_path.parent,
         verbose=verbose_compile,
+        cache_dir=cache_dir,
+        compile_payload=compile_payload,
     )
     return {"cache_dir": str(cache_dir)}
 
@@ -56,6 +60,7 @@ def run_config(
     png_zoom: int = 8,
     verbose_compile: bool = False,
     cache_dir: str | Path | None = None,
+    profile: bool = False,
 ) -> dict[str, Any]:
     config_path = Path(config_path)
     config = load_render_config(config_path)
@@ -105,7 +110,9 @@ def run_config(
             verbose=verbose_compile,
         )
     print(f"[run] loading ONNX runtime from {cache_dir}", flush=True)
-    compiled = load_cached_runtime(cache_dir)
+    compiled = load_cached_runtime(
+        cache_dir, enable_profiling=profile, profile_dir=out_dir if profile else None
+    )
     print("[run] ONNX runtime ready", flush=True)
 
     pure = None
@@ -183,6 +190,25 @@ def run_config(
             "bit-identical OK",
             flush=True,
         )
+
+    if profile:
+        # All step() calls are done; flush ORT's trace and write a parsed
+        # summary next to it so both sync back from Modal (out_dir is mirrored).
+        from .profile_analysis import summarize_profile
+
+        profile_json = compiled.end_profiling()
+        if profile_json:
+            try:
+                summary = summarize_profile(profile_json)
+            except Exception as exc:  # never let analysis crash the render
+                summary = f"[profile] analysis failed: {exc!r}"
+            print("\n" + summary, flush=True)
+            (out_dir / "profile_summary.txt").write_text(summary)
+            print(
+                f"[run] wrote profile trace {Path(profile_json).name} + "
+                f"profile_summary.txt to {out_dir}",
+                flush=True,
+            )
 
     rollout = pure if mode == "pure_ar" else spec
     assert rollout is not None
@@ -418,6 +444,12 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--compare", action="store_true", dest="compare_images")
     pr.add_argument("--png-zoom", type=int, default=8, dest="png_zoom")
     pr.add_argument("--verbose-compile", action="store_true", dest="verbose_compile")
+    pr.add_argument(
+        "--profile",
+        action="store_true",
+        help="enable ORT per-node profiling + INFO logging; write trace + "
+        "summary to out_dir (phase-1 CUDA-graph measurement)",
+    )
 
     args = p.parse_args(argv)
     command = args.command

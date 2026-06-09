@@ -1,12 +1,16 @@
-"""Render on Modal A100-80GB, with artifact sync-back.
+"""Compile + render on Modal, with artifact sync-back.
 
     uv run modal run modal_render.py --config configs/e1m1_start_room.yaml
     uv run modal run modal_render.py --config configs/e1m1_start_room.yaml --mode both --png --compare
 
-The full frame's KV footprint is too large for the local L4, so generation runs
-on an A100-80GB. Artifacts (generated/reference/diff PNGs + token_dump.json) are
-written to a ``modal.Volume`` (durable; inspect later with ``modal volume get``)
-*and* returned so the local entrypoint mirrors them to ``out/<run>/`` on disk —
+Two remote stages: ``compile_remote`` (CPU-only, 64 cores so CP-SAT's parallel
+search gets real width; writes the ONNX into the cache volume) and
+``render_remote`` (A100-80GB — the full frame's KV footprint is too large for
+the local L4). The compile cache key is computed on the LOCAL machine because
+it embeds submodule git SHAs that don't exist inside a Modal container.
+Artifacts (generated/reference/diff PNGs + token_dump.json) are written to a
+``modal.Volume`` (durable; inspect later with ``modal volume get``) *and*
+returned so the local entrypoint mirrors them to ``out/<run>/`` on disk —
 ``make modal-run`` only captures stdout, which is exactly why this dedicated
 entrypoint exists (the one sanctioned new root ``modal_*.py``).
 
@@ -49,6 +53,65 @@ CACHE_VOLUME = modal.Volume.from_name(
     "torchwright-doom-render-cache", create_if_missing=True
 )
 
+# CPU-only compile container. CP-SAT's parallel search scales with cores, so
+# the compile gets its own high-CPU function (the GPU render container stays
+# at 8 CPUs). TW_CPSAT_WORKERS below must match this number.
+_COMPILE_CPUS = 64
+
+
+@app.function(
+    cpu=_COMPILE_CPUS,
+    # Building + exporting holds the full weight set plus the ONNX
+    # serialization copy in RAM: ~23 GB fp32 at d=4096, ~4x that at the
+    # d=8192/h16384 flagship config — size for the latter.
+    memory=262144,
+    timeout=10800,
+    volumes={"/root/.cache/torchwright_doom/compiled": CACHE_VOLUME},
+)
+def compile_remote(
+    config_path: str,
+    cache_subdir: str,
+    compile_payload: dict,
+    verbose_compile: bool,
+) -> dict:
+    import os
+    import sys
+
+    if "/root" not in sys.path:
+        sys.path.insert(0, "/root")
+
+    # CP-SAT reads this at solve time (torchwright cpsat_scheduler); point it
+    # at the container's full CPU allocation instead of the 16-worker default.
+    os.environ["TW_CPSAT_WORKERS"] = str(_COMPILE_CPUS)
+
+    from torchwright_doom.render.cli import compile_config
+
+    # The cache key + payload come from the LOCAL machine: this container has
+    # no ``.git``, so deriving them here would collapse the git SHAs to
+    # "unknown" and silently reuse a stale model across code changes.
+    CACHE_VOLUME.reload()
+    cache_dir = f"/root/.cache/torchwright_doom/compiled/{cache_subdir}"
+    result = compile_config(
+        config_path=config_path,
+        verbose_compile=verbose_compile,
+        cache_dir=cache_dir,
+        compile_payload=compile_payload,
+    )
+    CACHE_VOLUME.commit()
+    return result
+
+
+def _volume_has_compiled(cache_subdir: str) -> bool:
+    """Local cache-hit probe so a hit skips the compile container entirely."""
+    try:
+        names = {
+            entry.path.rsplit("/", 1)[-1]
+            for entry in CACHE_VOLUME.listdir(f"/{cache_subdir}")
+        }
+    except Exception:
+        return False
+    return {"model.onnx", "model.meta.json"} <= names
+
 
 @app.function(
     gpu="a100-80gb",
@@ -68,10 +131,10 @@ def render_remote(run_id: str, kwargs: dict, cache_subdir: str) -> dict:
 
     from torchwright_doom.render.cli import run_config
 
-    # Compilation now happens on the LOCAL machine (the local entrypoint
-    # compiles and uploads the ONNX into CACHE_VOLUME under ``cache_subdir``).
-    # Reload so the freshly-uploaded files are visible, then point the renderer
-    # straight at them — Modal is render-only and never compiles.
+    # Compilation happens in ``compile_remote`` (a separate 64-CPU container),
+    # which writes the ONNX into CACHE_VOLUME under ``cache_subdir``. Reload so
+    # those files are visible, then point the renderer straight at them — this
+    # container is render-only and never compiles.
     CACHE_VOLUME.reload()
     cache_dir = f"/root/.cache/torchwright_doom/compiled/{cache_subdir}"
     kwargs = {**kwargs, "cache_dir": cache_dir}
@@ -116,36 +179,47 @@ def main(
     compare: bool = False,
     png_zoom: int = 8,
     verbose_compile: bool = False,
+    profile: bool = False,
 ):
     config_path = Path(config)
     remote_config = _remote_config_path(config)
 
-    # --- Compile LOCALLY (CPU only; no GPU/VRAM needed) ------------------
-    # Compilation runs on the local machine, not on Modal, so the compile cache
-    # key sees the real submodule git SHAs.  (Modal containers have no ``.git``,
-    # so ``_git_sha`` collapsed to "unknown" and the key never changed on a code
-    # edit — silently reusing a stale model.)  The compiled ONNX is uploaded
-    # into CACHE_VOLUME and ``render_remote`` renders it; Modal never compiles.
+    # --- Compile on Modal (64-CPU container), key computed LOCALLY -------
+    # The cache key embeds the submodule git SHAs, and Modal containers have
+    # no ``.git`` (``_git_sha`` collapses to "unknown" there, so a
+    # remotely-derived key would never change on a code edit — silently
+    # reusing a stale model).  The local machine computes the canonical
+    # payload + key and hands both to ``compile_remote``, which compiles
+    # straight into CACHE_VOLUME under that key with CP-SAT fanned out
+    # across the container's 64 CPUs.
     #
-    # Reuse ``compile_config`` rather than calling ``compile_cached`` directly:
-    # the token vocab is screen-dependent and built when the vocab module is
-    # first imported, so ``apply_screen_env`` MUST run before that import.
-    # ``compile_config`` enforces that order (env first, then a deferred
-    # ``from .cache import compile_cached``); importing ``cache`` up here would
-    # build the vocab against the un-configured default screen and produce a
-    # model whose logits width disagrees with the renderer's embedding table.
-    from torchwright_doom.render.cli import compile_config
-
-    print(f"[local] compiling {config_path} locally (CPU)...", flush=True)
-    local_cache_dir = Path(
-        compile_config(config_path=config_path, verbose_compile=verbose_compile)[
-            "cache_dir"
-        ]
+    # Importing ``render.config`` here is safe: it has no dependency on the
+    # screen-sized token vocab (the import-order trap that forces
+    # ``compile_config`` to call ``apply_screen_env`` before touching
+    # ``render.cache``).
+    from torchwright_doom.render.config import (
+        cache_key_from_payload,
+        canonical_compile_payload,
+        load_render_config,
+        resolve_wad_path,
     )
-    cache_subdir = local_cache_dir.name
-    print(f"[local] uploading compiled ONNX -> CACHE_VOLUME:/{cache_subdir}", flush=True)
-    with CACHE_VOLUME.batch_upload(force=True) as batch:
-        batch.put_directory(str(local_cache_dir), f"/{cache_subdir}")
+
+    render_config = load_render_config(config_path)
+    wad_path = resolve_wad_path(render_config, base_dir=config_path.parent)
+    compile_payload = canonical_compile_payload(render_config, wad_path)
+    cache_subdir = cache_key_from_payload(compile_payload)
+
+    if _volume_has_compiled(cache_subdir):
+        print(f"[local] compile cache HIT CACHE_VOLUME:/{cache_subdir}", flush=True)
+    else:
+        print(
+            f"[local] compile cache MISS — compiling {config_path} on Modal "
+            f"({_COMPILE_CPUS} CPUs) -> CACHE_VOLUME:/{cache_subdir}",
+            flush=True,
+        )
+        compile_remote.remote(
+            str(remote_config), cache_subdir, compile_payload, verbose_compile
+        )
 
     run_id = (
         run_name
@@ -166,6 +240,7 @@ def main(
         compare_images=compare,
         png_zoom=png_zoom,
         verbose_compile=verbose_compile,
+        profile=profile,
     )
     print(f"[local] launching render_remote run_id={run_id} kwargs={kwargs}")
     result = render_remote.remote(run_id, kwargs, cache_subdir)

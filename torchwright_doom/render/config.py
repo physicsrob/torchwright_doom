@@ -127,7 +127,9 @@ def load_render_config(path: str | Path) -> RenderConfig:
     return cfg
 
 
-def resolve_wad_path(config: RenderConfig, *, base_dir: str | Path | None = None) -> Path:
+def resolve_wad_path(
+    config: RenderConfig, *, base_dir: str | Path | None = None
+) -> Path:
     wad = Path(config.wad)
     candidates = []
     if wad.is_absolute():
@@ -146,18 +148,27 @@ def resolve_wad_path(config: RenderConfig, *, base_dir: str | Path | None = None
 
 
 def compile_cache_dir(config: RenderConfig, wad_path: str | Path) -> Path:
-    return Path.home() / ".cache" / "torchwright_doom" / "compiled" / cache_key(
-        config, wad_path
+    return (
+        Path.home()
+        / ".cache"
+        / "torchwright_doom"
+        / "compiled"
+        / cache_key(config, wad_path)
     )
 
 
 def cache_key(config: RenderConfig, wad_path: str | Path) -> str:
-    payload = canonical_compile_payload(config, wad_path)
+    return cache_key_from_payload(canonical_compile_payload(config, wad_path))
+
+
+def cache_key_from_payload(payload: dict[str, Any]) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 
-def canonical_compile_payload(config: RenderConfig, wad_path: str | Path) -> dict[str, Any]:
+def canonical_compile_payload(
+    config: RenderConfig, wad_path: str | Path
+) -> dict[str, Any]:
     wad_path = Path(wad_path)
     return {
         "wad": str(wad_path.resolve()),
@@ -170,7 +181,9 @@ def canonical_compile_payload(config: RenderConfig, wad_path: str | Path) -> dic
         "screen": {"width": config.screen[0], "height": config.screen[1]},
         "git": {
             "torchwright_doom": _git_sha(Path(__file__).resolve().parents[2]),
-            "torchwright": _git_sha(Path(__file__).resolve().parents[3] / "torchwright"),
+            "torchwright": _git_sha(
+                Path(__file__).resolve().parents[3] / "torchwright"
+            ),
         },
     }
 
@@ -269,7 +282,11 @@ def _quote_bare_words(text: str) -> str:
             return
         lower = value.lower()
         if lower in ("true", "false", "none", "null"):
-            out.append({"true": "True", "false": "False", "none": "None", "null": "None"}[lower])
+            out.append(
+                {"true": "True", "false": "False", "none": "None", "null": "None"}[
+                    lower
+                ]
+            )
             return
         try:
             float(value)

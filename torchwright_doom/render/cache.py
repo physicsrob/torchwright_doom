@@ -25,9 +25,21 @@ def compile_cached(
     *,
     base_dir: str | Path | None = None,
     verbose: bool = False,
+    cache_dir: str | Path | None = None,
+    compile_payload: dict[str, Any] | None = None,
 ) -> Path:
+    """Compile ``config`` into the ONNX cache (skipping on a cache hit).
+
+    ``cache_dir`` / ``compile_payload`` exist for the Modal compile path:
+    the cache key embeds git SHAs that are unresolvable inside a Modal
+    container (no ``.git``), so the local entrypoint computes both and
+    hands them over — the container must never derive its own key.
+    """
     wad_path = resolve_wad_path(config, base_dir=base_dir)
-    cache_dir = compile_cache_dir(config, wad_path)
+    if cache_dir is None:
+        cache_dir = compile_cache_dir(config, wad_path)
+    else:
+        cache_dir = Path(cache_dir)
     onnx_path = cache_dir / "model.onnx"
     meta_path = cache_dir / "model.meta.json"
     if onnx_path.exists() and meta_path.exists():
@@ -55,17 +67,26 @@ def compile_cached(
         config=config,
         wad_path=wad_path,
         build_info=build_info,
+        compile_payload=compile_payload,
     )
     return cache_dir
 
 
-def load_cached_runtime(cache_dir: str | Path) -> OnnxTokenRuntime:
+def load_cached_runtime(
+    cache_dir: str | Path,
+    *,
+    enable_profiling: bool = False,
+    profile_dir: str | Path | None = None,
+) -> OnnxTokenRuntime:
     import os
 
-    providers = (
-        ["CPUExecutionProvider"] if os.environ.get("TWDOOM_FORCE_CPU") else None
+    providers = ["CPUExecutionProvider"] if os.environ.get("TWDOOM_FORCE_CPU") else None
+    return OnnxTokenRuntime(
+        Path(cache_dir) / "model.onnx",
+        providers=providers,
+        enable_profiling=enable_profiling,
+        profile_dir=profile_dir,
     )
-    return OnnxTokenRuntime(Path(cache_dir) / "model.onnx", providers=providers)
 
 
 def _write_render_meta(
@@ -74,6 +95,7 @@ def _write_render_meta(
     config: RenderConfig,
     wad_path: Path,
     build_info: dict[str, Any],
+    compile_payload: dict[str, Any] | None = None,
 ) -> None:
     from ..embedding import TOKEN_VOCAB
 
@@ -88,7 +110,13 @@ def _write_render_meta(
     payload = {
         **existing,
         "render_meta_format": "torchwright_doom.render.v1",
-        "compile_payload": canonical_compile_payload(config, wad_path),
+        # Prefer the handed-over payload: computed remotely it would carry
+        # "unknown" git SHAs (see compile_cached docstring).
+        "compile_payload": (
+            compile_payload
+            if compile_payload is not None
+            else canonical_compile_payload(config, wad_path)
+        ),
         "model": asdict(config.model),
         "screen": {"width": config.screen[0], "height": config.screen[1]},
         "n_layers": _read_n_layers_from_onnx_inputs(path.parent / "model.onnx"),

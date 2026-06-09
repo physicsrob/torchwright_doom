@@ -78,7 +78,14 @@ def _commit(past, target: int):
 class OnnxTokenRuntime:
     """Token-I/O ONNX wrapper with CPU fallback and CUDA I/O binding."""
 
-    def __init__(self, onnx_path: str | Path, providers=None) -> None:
+    def __init__(
+        self,
+        onnx_path: str | Path,
+        providers=None,
+        *,
+        enable_profiling: bool = False,
+        profile_dir: str | Path | None = None,
+    ) -> None:
         import os
 
         import onnxruntime as ort
@@ -89,6 +96,29 @@ class OnnxTokenRuntime:
         if os.environ.get("TWDOOM_NO_OPT"):  # DIAGNOSTIC: disable ORT graph opt
             so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
             print("[onnxruntime] DIAGNOSTIC: graph optimization DISABLED", flush=True)
+        self._profiling = bool(enable_profiling)
+        if self._profiling:
+            # Opt-in measurement path (the CUDA-graph work, phase 1).  Turn on
+            # ORT's per-node profiler (writes a JSON trace at end_profiling) and
+            # drop the session log to INFO (severity 1) so the "N Memcpy nodes
+            # added ... unable to run CUDA graph" placement messages and the
+            # CPU/CUDA node assignments are surfaced to stdout.  Profiling adds
+            # per-op timing overhead, so the absolute numbers are inflated; the
+            # relative split and the Memcpy node names are what we read off it.
+            so.enable_profiling = True
+            if profile_dir is not None:
+                prefix = str(Path(profile_dir) / "ort_profile")
+                so.profile_file_prefix = prefix
+            so.log_severity_level = 1
+            try:
+                ort.set_default_logger_severity(1)
+            except Exception:
+                pass
+            print(
+                "[onnxruntime] PROFILING enabled (log_severity_level=1); "
+                "profile JSON written at end_profiling()",
+                flush=True,
+            )
         try:
             self._session = ort.InferenceSession(
                 str(self.onnx_path),
@@ -340,6 +370,16 @@ class OnnxTokenRuntime:
             cache.v[i][base : base + n_new] = delta_v_outs[i]
         cache.length = base + n_new
         return logits, cache
+
+    def end_profiling(self) -> str | None:
+        """Flush ORT's profile trace and return the JSON path (None if profiling
+        was never enabled).  Safe to call once; ORT closes the trace file here."""
+        if not getattr(self, "_profiling", False):
+            return None
+        path = self._session.end_profiling()
+        self._profiling = False
+        print(f"[onnxruntime] profile trace written to {path}", flush=True)
+        return str(path)
 
     def eval(self) -> "OnnxTokenRuntime":
         return self
