@@ -31,6 +31,14 @@ class ModelConfig:
     assume_zero_init: bool = True
     max_seq_len: int = 65536
     optimize: int = 0
+    # Static KV-cache slot count S baked into the compiled ONNX (the
+    # arange_S mask constant + the past_K_i shapes).  A compiled model
+    # hard-caps at prefill + decode <= S.  12288 covers the e1m1 frame
+    # (~3613 prefill + 8000 decode + headroom); the L4 gate config uses a
+    # smaller stride.  Must be <= max_seq_len.  NOTE: adding this field
+    # busts every compile-cache key once (it enters the payload via
+    # asdict(config.model)) — intended.
+    cache_stride: int = 12288
 
 
 @dataclass(frozen=True)
@@ -111,6 +119,7 @@ def load_render_config(path: str | Path) -> RenderConfig:
             assume_zero_init=bool(model.get("assume_zero_init", True)),
             max_seq_len=int(model.get("max_seq_len", 65536)),
             optimize=int(model.get("optimize", 0)),
+            cache_stride=int(model.get("cache_stride", 12288)),
         ),
         region=RegionConfig(
             x1=float(region.get("x1", 627.2)),
@@ -190,6 +199,11 @@ def canonical_compile_payload(
 
 def _validate_config(config: RenderConfig) -> None:
     screen_dims_for_scale(config.model.scale)
+    if not (1 <= config.model.cache_stride <= config.model.max_seq_len):
+        raise ValueError(
+            f"model.cache_stride {config.model.cache_stride} must be in "
+            f"[1, max_seq_len={config.model.max_seq_len}]"
+        )
     if len(config.textures.wall) != N_WALL_TEXTURES:
         raise ValueError(
             "this graph still requires exactly "

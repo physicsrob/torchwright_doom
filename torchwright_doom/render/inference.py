@@ -38,19 +38,25 @@ class RolloutResult:
 
 @dataclass
 class KVCache:
-    """Runtime-owned KV cache for the sequence-major ONNX delta protocol.
+    """Runtime-owned static KV cache for the sequence-major ONNX protocol.
 
-    One preallocated buffer per layer per side, shape ``(max_len, n_heads,
-    d_head)``.  The active prefix is ``k[i][:length]`` (bound as ``past_K_i``)
-    and the write region is ``k[i][length:length+n_new]`` (bound as the
-    ``delta_K_i`` output).  A speculative reject just lowers ``length`` — the
-    rows past it are dead and overwritten on the next write, with no copy.
+    One preallocated FULL-S buffer per layer per side, shape
+    ``(cache_stride, n_heads, d_head)``, **zero-initialized** — the graph's
+    causal mask gives slots at positions > cache_position softmax weight
+    exactly 0.0, and ``0 * NaN`` from a ``torch.empty`` tail would still be
+    NaN.  The whole buffer is bound as ``past_K_i`` every step (static
+    shape + stable address: the CUDA-graph replay requirements); the
+    committed prefix is ``k[i][:length]`` and the graph re-injects the new
+    rows in-graph via ScatterND.  The runtime persists each step's
+    ``delta_K_i`` output into ``k[i][length:length+n_new]`` after the run.
+    A speculative reject just lowers ``length`` — the rows past it are
+    masked (exactly-zero weight) and overwritten by a later write.
     """
 
-    k: list[torch.Tensor]  # each (max_len, n_heads, d_head)
+    k: list[torch.Tensor]  # each (cache_stride, n_heads, d_head)
     v: list[torch.Tensor]
     length: int
-    max_len: int
+    max_len: int  # == cache_stride (the static allocation)
 
 
 def _cache_len(past) -> int:
@@ -163,7 +169,16 @@ class OnnxTokenRuntime:
         self._n_layers = sum(1 for name in inputs if name.startswith("past_K_"))
         if self._n_layers <= 0:
             raise ValueError(f"{self.onnx_path}: no past_K_* inputs")
-        # past_K_i is sequence-major (n_past, n_heads, d_head): heads on axis 1.
+        # past_K_i is sequence-major with a STATIC slot count: (S, nh, d_head).
+        stride_dim = inputs["past_K_0"].shape[0]
+        if not isinstance(stride_dim, int):
+            raise ValueError(
+                f"{self.onnx_path}: past_K_0 first dim is {stride_dim!r}, "
+                f"expected a static int — this is a pre-static-cache "
+                f"(past_len/Concat) artifact; bust the compile-cache entry and "
+                f"recompile with the current exporter"
+            )
+        self._cache_stride = int(stride_dim)
         self._per_layer_n_heads = [
             int(inputs[f"past_K_{i}"].shape[1]) for i in range(self._n_layers)
         ]
@@ -172,11 +187,15 @@ class OnnxTokenRuntime:
         _bytes_per_tok = _total_heads * self._d_head * 2 * 4  # K+V, float32
         print(
             f"[kvcache] layers={self._n_layers} total_heads={_total_heads} "
-            f"d_head={self._d_head} per_layer_heads={self._per_layer_n_heads} "
+            f"d_head={self._d_head} cache_stride={self._cache_stride} "
+            f"per_layer_heads={self._per_layer_n_heads} "
             f"bytes/token={_bytes_per_tok} ({_bytes_per_tok / 1e6:.3f} MB); "
-            f"tokens that fit in 50GB={int(50e9 / max(1, _bytes_per_tok))}",
+            f"static cache total={self._cache_stride * _bytes_per_tok / 1e9:.2f} GB",
             flush=True,
         )
+        # Persistent n_new=1 decode binding (built lazily per cache object);
+        # see _decode_binding_for.
+        self._decode_binding: tuple[int, Any] | None = None
         # Outputs are the per-layer KV *deltas* (new rows only); the runtime
         # writes them into its owned cache tail (no full-cache output).
         self._out_names = ["logits"]
@@ -198,28 +217,41 @@ class OnnxTokenRuntime:
         self.input_names = ["token_ids"]
 
     def empty_past(self, max_len: int) -> KVCache:
-        """Allocate the single runtime-owned cache for a planned run.
+        """Allocate the single runtime-owned static cache for a planned run.
 
-        ``max_len`` is required (no incremental growth): size it from
-        ``len(prefill_ids) + max_positions - 1`` plus any speculative-draft
-        headroom.  Each layer gets one sequence-major ``(max_len, n_heads,
-        d_head)`` buffer per side, on the inference device.
+        ``max_len`` is the run's DEMAND (size it from ``len(prefill_ids) +
+        max_positions - 1`` plus any speculative-draft headroom); the actual
+        allocation is always the model's full ``cache_stride`` — the static
+        ``past_K_i`` input shapes reject anything else.  Zero-initialized
+        (load-bearing: masked slots are read with weight exactly 0.0, and
+        ``0 * NaN = NaN``).
         """
         if max_len is None:
             raise ValueError(
                 "OnnxTokenRuntime.empty_past requires an explicit max_len "
                 "(size from len(prefill_ids) + max_positions - 1 [+ draft_window])"
             )
+        if max_len > self._cache_stride:
+            raise RuntimeError(
+                f"run demands up to {max_len} cache rows but the compiled "
+                f"model's static cache_stride is {self._cache_stride}; "
+                f"recompile with a larger model.cache_stride or lower "
+                f"max_positions"
+            )
         device = self._device
+        S = self._cache_stride
         k = [
-            torch.empty(max_len, nh, self._d_head, device=device)
+            torch.zeros(S, nh, self._d_head, device=device)
             for nh in self._per_layer_n_heads
         ]
         v = [
-            torch.empty(max_len, nh, self._d_head, device=device)
+            torch.zeros(S, nh, self._d_head, device=device)
             for nh in self._per_layer_n_heads
         ]
-        return KVCache(k=k, v=v, length=0, max_len=max_len)
+        # A fresh cache invalidates any persistent decode binding built for
+        # a prior cache's buffers.
+        self._decode_binding = None
+        return KVCache(k=k, v=v, length=0, max_len=S)
 
     def step(self, inputs: torch.Tensor, cache: KVCache, past_len: int | None = None):
         if not isinstance(cache, KVCache):
@@ -257,14 +289,15 @@ class OnnxTokenRuntime:
         )
         feeds: dict[str, Any] = {
             "token_ids": token_ids,
-            "past_len": np.array(past_len, dtype=np.int64),
+            "cache_position": np.arange(base, base + n_new, dtype=np.int64),
         }
         for i in range(self._n_layers):
+            # The static past_K_i input shape requires the FULL S-row buffer.
             feeds[f"past_K_{i}"] = (
-                cache.k[i][:base].detach().cpu().numpy().astype("float32", copy=False)
+                cache.k[i].detach().cpu().numpy().astype("float32", copy=False)
             )
             feeds[f"past_V_{i}"] = (
-                cache.v[i][:base].detach().cpu().numpy().astype("float32", copy=False)
+                cache.v[i].detach().cpu().numpy().astype("float32", copy=False)
             )
         results = self._session.run(self._out_names, feeds)
         logits = torch.from_numpy(results[0])
@@ -276,57 +309,133 @@ class OnnxTokenRuntime:
         cache.length = base + n_new
         return logits, cache
 
+    def _bind_cuda(self, io, name, tensor, kind, device_id, dtype):
+        import numpy as np
+
+        bind = io.bind_input if kind == "in" else io.bind_output
+        bind(
+            name,
+            device_type="cuda",
+            device_id=device_id,
+            element_type=dtype if dtype is not None else np.float32,
+            shape=tuple(tensor.shape),
+            buffer_ptr=tensor.data_ptr(),
+        )
+
+    def _decode_binding_for(self, cache: KVCache):
+        """Build (once per cache) the persistent n_new=1 decode binding.
+
+        Every tensor the decode step touches — token_ids (1,),
+        cache_position (1,), the full static past buffers, the delta
+        outputs, logits — is allocated once and bound once; later steps
+        only overwrite buffer CONTENTS.  Stable addresses + static shapes
+        are the CUDA-graph replay requirements; rebuilding the io-binding
+        per step (the old pattern) breaks them and costs ~ms of Python
+        per step.
+        """
+        import numpy as np
+
+        if self._decode_binding is not None and self._decode_binding[0] == id(cache):
+            return self._decode_binding[1]
+
+        device_id = int(self._device.index or 0)
+        io = self._session.io_binding()
+        token_ids = torch.zeros(1, dtype=torch.int64, device=self._device)
+        cache_position = torch.zeros(1, dtype=torch.int64, device=self._device)
+        self._bind_cuda(io, "token_ids", token_ids, "in", device_id, np.int64)
+        self._bind_cuda(io, "cache_position", cache_position, "in", device_id, np.int64)
+        delta_k: list[torch.Tensor] = []
+        delta_v: list[torch.Tensor] = []
+        for i in range(self._n_layers):
+            self._bind_cuda(io, f"past_K_{i}", cache.k[i], "in", device_id, np.float32)
+            self._bind_cuda(io, f"past_V_{i}", cache.v[i], "in", device_id, np.float32)
+            nh = cache.k[i].shape[1]
+            dk = torch.empty(1, nh, self._d_head, device=self._device)
+            dv = torch.empty(1, nh, self._d_head, device=self._device)
+            delta_k.append(dk)
+            delta_v.append(dv)
+            self._bind_cuda(io, f"delta_K_{i}", dk, "out", device_id, np.float32)
+            self._bind_cuda(io, f"delta_V_{i}", dv, "out", device_id, np.float32)
+        logits = torch.empty(1, self._logits_width, device=self._device)
+        self._bind_cuda(io, "logits", logits, "out", device_id, np.float32)
+
+        binding = {
+            "io": io,
+            # Keep the cache alive: the io-binding holds RAW pointers into
+            # cache.k/cache.v; without this reference a GC'd cache + id()
+            # reuse would alias freed device memory.
+            "cache": cache,
+            "token_ids": token_ids,
+            "cache_position": cache_position,
+            "delta_k": delta_k,
+            "delta_v": delta_v,
+            "logits": logits,
+        }
+        self._decode_binding = (id(cache), binding)
+        return binding
+
+    def _run_iobinding(self, io) -> None:
+        """All bound-buffer writes ordered, then run.
+
+        ORT's io-binding Run does NOT synchronize inputs and its compute
+        stream is cudaStreamNonBlocking — no implicit ordering with torch's
+        stream.  The previous step's delta->cache persists and this step's
+        token/cache_position writes are async torch ops, so an explicit
+        stream sync before the run is REQUIRED or the run (and, later, the
+        captured-graph replay) can read a cache slot mid-copy: intermittent
+        stale tokens.  (Sharing one stream via user_compute_stream is the
+        later optimization; unexercised with capture as of 1.26.)
+        """
+        torch.cuda.current_stream().synchronize()
+        self._session.run_with_iobinding(io)
+
     def _step_cuda_io(self, inputs, cache: KVCache, past_len: int, n_new: int, base: int):
         import numpy as np
 
+        if n_new == 1:
+            # Decode: persistent binding, contents-only updates.
+            b = self._decode_binding_for(cache)
+            b["token_ids"].copy_(
+                inputs.detach().reshape(-1).to(device=self._device, dtype=torch.int64)
+            )
+            b["cache_position"].fill_(base)
+            self._run_iobinding(b["io"])
+            for i in range(self._n_layers):
+                cache.k[i][base : base + 1] = b["delta_k"][i]
+                cache.v[i][base : base + 1] = b["delta_v"][i]
+            cache.length = base + 1
+            # NOTE: the returned logits tensor is the persistent buffer — it
+            # is overwritten by the NEXT decode step.  Both rollout loops
+            # argmax it before stepping again.
+            return b["logits"], cache
+
+        # Prefill / speculative batches (variable n_new): per-call binding,
+        # uncaptured path.  The past binds are still the FULL static buffers.
         token_ids = (
             inputs.detach()
             .reshape(-1)
             .to(device=self._device, dtype=torch.int64)
             .contiguous()
         )
+        cache_position = torch.arange(
+            base, base + n_new, dtype=torch.int64, device=self._device
+        )
         io = self._session.io_binding()
         device_id = int(self._device.index or 0)
-        io.bind_input(
-            "token_ids",
-            device_type="cuda",
-            device_id=device_id,
-            element_type=np.int64,
-            shape=tuple(token_ids.shape),
-            buffer_ptr=token_ids.data_ptr(),
-        )
-        io.bind_cpu_input("past_len", np.array(past_len, dtype=np.int64))
+        self._bind_cuda(io, "token_ids", token_ids, "in", device_id, np.int64)
+        self._bind_cuda(io, "cache_position", cache_position, "in", device_id, np.int64)
 
         delta_k_outs: list[torch.Tensor] = []
         delta_v_outs: list[torch.Tensor] = []
         for i in range(self._n_layers):
-            # past_K/past_V: contiguous sequence-major prefix of the owned
-            # cache, bound read-only as inputs.
-            past_k = cache.k[i][:base]
-            past_v = cache.v[i][:base]
-            io.bind_input(
-                f"past_K_{i}",
-                device_type="cuda",
-                device_id=device_id,
-                element_type=np.float32,
-                shape=tuple(past_k.shape),
-                buffer_ptr=past_k.data_ptr(),
-            )
-            io.bind_input(
-                f"past_V_{i}",
-                device_type="cuda",
-                device_id=device_id,
-                element_type=np.float32,
-                shape=tuple(past_v.shape),
-                buffer_ptr=past_v.data_ptr(),
-            )
+            self._bind_cuda(io, f"past_K_{i}", cache.k[i], "in", device_id, np.float32)
+            self._bind_cuda(io, f"past_V_{i}", cache.v[i], "in", device_id, np.float32)
             # The delta outputs go to SEPARATE per-step buffers and are copied
-            # into the cache tail after the run.  Binding an output into a slice
-            # of the SAME allocation that backs the past_K/past_V inputs is
-            # input/output aliasing, which the CUDA EP does not handle — it
-            # corrupts the past read (degenerate output).  The copy is O(n_new),
-            # not O(cache_len), so the per-step realloc/copy the cache fix
-            # removed does not come back.
+            # into the cache slots after the run.  Binding an output into a
+            # slice of the SAME allocation that backs the past_K/past_V inputs
+            # is input/output aliasing, which the CUDA EP does not handle — it
+            # corrupts the past read (degenerate output).  The copy is
+            # O(n_new), not O(cache_len).
             nh = cache.k[i].shape[1]
             dk = torch.empty(
                 n_new, nh, self._d_head, dtype=torch.float32, device=self._device
@@ -336,39 +445,18 @@ class OnnxTokenRuntime:
             )
             delta_k_outs.append(dk)
             delta_v_outs.append(dv)
-            io.bind_output(
-                f"delta_K_{i}",
-                device_type="cuda",
-                device_id=device_id,
-                element_type=np.float32,
-                shape=tuple(dk.shape),
-                buffer_ptr=dk.data_ptr(),
-            )
-            io.bind_output(
-                f"delta_V_{i}",
-                device_type="cuda",
-                device_id=device_id,
-                element_type=np.float32,
-                shape=tuple(dv.shape),
-                buffer_ptr=dv.data_ptr(),
-            )
+            self._bind_cuda(io, f"delta_K_{i}", dk, "out", device_id, np.float32)
+            self._bind_cuda(io, f"delta_V_{i}", dv, "out", device_id, np.float32)
 
         logits = torch.empty(
             (n_new, self._logits_width),
             dtype=torch.float32,
             device=self._device,
         )
-        io.bind_output(
-            "logits",
-            device_type="cuda",
-            device_id=device_id,
-            element_type=np.float32,
-            shape=tuple(logits.shape),
-            buffer_ptr=logits.data_ptr(),
-        )
+        self._bind_cuda(io, "logits", logits, "out", device_id, np.float32)
 
-        self._session.run_with_iobinding(io)
-        # Copy the freshly computed deltas into the owned cache tail (the run
+        self._run_iobinding(io)
+        # Copy the freshly computed deltas into the owned cache slots (the run
         # is complete, so there is no input/output aliasing during execution).
         for i in range(self._n_layers):
             cache.k[i][base : base + n_new] = delta_k_outs[i]

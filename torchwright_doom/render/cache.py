@@ -55,6 +55,7 @@ def compile_cached(
         d_hidden=config.model.d_hidden,
         max_layers=config.model.max_layers,
         max_seq_len=config.model.max_seq_len,
+        cache_stride=config.model.cache_stride,
         trim_heads=config.model.trim_heads,
         optimize=config.model.optimize,
         assume_zero_init=config.model.assume_zero_init,
