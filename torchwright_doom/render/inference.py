@@ -234,6 +234,19 @@ class OnnxTokenRuntime:
         )
         self.input_names = ["token_ids"]
 
+    @property
+    def max_safe_prefill_chunk(self) -> int:
+        """Largest prefill chunk whose per-layer transients stay int32-indexable.
+
+        The widest layer materializes (n_heads, chunk, S) attention logits;
+        past 2^31-1 elements, CUDA kernels that index with int32 write
+        through overflowed offsets — observed as an Xid 31 MMU fault on a
+        B200 at S=65536, chunk=1024, nh=128 (8.6e9 elements).  Decode
+        (n_new=1) is far below the limit at any realistic S.
+        """
+        widest = max(self._per_layer_n_heads)
+        return max(1, (2**31 - 1) // (widest * self._cache_stride))
+
     def empty_past(self, max_len: int) -> KVCache:
         """Allocate the single runtime-owned static cache for a planned run.
 
@@ -575,6 +588,16 @@ def run_prefill(
     if not prefill_ids:
         raise ValueError("prefill_ids must be non-empty")
     chunk_size = max(1, int(chunk_size))
+    # Clamp to the runtime's int32-indexability bound (ONNX runtimes expose
+    # it; the in-process reference has no such limit).
+    safe_chunk = getattr(compiled, "max_safe_prefill_chunk", None)
+    if safe_chunk is not None and chunk_size > safe_chunk:
+        print(
+            f"[{label}] prefill chunk {chunk_size} -> {safe_chunk} "
+            f"(int32 transient-indexability clamp at this cache_stride)",
+            flush=True,
+        )
+        chunk_size = safe_chunk
     n_chunks = (len(prefill_ids) + chunk_size - 1) // chunk_size
     if progress_every:
         print(
