@@ -61,10 +61,21 @@ def run_config(
     verbose_compile: bool = False,
     cache_dir: str | Path | None = None,
     profile: bool = False,
+    attention_buckets: str | list[int] | None = None,
 ) -> dict[str, Any]:
     config_path = Path(config_path)
     config = load_render_config(config_path)
     apply_screen_env(config)
+    # Attention-window bucket table (stride bucketing) — a RUNTIME knob:
+    # the symbolic-dim graph serves any table without recompiling, so this
+    # deliberately does NOT enter the compile-cache key.  None = quarters
+    # of cache_stride.  CLI hands it over as a comma-separated string.
+    if isinstance(attention_buckets, str):
+        attention_buckets = (
+            [int(tok) for tok in attention_buckets.replace(",", " ").split()]
+            if attention_buckets.strip()
+            else None
+        )
 
     from ..vocab import DONE
     from . import artifacts, compare as compare_mod
@@ -111,7 +122,10 @@ def run_config(
         )
     print(f"[run] loading ONNX runtime from {cache_dir}", flush=True)
     compiled = load_cached_runtime(
-        cache_dir, enable_profiling=profile, profile_dir=out_dir if profile else None
+        cache_dir,
+        enable_profiling=profile,
+        profile_dir=out_dir if profile else None,
+        attention_buckets=attention_buckets,
     )
     print("[run] ONNX runtime ready", flush=True)
 
@@ -515,6 +529,14 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="enable ORT per-node profiling + INFO logging; write trace + "
         "summary to out_dir (phase-1 CUDA-graph measurement)",
+    )
+    pr.add_argument(
+        "--attention-buckets",
+        default=None,
+        dest="attention_buckets",
+        help="comma-separated attention-window bucket table (stride "
+        "bucketing), e.g. '16384,32768,49152,65536'; runtime knob, no "
+        "recompile; default = quarters of cache_stride",
     )
 
     args = p.parse_args(argv)

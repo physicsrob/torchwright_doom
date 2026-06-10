@@ -78,6 +78,7 @@ def load_cached_runtime(
     *,
     enable_profiling: bool = False,
     profile_dir: str | Path | None = None,
+    attention_buckets: list[int] | None = None,
 ) -> OnnxTokenRuntime:
     import os
 
@@ -87,6 +88,7 @@ def load_cached_runtime(
         providers=providers,
         enable_profiling=enable_profiling,
         profile_dir=profile_dir,
+        attention_buckets=attention_buckets,
     )
 
 

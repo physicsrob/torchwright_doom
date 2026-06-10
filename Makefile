@@ -25,11 +25,16 @@ RENDER_DRAFT_WINDOW ?= 8
 PREFILL_CHUNK_SIZE ?= 128
 RENDER_PROGRESS_EVERY ?= 250
 PNG_ZOOM ?= 8
+# Attention-window bucket table (stride bucketing): comma-separated S_eff
+# list, e.g. RENDER_ATTENTION_BUCKETS=16384,32768,49152,65536.  A RUNTIME
+# knob (no recompile); empty = quarters of the model's cache_stride.
+RENDER_ATTENTION_BUCKETS ?=
 
 _RENDER_VERBOSE_COMPILE := $(if $(VERBOSE_COMPILE),--verbose-compile)
 _RENDER_PNG := $(if $(PNG),--png)
 _RENDER_COMPARE := $(if $(COMPARE),--compare)
 _RENDER_PROFILE := $(if $(PROFILE),--profile)
+_RENDER_BUCKETS := $(if $(RENDER_ATTENTION_BUCKETS),--attention-buckets $(RENDER_ATTENTION_BUCKETS))
 _RENDER_COMPILE_ARGS = $(strip \
 	--config $(CONFIG) \
 	$(_RENDER_VERBOSE_COMPILE) \
@@ -51,6 +56,7 @@ _RENDER_RUN_ARGS = $(strip \
 	$(_RENDER_COMPARE) \
 	$(_RENDER_VERBOSE_COMPILE) \
 	$(_RENDER_PROFILE) \
+	$(_RENDER_BUCKETS) \
 )
 _RENDER_MODAL_ARGS = $(strip \
 	$(_RENDER_RUN_ARGS) \

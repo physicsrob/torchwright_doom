@@ -29,14 +29,20 @@ print(f"loading {ONNX} ...")
 sess = onnxruntime.InferenceSession(ONNX, providers=["CPUExecutionProvider"])
 inputs = {i.name: i for i in sess.get_inputs()}
 n_layers = sum(1 for n in inputs if n.startswith("past_K_"))
-nh = [int(inputs[f"past_K_{i}"].shape[0]) for i in range(n_layers)]
+# Current contract: past_K_i is sequence-major (cache_slots, nh, d_head)
+# with a symbolic slot dim; bind a zero prefix just covering the prefill.
+nh = [int(inputs[f"past_K_{i}"].shape[1]) for i in range(n_layers)]
 dh = int(inputs["past_K_0"].shape[2])
 print(f"session loaded: {n_layers} layers, d_head={dh}, vocab in logits")
 
-feeds = {"token_ids": ids, "past_len": np.array(0, dtype=np.int64)}
+s_eff = len(ids)
+feeds = {
+    "token_ids": ids,
+    "cache_position": np.arange(len(ids), dtype=np.int64),
+}
 for i in range(n_layers):
-    feeds[f"past_K_{i}"] = np.zeros((nh[i], 0, dh), dtype=np.float32)
-    feeds[f"past_V_{i}"] = np.zeros((nh[i], 0, dh), dtype=np.float32)
+    feeds[f"past_K_{i}"] = np.zeros((s_eff, nh[i], dh), dtype=np.float32)
+    feeds[f"past_V_{i}"] = np.zeros((s_eff, nh[i], dh), dtype=np.float32)
 
 logits = sess.run(["logits"], feeds)[0]
 print(f"prefill logits {logits.shape}, finite={bool(np.isfinite(logits).all())}")

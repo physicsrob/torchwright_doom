@@ -59,6 +59,32 @@ class KVCache:
     max_len: int  # == cache_stride (the static allocation)
 
 
+def _resolve_buckets(attention_buckets: list[int] | None, cache_stride: int) -> list[int]:
+    """Normalize the attention-window bucket table.
+
+    Default (None): quarters of the stride — e.g. S=65536 ->
+    [16384, 32768, 49152, 65536].  Invariants enforced: sorted, unique,
+    each in [1, cache_stride], and the LAST bucket equals cache_stride
+    (the always-covering fallback; it is also what makes the degenerate
+    table [cache_stride] reproduce the pre-bucketing behavior, ids
+    "1"/"2", byte-for-byte).
+    """
+    if attention_buckets is None:
+        buckets = sorted({max(1, (cache_stride * q) // 4) for q in (1, 2, 3, 4)})
+    else:
+        buckets = sorted({int(b) for b in attention_buckets})
+        if not buckets:
+            raise ValueError("attention_buckets must be non-empty")
+        if buckets[0] < 1 or buckets[-1] > cache_stride:
+            raise ValueError(
+                f"attention_buckets {buckets} outside [1, cache_stride="
+                f"{cache_stride}]"
+            )
+        if buckets[-1] != cache_stride:
+            buckets.append(cache_stride)
+    return buckets
+
+
 def _cache_len(past) -> int:
     """Logical committed length across the two cache representations the
     generic rollouts thread: the owned :class:`KVCache` (production ONNX
@@ -95,6 +121,7 @@ class OnnxTokenRuntime:
         *,
         enable_profiling: bool = False,
         profile_dir: str | Path | None = None,
+        attention_buckets: list[int] | None = None,
     ) -> None:
         import os
 
@@ -183,47 +210,79 @@ class OnnxTokenRuntime:
             else torch.device("cpu")
         )
 
+        # The render meta sidecar (model.meta.json) is loaded BEFORE cache
+        # topology discovery: with the symbolic cache_slots input dim the
+        # full stride S is only knowable from meta["model"]["cache_stride"].
+        meta_path = self.onnx_path.with_suffix(".meta.json")
+        self.metadata = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+
         inputs = {inp.name: inp for inp in self._session.get_inputs()}
         self._n_layers = sum(1 for name in inputs if name.startswith("past_K_"))
         if self._n_layers <= 0:
             raise ValueError(f"{self.onnx_path}: no past_K_* inputs")
-        # past_K_i is sequence-major with a STATIC slot count: (S, nh, d_head).
+        # past_K_i is sequence-major (cache_slots, nh, d_head) with a SYMBOLIC
+        # slot dim — the bound prefix length S_eff (stride bucketing).  The
+        # full stride S comes from the meta sidecar; old static-dim artifacts
+        # still resolve from the dim itself (and cannot bucket — their baked
+        # mask is full-width).
+        from torchwright.compiler.onnx_load import discover_cache_stride
+
         stride_dim = inputs["past_K_0"].shape[0]
-        if not isinstance(stride_dim, int):
-            raise ValueError(
-                f"{self.onnx_path}: past_K_0 first dim is {stride_dim!r}, "
-                f"expected a static int — this is a pre-static-cache "
-                f"(past_len/Concat) artifact; bust the compile-cache entry and "
-                f"recompile with the current exporter"
-            )
-        self._cache_stride = int(stride_dim)
+        self._symbolic_cache_dim = not isinstance(stride_dim, int)
+        # Stride source: the render meta nests it under "model" (asdict of
+        # ModelConfig); a bare torchwright token export carries it top-level.
+        sidecar_stride = (self.metadata.get("model") or {}).get(
+            "cache_stride"
+        ) or self.metadata.get("cache_stride")
+        self._cache_stride = discover_cache_stride(
+            inputs, sidecar_stride, self.onnx_path
+        )
         self._per_layer_n_heads = [
             int(inputs[f"past_K_{i}"].shape[1]) for i in range(self._n_layers)
         ]
         self._d_head = int(inputs["past_K_0"].shape[2])
+        # Attention-window buckets (sorted, last == cache_stride): each pass
+        # binds the smallest bucket covering committed length + pass width,
+        # so early-frame steps pay small-S_eff attention while the cache
+        # keeps its full capacity.  A runtime knob — the symbolic-dim graph
+        # serves any table without recompiling.  Old static-dim artifacts
+        # are forced to the degenerate single bucket.
+        self._buckets = _resolve_buckets(
+            attention_buckets if self._symbolic_cache_dim else None,
+            self._cache_stride,
+        )
+        if not self._symbolic_cache_dim and attention_buckets:
+            print(
+                "[kvcache] WARNING: static-dim artifact cannot stride-bucket; "
+                "ignoring attention_buckets (recompile to bucket)",
+                flush=True,
+            )
         _total_heads = sum(self._per_layer_n_heads)
         _bytes_per_tok = _total_heads * self._d_head * 2 * 4  # K+V, float32
         print(
             f"[kvcache] layers={self._n_layers} total_heads={_total_heads} "
             f"d_head={self._d_head} cache_stride={self._cache_stride} "
+            f"buckets={self._buckets} "
             f"per_layer_heads={self._per_layer_n_heads} "
             f"bytes/token={_bytes_per_tok} ({_bytes_per_tok / 1e6:.3f} MB); "
             f"static cache total={self._cache_stride * _bytes_per_tok / 1e9:.2f} GB",
             flush=True,
         )
-        # Persistent n_new=1 decode binding (built lazily per cache object);
-        # see _decode_binding_for.
-        self._decode_binding: tuple[int, Any] | None = None
-        # Persistent fixed-width batch binding for speculative-decode verify
-        # steps: variable draft batches (n_new in 2..draft_window+1) are
-        # PADDED to this width so one captured graph serves them all (a
-        # captured CUDA graph replays exactly one shape).  Pad rows scatter
-        # into slots beyond the committed length — masked to exactly-zero
-        # weight for every real query, outputs sliced off, deltas not
-        # persisted.  Must be >= draft_window+1 or wide batches fall back to
-        # the uncaptured dynamic path.
+        # Persistent bindings, one per (cache, S_eff, width) — width 1 is the
+        # pure-decode bucket, width _batch_bucket_width the padded spec-verify
+        # bucket (variable draft batches, n_new in 2..draft_window+1, are
+        # PADDED to it so one captured graph serves them all; pad rows
+        # scatter into slots beyond the committed length — masked to
+        # exactly-zero weight for every real query, outputs sliced off,
+        # deltas not persisted.  Must be >= draft_window+1 or wide batches
+        # fall back to the uncaptured dynamic path).  Built lazily; each
+        # (S_eff, width) pair captures its own CUDA graph on first use.
         self._batch_bucket_width = 9
-        self._batch_binding: tuple[int, Any] | None = None
+        self._bindings: dict[tuple[int, int, int], dict] = {}
+        # gpu_graph_id -> (S_eff, width) registry: a captured id must never
+        # run with a second shape (ORT would replay the baked one — silent
+        # wrong results); ORT does NOT cross-check this, the runtime does.
+        self._graph_id_shapes: dict[str, tuple[int, int]] = {}
         # Session-lifetime static cache, allocated on first empty_past and
         # zero-reset (never reallocated) on later calls — captured CUDA
         # graphs bake the buffer addresses.
@@ -233,9 +292,6 @@ class OnnxTokenRuntime:
         self._out_names = ["logits"]
         for i in range(self._n_layers):
             self._out_names += [f"delta_K_{i}", f"delta_V_{i}"]
-
-        meta_path = self.onnx_path.with_suffix(".meta.json")
-        self.metadata = json.loads(meta_path.read_text()) if meta_path.exists() else {}
         logits_shape = self._session.get_outputs()[0].shape
         self._logits_width = int(
             self.metadata.get("n_vocab_rows")
@@ -248,18 +304,53 @@ class OnnxTokenRuntime:
         )
         self.input_names = ["token_ids"]
 
-    @property
-    def max_safe_prefill_chunk(self) -> int:
+    def max_safe_prefill_chunk(self, planned_rows: int | None = None) -> int:
         """Largest prefill chunk whose per-layer transients stay int32-indexable.
 
-        The widest layer materializes (n_heads, chunk, S) attention logits;
-        past 2^31-1 elements, CUDA kernels that index with int32 write
-        through overflowed offsets — observed as an Xid 31 MMU fault on a
-        B200 at S=65536, chunk=1024, nh=128 (8.6e9 elements).  Decode
+        The widest layer materializes (n_heads, chunk, S_eff) attention
+        logits; past 2^31-1 elements, CUDA kernels that index with int32
+        write through overflowed offsets — observed as an Xid 31 MMU fault
+        on a B200 at S=65536, chunk=1024, nh=128 (8.6e9 elements).  Decode
         (n_new=1) is far below the limit at any realistic S.
+
+        Bucket-aware: ``planned_rows`` (the whole prefill length) picks the
+        prefix bucket the prefill will bind, and the clamp scales with that
+        S_eff — e.g. 255 rows at S_eff=65536 but 1023 at 16384 (equal-cost
+        chunks, ~4x fewer of them).  None = the conservative full stride.
         """
         widest = max(self._per_layer_n_heads)
-        return max(1, (2**31 - 1) // (widest * self._cache_stride))
+        s_eff = (
+            self._bucket_for(planned_rows) or self._cache_stride
+            if planned_rows is not None
+            else self._cache_stride
+        )
+        return max(1, (2**31 - 1) // (widest * s_eff))
+
+    def _bucket_for(self, demand: int) -> int | None:
+        """Smallest attention-window bucket covering ``demand`` rows.
+
+        ``demand`` = committed length + this pass's (padded) width — the
+        bound prefix must hold every row the in-graph ScatterND writes.
+        None when demand exceeds the stride (callers fall back to the
+        uncaptured full-stride path; the last bucket == cache_stride, so
+        this only happens past the cache's own capacity guard).
+        """
+        for s in self._buckets:
+            if demand <= s:
+                return s
+        return None
+
+    def _graph_id_for(self, s_eff: int, width: int) -> str:
+        """The captured-graph annotation id for a (S_eff, width) bucket.
+
+        Bucket index b in the sorted table -> width-1 (pure decode) gets
+        str(1 + 2b), the padded spec-verify width gets str(2 + 2b); the
+        degenerate table [cache_stride] reproduces the pre-bucketing ids
+        {"1", "2"} exactly.  Ids 0 (ORT-internal, capture-eligible) and
+        "-1" (uncaptured) are never produced.
+        """
+        b = self._buckets.index(s_eff)
+        return str((1 if width == 1 else 2) + 2 * b)
 
     def empty_past(self, max_len: int) -> KVCache:
         """Allocate the single runtime-owned static cache for a planned run.
@@ -381,41 +472,62 @@ class OnnxTokenRuntime:
             buffer_ptr=tensor.data_ptr(),
         )
 
-    def _decode_binding_for(self, cache: KVCache):
-        """Build (once per cache) the persistent n_new=1 decode binding.
+    def _binding_for(self, cache: KVCache, s_eff: int, width: int):
+        """Build (once per (cache, S_eff, width)) a persistent io-binding.
 
-        Every tensor the decode step touches — token_ids (1,),
-        cache_position (1,), the full static past buffers, the delta
-        outputs, logits — is allocated once and bound once; later steps
-        only overwrite buffer CONTENTS.  Stable addresses + static shapes
-        are the CUDA-graph replay requirements; rebuilding the io-binding
-        per step (the old pattern) breaks them and costs ~ms of Python
-        per step.
+        Every tensor the pass touches — token_ids (width,), cache_position
+        (width,), the past prefix views, the delta outputs, logits — is
+        allocated once and bound once; later passes only overwrite buffer
+        CONTENTS.  Stable addresses + one frozen shape per gpu_graph_id are
+        the CUDA-graph replay requirements; rebuilding the io-binding per
+        step (the old pattern) breaks them and costs ~ms of Python per step.
+
+        The past bindings are CONTIGUOUS PREFIX VIEWS ``cache.k[i][:s_eff]``
+        of the one session-lifetime cache (row-major, so a prefix view
+        shares the base pointer): every bucket's captured graph reads and
+        scatters the same underlying buffer, only the attention width
+        differs.  width > 1 is the padded spec-verify bucket; width == 1
+        the pure-decode bucket.
         """
         import numpy as np
 
-        if self._decode_binding is not None and self._decode_binding[0] == id(cache):
-            return self._decode_binding[1]
+        key = (id(cache), s_eff, width)
+        cached = self._bindings.get(key)
+        if cached is not None:
+            return cached
+        if any(k[0] != id(cache) for k in self._bindings):
+            # A different cache object would invalidate every captured
+            # graph (baked addresses).  empty_past's session-lifetime
+            # singleton makes this unreachable; fail loud if it ever isn't.
+            raise RuntimeError(
+                "io-bindings exist for a different cache object — captured "
+                "graphs bake buffer addresses; the static cache must be the "
+                "session-lifetime singleton from empty_past()"
+            )
 
         device_id = int(self._device.index or 0)
         io = self._session.io_binding()
-        token_ids = torch.zeros(1, dtype=torch.int64, device=self._device)
-        cache_position = torch.zeros(1, dtype=torch.int64, device=self._device)
+        token_ids = torch.zeros(width, dtype=torch.int64, device=self._device)
+        cache_position = torch.zeros(width, dtype=torch.int64, device=self._device)
         self._bind_cuda(io, "token_ids", token_ids, "in", device_id, np.int64)
         self._bind_cuda(io, "cache_position", cache_position, "in", device_id, np.int64)
         delta_k: list[torch.Tensor] = []
         delta_v: list[torch.Tensor] = []
         for i in range(self._n_layers):
-            self._bind_cuda(io, f"past_K_{i}", cache.k[i], "in", device_id, np.float32)
-            self._bind_cuda(io, f"past_V_{i}", cache.v[i], "in", device_id, np.float32)
+            self._bind_cuda(
+                io, f"past_K_{i}", cache.k[i][:s_eff], "in", device_id, np.float32
+            )
+            self._bind_cuda(
+                io, f"past_V_{i}", cache.v[i][:s_eff], "in", device_id, np.float32
+            )
             nh = cache.k[i].shape[1]
-            dk = torch.empty(1, nh, self._d_head, device=self._device)
-            dv = torch.empty(1, nh, self._d_head, device=self._device)
+            dk = torch.empty(width, nh, self._d_head, device=self._device)
+            dv = torch.empty(width, nh, self._d_head, device=self._device)
             delta_k.append(dk)
             delta_v.append(dv)
             self._bind_cuda(io, f"delta_K_{i}", dk, "out", device_id, np.float32)
             self._bind_cuda(io, f"delta_V_{i}", dv, "out", device_id, np.float32)
-        logits = torch.empty(1, self._logits_width, device=self._device)
+        logits = torch.empty(width, self._logits_width, device=self._device)
         self._bind_cuda(io, "logits", logits, "out", device_id, np.float32)
 
         binding = {
@@ -426,64 +538,17 @@ class OnnxTokenRuntime:
             "cache": cache,
             "token_ids": token_ids,
             "cache_position": cache_position,
+            "arange_W": torch.arange(width, dtype=torch.int64, device=self._device),
             "delta_k": delta_k,
             "delta_v": delta_v,
             "logits": logits,
         }
-        self._decode_binding = (id(cache), binding)
+        self._bindings[key] = binding
         return binding
 
-    def _batch_binding_for(self, cache: KVCache):
-        """Build (once per cache) the persistent padded-width batch binding.
-
-        The speculative-decode counterpart of :meth:`_decode_binding_for`:
-        every tensor is sized to the fixed ``_batch_bucket_width`` W, so all
-        spec verify batches replay ONE captured graph (gpu_graph_id "2")
-        regardless of their real width.  The past bindings share the same
-        session-lifetime cache buffers as the width-1 bucket — captured
-        graphs bake addresses, and both recordings see the same cache.
-        """
-        import numpy as np
-
-        if self._batch_binding is not None and self._batch_binding[0] == id(cache):
-            return self._batch_binding[1]
-
-        W = self._batch_bucket_width
-        device_id = int(self._device.index or 0)
-        io = self._session.io_binding()
-        token_ids = torch.zeros(W, dtype=torch.int64, device=self._device)
-        cache_position = torch.zeros(W, dtype=torch.int64, device=self._device)
-        self._bind_cuda(io, "token_ids", token_ids, "in", device_id, np.int64)
-        self._bind_cuda(io, "cache_position", cache_position, "in", device_id, np.int64)
-        delta_k: list[torch.Tensor] = []
-        delta_v: list[torch.Tensor] = []
-        for i in range(self._n_layers):
-            self._bind_cuda(io, f"past_K_{i}", cache.k[i], "in", device_id, np.float32)
-            self._bind_cuda(io, f"past_V_{i}", cache.v[i], "in", device_id, np.float32)
-            nh = cache.k[i].shape[1]
-            dk = torch.empty(W, nh, self._d_head, device=self._device)
-            dv = torch.empty(W, nh, self._d_head, device=self._device)
-            delta_k.append(dk)
-            delta_v.append(dv)
-            self._bind_cuda(io, f"delta_K_{i}", dk, "out", device_id, np.float32)
-            self._bind_cuda(io, f"delta_V_{i}", dv, "out", device_id, np.float32)
-        logits = torch.empty(W, self._logits_width, device=self._device)
-        self._bind_cuda(io, "logits", logits, "out", device_id, np.float32)
-
-        binding = {
-            "io": io,
-            "cache": cache,  # pointer-aliveness, as in _decode_binding_for
-            "token_ids": token_ids,
-            "cache_position": cache_position,
-            "arange_W": torch.arange(W, dtype=torch.int64, device=self._device),
-            "delta_k": delta_k,
-            "delta_v": delta_v,
-            "logits": logits,
-        }
-        self._batch_binding = (id(cache), binding)
-        return binding
-
-    def _run_iobinding(self, io, gpu_graph_id: str) -> None:
+    def _run_iobinding(
+        self, io, gpu_graph_id: str, shape: tuple[int, int] | None = None
+    ) -> None:
         """All bound-buffer writes ordered, then run with an EXPLICIT bucket.
 
         Stream ordering: ORT's io-binding Run does NOT synchronize inputs
@@ -499,12 +564,23 @@ class OnnxTokenRuntime:
         gpu_graph_id is MANDATORY on every run: an optionless run() on an
         enable_cuda_graph session defaults to annotation id 0, which IS
         capture-eligible — one stray call permanently consumes graph-pool
-        memory with whatever shape it had.  "-1" = run uncaptured;
-        "1" = the n_new=1 decode bucket (captures on its first annotated
-        call via ORT-internal warm-up reruns, replays afterwards).
+        memory with whatever shape it had.  "-1" = run uncaptured; ids >= 1
+        are the (S_eff, width) buckets (each captures on its first annotated
+        calls via ORT-internal warm-up, replays afterwards).  ``shape`` is
+        the (S_eff, width) this call binds — registered on first use and
+        asserted ever after, because ORT does NOT cross-check it and a
+        reused id would silently replay the baked shape.
         """
         import onnxruntime as ort
 
+        if gpu_graph_id != "-1":
+            assert shape is not None, "captured runs must declare (S_eff, width)"
+            known = self._graph_id_shapes.setdefault(gpu_graph_id, shape)
+            assert known == shape, (
+                f"gpu_graph_id {gpu_graph_id} captured at (S_eff, width)="
+                f"{known} but asked to run {shape} — a captured id replays "
+                f"its baked shape; ids must be one-to-one with shapes"
+            )
         torch.cuda.current_stream().synchronize()
         ro = ort.RunOptions()
         ro.add_run_config_entry("gpu_graph_id", gpu_graph_id)
@@ -514,13 +590,20 @@ class OnnxTokenRuntime:
         import numpy as np
 
         if n_new == 1:
-            # Decode: persistent binding, contents-only updates.
-            b = self._decode_binding_for(cache)
+            # Decode: persistent binding at the smallest covering bucket,
+            # contents-only updates.  (base+1 <= max_len is guaranteed by
+            # step()'s overrun guard, and the last bucket == cache_stride,
+            # so a bucket always exists here.)
+            s_eff = self._bucket_for(base + 1)
+            assert s_eff is not None
+            b = self._binding_for(cache, s_eff, 1)
             b["token_ids"].copy_(
                 inputs.detach().reshape(-1).to(device=self._device, dtype=torch.int64)
             )
             b["cache_position"].fill_(base)
-            self._run_iobinding(b["io"], gpu_graph_id="1")
+            self._run_iobinding(
+                b["io"], gpu_graph_id=self._graph_id_for(s_eff, 1), shape=(s_eff, 1)
+            )
             for i in range(self._n_layers):
                 cache.k[i][base : base + 1] = b["delta_k"][i]
                 cache.v[i][base : base + 1] = b["delta_v"][i]
@@ -531,22 +614,30 @@ class OnnxTokenRuntime:
             return b["logits"], cache
 
         W = self._batch_bucket_width
-        if 2 <= n_new <= W and base + W <= cache.max_len:
+        s_eff = self._bucket_for(base + W) if 2 <= n_new <= W else None
+        if s_eff is not None:
             # Speculative verify batch, PADDED to the fixed bucket width so
-            # one captured graph (gpu_graph_id "2") replays every step.
+            # one captured graph per stride bucket replays every step.
             # Pad rows repeat the last real token at positions
             # [base+n_new .. base+W): their in-graph scatter lands in slots
-            # beyond the committed length (exactly-zero mask weight for every
-            # real query — the static-tail theorem), their outputs are
-            # sliced off, and their deltas are never persisted.
-            b = self._batch_binding_for(cache)
+            # beyond the committed length but inside the bound prefix
+            # (base + W <= S_eff — the bucket rule), with exactly-zero mask
+            # weight for every real query (the static-tail theorem); their
+            # outputs are sliced off and their deltas never persisted.
+            # When base + W exceeds even the last bucket (== cache_stride,
+            # the near-cache-end case), s_eff is None and the batch falls
+            # through to the uncaptured dynamic path below — the same
+            # fallback the pre-bucketing code had via base+W <= max_len.
+            b = self._binding_for(cache, s_eff, W)
             ids = inputs.detach().reshape(-1).to(
                 device=self._device, dtype=torch.int64
             )
             b["token_ids"][:n_new].copy_(ids)
             b["token_ids"][n_new:] = ids[-1]
             torch.add(b["arange_W"], base, out=b["cache_position"])
-            self._run_iobinding(b["io"], gpu_graph_id="2")
+            self._run_iobinding(
+                b["io"], gpu_graph_id=self._graph_id_for(s_eff, W), shape=(s_eff, W)
+            )
             for i in range(self._n_layers):
                 cache.k[i][base : base + n_new] = b["delta_k"][i][:n_new]
                 cache.v[i][base : base + n_new] = b["delta_v"][i][:n_new]
@@ -555,8 +646,13 @@ class OnnxTokenRuntime:
             # batched step; callers argmax before stepping again.
             return b["logits"][:n_new], cache
 
-        # Prefill / oversized batches (variable n_new): per-call binding,
-        # uncaptured path.  The past binds are still the FULL static buffers.
+        # Prefill / oversized / near-cache-end batches (variable n_new):
+        # per-call binding, uncaptured path.  The past binds the smallest
+        # prefix bucket covering base + n_new (always exists — step()'s
+        # overrun guard caps base + n_new at max_len == the last bucket),
+        # so prefill rides the small-S_eff attention too.
+        s_eff_dyn = self._bucket_for(base + n_new)
+        assert s_eff_dyn is not None
         token_ids = (
             inputs.detach()
             .reshape(-1)
@@ -574,8 +670,12 @@ class OnnxTokenRuntime:
         delta_k_outs: list[torch.Tensor] = []
         delta_v_outs: list[torch.Tensor] = []
         for i in range(self._n_layers):
-            self._bind_cuda(io, f"past_K_{i}", cache.k[i], "in", device_id, np.float32)
-            self._bind_cuda(io, f"past_V_{i}", cache.v[i], "in", device_id, np.float32)
+            self._bind_cuda(
+                io, f"past_K_{i}", cache.k[i][:s_eff_dyn], "in", device_id, np.float32
+            )
+            self._bind_cuda(
+                io, f"past_V_{i}", cache.v[i][:s_eff_dyn], "in", device_id, np.float32
+            )
             # The delta outputs go to SEPARATE per-step buffers and are copied
             # into the cache slots after the run.  Binding an output into a
             # slice of the SAME allocation that backs the past_K/past_V inputs
@@ -692,12 +792,17 @@ def run_prefill(
         raise ValueError("prefill_ids must be non-empty")
     chunk_size = max(1, int(chunk_size))
     # Clamp to the runtime's int32-indexability bound (ONNX runtimes expose
-    # it; the in-process reference has no such limit).
-    safe_chunk = getattr(compiled, "max_safe_prefill_chunk", None)
+    # it; the in-process reference has no such limit).  Bucket-aware: the
+    # clamp is computed at the prefix bucket the whole prefill will bind,
+    # so smaller buckets allow proportionally larger (equal-cost) chunks.
+    safe_chunk_fn = getattr(compiled, "max_safe_prefill_chunk", None)
+    safe_chunk = (
+        safe_chunk_fn(len(prefill_ids)) if callable(safe_chunk_fn) else safe_chunk_fn
+    )
     if safe_chunk is not None and chunk_size > safe_chunk:
         print(
             f"[{label}] prefill chunk {chunk_size} -> {safe_chunk} "
-            f"(int32 transient-indexability clamp at this cache_stride)",
+            f"(int32 transient-indexability clamp at the prefill's bucket)",
             flush=True,
         )
         chunk_size = safe_chunk

@@ -28,6 +28,7 @@ validation belongs on a larger machine. The in-process free-run on a tiny scene
 
 from __future__ import annotations
 
+import json
 import os
 
 import onnx
@@ -85,8 +86,10 @@ def test_forward_compiles_to_onnx(tmp_path) -> None:
     onnx.checker.check_model(model)  # structurally valid ONNX (I1–I4 already enforced)
 
     # The token-I/O static-cache contract: token_ids + cache_position +
-    # per-layer full-S past in, logits out (past_len/Concat is gone — the
-    # CUDA-graph-capturable contract, plan_cuda_graph_decode.md).
+    # per-layer past PREFIX VIEWS in, logits out (past_len/Concat is gone —
+    # the CUDA-graph-capturable contract, plan_cuda_graph_decode.md; the
+    # past first dim is the SYMBOLIC cache_slots so one graph serves any
+    # attention-window bucket, plan_stride_bucketing.md).
     in_names = {i.name for i in model.graph.input}
     out_names = {o.name for o in model.graph.output}
     assert "token_ids" in in_names, in_names
@@ -94,12 +97,19 @@ def test_forward_compiles_to_onnx(tmp_path) -> None:
     assert "past_len" not in in_names, in_names
     assert "logits" in out_names, out_names
 
-    # The static slot count is baked into past_K_0's first dim.
+    # The slot dim is symbolic (stride bucketing); the full stride S lives
+    # in the sidecar meta, not the input shape.
     past_k0 = next(i for i in model.graph.input if i.name == "past_K_0")
     first_dim = past_k0.type.tensor_type.shape.dim[0]
-    assert first_dim.HasField("dim_value") and first_dim.dim_value >= 1, (
-        "past_K_0 first dim must be a static cache_stride, got "
+    assert first_dim.HasField("dim_param") and first_dim.dim_param == "cache_slots", (
+        "past_K_0 first dim must be the symbolic cache_slots, got "
         f"{first_dim}"
+    )
+    meta_path = onnx_path.replace(".onnx", ".meta.json")
+    with open(meta_path) as f:
+        sidecar = json.load(f)
+    assert isinstance(sidecar.get("cache_stride"), int) and sidecar["cache_stride"] >= 1, (
+        f"sidecar must carry the full cache_stride, got {sidecar.get('cache_stride')!r}"
     )
 
     # Layer count: Phase J's flat pass lands the forward at 85 layers at d=4096

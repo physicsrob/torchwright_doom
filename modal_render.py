@@ -202,6 +202,7 @@ def main(
     png_zoom: int = 8,
     verbose_compile: bool = False,
     profile: bool = False,
+    attention_buckets: str = "",
 ):
     config_path = Path(config)
     remote_config = _remote_config_path(config)
@@ -263,6 +264,9 @@ def main(
         png_zoom=png_zoom,
         verbose_compile=verbose_compile,
         profile=profile,
+        # Comma-separated stride-bucket table; run_config parses it.  A
+        # runtime knob — deliberately NOT in the compile payload/key.
+        attention_buckets=attention_buckets or None,
     )
     print(f"[local] launching render_remote run_id={run_id} kwargs={kwargs}")
     result = render_remote.remote(run_id, kwargs, cache_subdir)
