@@ -25,5 +25,7 @@ IMAGE = (
     .uv_pip_install("numba", "onnxruntime-gpu==1.26.0")
     .add_local_file(str(_TORCHWRIGHT / "E8.8.1024.txt"), "/root/E8.8.1024.txt")
     .add_local_file(str(_HERE / "doom1.wad"), "/root/doom1.wad")
-    .add_local_python_source("torchwright", "torchwright_doom", "tests", "modal_image")
+    .add_local_python_source(
+        "torchwright", "torchwright_doom", "tests", "scripts", "modal_image"
+    )
 )

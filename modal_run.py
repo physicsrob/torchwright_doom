@@ -8,8 +8,15 @@ Usage (via Makefile):
 
 Direct:
     uv run modal run modal_run.py --module scripts.investigate_phase_e
+
+The CPU-only container is sized via env vars read at (local) import time —
+they must be in the environment, not make variables:
+
+    MODAL_RUN_CPU=64 MODAL_RUN_MEMORY=65536 MODAL_RUN_TIMEOUT=7200 \\
+        make modal-run MODULE=scripts.cpsat_space_experiments CPU_ONLY=1
 """
 
+import os
 import shlex
 import subprocess
 import sys
@@ -20,6 +27,10 @@ import modal
 from modal_image import IMAGE
 
 app = modal.App("torchwright-doom-run", image=IMAGE)
+
+_CPU = int(os.environ.get("MODAL_RUN_CPU", "4"))
+_MEMORY = int(os.environ.get("MODAL_RUN_MEMORY", "8192"))
+_TIMEOUT = int(os.environ.get("MODAL_RUN_TIMEOUT", "1800"))
 
 
 def _build_cmd(module: str, script: str, args: str) -> list[str]:
@@ -43,7 +54,7 @@ def run_gpu(module: str, script: str, args: str) -> int:
     return rc
 
 
-@app.function(cpu=4, memory=8192, timeout=1800)
+@app.function(cpu=_CPU, memory=_MEMORY, timeout=_TIMEOUT)
 def run_cpu(module: str, script: str, args: str) -> int:
     cmd = _build_cmd(module, script, args)
     print(f"[remote/cpu] {' '.join(cmd)}")
