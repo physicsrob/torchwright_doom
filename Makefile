@@ -1,14 +1,17 @@
-CONFIG ?= configs/e1m1_start_room.yaml
+CONFIG ?= configs/e1m1_d8192_h16384_opt2.yaml
 OUT_DIR ?= out/render
 RENDER_X ?= 1056.0
 RENDER_Y ?= -3616.0
 RENDER_ANGLE ?= 64
 RENDER_VIEWZ ?= 41.0
 RENDER_MODE ?= spec_decode
-# 10240 covers the full e1m1 frame (9739 rollout tokens to DONE) + margin.
-# Smaller gate configs (e1m1_l4_d3072, S=4608) must pass an explicit
-# lower value or empty_past() rejects the demand.
-RENDER_MAX_POSITIONS ?= 10240
+# 61440 covers a full 160x100 frame within the default config's 64k cache
+# (prefill 3613 + draft headroom leaves 61,916 rollout slots; the 80x50
+# frame was 9,739 tokens, 160x100 has 4x the pixels).  Smaller gate
+# configs (e1m1_l4_d3072 S=4608: pass ~980; e1m1_start_room S=65536 at
+# 80x50: 10240 suffices) should pass an explicit lower value — an
+# oversized demand makes empty_past() reject before prefill.
+RENDER_MAX_POSITIONS ?= 61440
 # Modal GPU for render_remote (read at modal_render.py import).
 # b200 | a100-80gb — B200 is the default: the captured decode is
 # bandwidth-bound (B200's ~4x HBM bandwidth maps ~directly to step time,

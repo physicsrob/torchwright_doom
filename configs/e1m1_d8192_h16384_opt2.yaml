@@ -1,5 +1,10 @@
+# The production default config: full resolution (scale 2 = 160x100),
+# d=8192 with a decoupled 16k MLP width, CP-SAT-optimized schedule
+# (optimize: 2), and the full 64k static cache — prefill (3613) is
+# screen-independent, leaving ~61.9k rollout capacity for the longer
+# 160x100 frame.
 wad: doom1.wad
-model: {d: 8192, d_head: 32, scale: 4, d_hidden: 16384, optimize: 2}
+model: {d: 8192, d_head: 32, scale: 2, d_hidden: 16384, optimize: 2, cache_stride: 65536}
 region: {x1: 627.2, y1: -3760.0, x2: 1395.2, y2: -2800.0}
 textures:
   wall: [BROWN1, BROWN144, COMPUTE2, DOOR3, DOORSTOP, LITE3, STARTAN3, STEP6, SUPPORT2]
