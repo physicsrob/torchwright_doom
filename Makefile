@@ -10,9 +10,12 @@ RENDER_MODE ?= spec_decode
 # lower value or empty_past() rejects the demand.
 RENDER_MAX_POSITIONS ?= 10240
 # Modal GPU for render_remote (read at modal_render.py import).
-# a100-80gb | b200 — the captured decode is bandwidth-bound, so B200's
-# ~4x HBM bandwidth maps ~directly to step time.
-RENDER_GPU ?= a100-80gb
+# b200 | a100-80gb — B200 is the default: the captured decode is
+# bandwidth-bound (B200's ~4x HBM bandwidth maps ~directly to step time,
+# measured 14.3 ms + 0.522 us/slot x S_eff per width-1 step), and the
+# 64k-stride config is memory-marginal on the A100 (58 GB weights+cache
+# of 80 GB; it runs, but prefill/capture transients leave little slack).
+RENDER_GPU ?= b200
 RENDER_DRAFT_WINDOW ?= 8
 # 1024-row chunks bound the static-S prefill logits transient
 # ((n_heads, chunk, S) per layer; unchunked at n=3613, S=12288 the widest
