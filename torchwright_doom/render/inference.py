@@ -174,32 +174,40 @@ class OnnxTokenRuntime:
                 "profile JSON written at end_profiling()",
                 flush=True,
             )
-        try:
-            self._session = ort.InferenceSession(
-                str(self.onnx_path),
-                sess_options=so,
-                providers=session_providers,
-            )
-        except Exception:
-            if (
-                providers is not None
-                or "CUDAExecutionProvider" not in session_providers
-            ):
-                raise
-            print(
-                "[onnxruntime] CUDAExecutionProvider failed; retrying with CPUExecutionProvider",
-                flush=True,
-            )
-            self._session = ort.InferenceSession(
-                str(self.onnx_path),
-                sess_options=so,
-                providers=["CPUExecutionProvider"],
-            )
+        # No silent CPU retry here: an intended-GPU run degrading to CPU is
+        # a multi-day hang, not a fallback (see the guard below); intentional
+        # CPU inference is requested explicitly via TWDOOM_FORCE_CPU.
+        self._session = ort.InferenceSession(
+            str(self.onnx_path),
+            sess_options=so,
+            providers=session_providers,
+        )
         print(
             f"[onnxruntime] version={ort.__version__} "
             f"active providers={self._session.get_providers()}",
             flush=True,
         )
+        # Fail LOUD if a CUDA session was requested but didn't materialize.
+        # ORT's InferenceSession internally swallows an EP init failure and
+        # retries CPU-only ("EP Error ... Falling back to CPUExecutionProvider")
+        # — observed on a Modal B200 whose host was broken (CUDA error 802
+        # "system not yet initialized" from a fabric-manager race).  A d8192
+        # render on CPU is a multi-day hang on a billed GPU container, not a
+        # fallback; intentional CPU runs say so via TWDOOM_FORCE_CPU.
+        if (
+            any(
+                (p[0] if isinstance(p, tuple) else p) == "CUDAExecutionProvider"
+                for p in session_providers
+            )
+            and "CUDAExecutionProvider" not in self._session.get_providers()
+            and not os.environ.get("TWDOOM_FORCE_CPU")
+        ):
+            raise RuntimeError(
+                "CUDAExecutionProvider was requested but the session is "
+                "CPU-only (ORT EP-init fallback — broken GPU host?). "
+                "Retry on a fresh worker, or set TWDOOM_FORCE_CPU=1 if CPU "
+                "inference is really intended."
+            )
         self._use_cuda_io = (
             "CUDAExecutionProvider" in self._session.get_providers()
             and torch.cuda.is_available()
