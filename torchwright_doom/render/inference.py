@@ -214,6 +214,10 @@ class OnnxTokenRuntime:
         # Persistent n_new=1 decode binding (built lazily per cache object);
         # see _decode_binding_for.
         self._decode_binding: tuple[int, Any] | None = None
+        # Session-lifetime static cache, allocated on first empty_past and
+        # zero-reset (never reallocated) on later calls — captured CUDA
+        # graphs bake the buffer addresses.
+        self._static_cache: KVCache | None = None
         # Outputs are the per-layer KV *deltas* (new rows only); the runtime
         # writes them into its owned cache tail (no full-cache output).
         self._out_names = ["logits"]
@@ -269,6 +273,22 @@ class OnnxTokenRuntime:
                 f"recompile with a larger model.cache_stride or lower "
                 f"max_positions"
             )
+        # The runtime owns ONE session-lifetime static cache (the vanilla
+        # HF-StaticCache discipline), zeroed in place per run.  This is
+        # capture-correctness, not just an allocation saving: the captured
+        # CUDA graph bakes the cache buffer ADDRESSES at capture time, and a
+        # replay ignores any rebinding — a second rollout on a freshly
+        # allocated cache would replay against the first rollout's (freed)
+        # buffers.  Overwriting CONTENTS between replays is allowed; moving
+        # buffers is not.
+        if self._static_cache is not None:
+            cache = self._static_cache
+            for t in cache.k:
+                t.zero_()
+            for t in cache.v:
+                t.zero_()
+            cache.length = 0
+            return cache
         device = self._device
         S = self._cache_stride
         k = [
@@ -279,10 +299,8 @@ class OnnxTokenRuntime:
             torch.zeros(S, nh, self._d_head, device=device)
             for nh in self._per_layer_n_heads
         ]
-        # A fresh cache invalidates any persistent decode binding built for
-        # a prior cache's buffers.
-        self._decode_binding = None
-        return KVCache(k=k, v=v, length=0, max_len=S)
+        self._static_cache = KVCache(k=k, v=v, length=0, max_len=S)
+        return self._static_cache
 
     def step(self, inputs: torch.Tensor, cache: KVCache, past_len: int | None = None):
         if not isinstance(cache, KVCache):

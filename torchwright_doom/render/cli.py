@@ -53,7 +53,7 @@ def run_config(
     out_dir: str | Path = "out/render",
     max_positions: int = 10240,
     draft_window: int = 0,
-    prefill_chunk_size: int = 1024,
+    prefill_chunk_size: int = 128,
     progress_every: int = 250,
     png: bool = False,
     compare_images: bool = False,
@@ -287,7 +287,7 @@ def run_render(
     d_head: int = 32,
     scale: int = 8,
     draft_window: int = 0,
-    prefill_chunk_size: int = 1024,
+    prefill_chunk_size: int = 128,
     progress_every: int = 250,
     verbose_compile: bool = False,
 ) -> dict[str, Any]:
@@ -437,7 +437,7 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--max-positions", type=int, default=10240, dest="max_positions")
     pr.add_argument("--draft-window", type=int, default=0, dest="draft_window")
     pr.add_argument(
-        "--prefill-chunk-size", type=int, default=1024, dest="prefill_chunk_size"
+        "--prefill-chunk-size", type=int, default=128, dest="prefill_chunk_size"
     )
     pr.add_argument("--progress-every", type=int, default=250, dest="progress_every")
     pr.add_argument("--png", action="store_true")
@@ -479,7 +479,7 @@ def _legacy_main(argv: list[str]) -> int:
     p.add_argument("--scale", type=int, default=8)
     p.add_argument("--draft-window", type=int, default=0, dest="draft_window")
     p.add_argument(
-        "--prefill-chunk-size", type=int, default=1024, dest="prefill_chunk_size"
+        "--prefill-chunk-size", type=int, default=128, dest="prefill_chunk_size"
     )
     p.add_argument("--progress-every", type=int, default=250, dest="progress_every")
     p.add_argument("--verbose-compile", action="store_true", dest="verbose_compile")

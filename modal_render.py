@@ -52,6 +52,12 @@ RENDER_VOLUME = modal.Volume.from_name(
 CACHE_VOLUME = modal.Volume.from_name(
     "torchwright-doom-render-cache", create_if_missing=True
 )
+# Solved CP-SAT schedules keyed by graph topology (torchwright
+# schedule_cache): a schedule win is durable across compiles whose graph
+# construction is unchanged, so the solver runs at most once per shape.
+SCHEDULE_VOLUME = modal.Volume.from_name(
+    "torchwright-doom-schedule-cache", create_if_missing=True
+)
 
 # CPU-only compile container. CP-SAT's parallel search scales with cores, so
 # the compile gets its own high-CPU function (the GPU render container stays
@@ -75,7 +81,10 @@ _RENDER_GPU = _os.environ.get("RENDER_GPU", "a100-80gb")
     # d=8192/h16384 flagship config — size for the latter.
     memory=262144,
     timeout=10800,
-    volumes={"/root/.cache/torchwright_doom/compiled": CACHE_VOLUME},
+    volumes={
+        "/root/.cache/torchwright_doom/compiled": CACHE_VOLUME,
+        "/root/.cache/torchwright_doom/schedules": SCHEDULE_VOLUME,
+    },
 )
 def compile_remote(
     config_path: str,
@@ -92,6 +101,8 @@ def compile_remote(
     # CP-SAT reads this at solve time (torchwright cpsat_scheduler); point it
     # at the container's full CPU allocation instead of the 16-worker default.
     os.environ["TW_CPSAT_WORKERS"] = str(_COMPILE_CPUS)
+    # Durable schedule cache (see SCHEDULE_VOLUME above).
+    os.environ["TW_SCHEDULE_CACHE_DIR"] = "/root/.cache/torchwright_doom/schedules"
 
     from torchwright_doom.render.cli import compile_config
 
@@ -99,6 +110,7 @@ def compile_remote(
     # no ``.git``, so deriving them here would collapse the git SHAs to
     # "unknown" and silently reuse a stale model across code changes.
     CACHE_VOLUME.reload()
+    SCHEDULE_VOLUME.reload()
     cache_dir = f"/root/.cache/torchwright_doom/compiled/{cache_subdir}"
     result = compile_config(
         config_path=config_path,
@@ -107,6 +119,7 @@ def compile_remote(
         compile_payload=compile_payload,
     )
     CACHE_VOLUME.commit()
+    SCHEDULE_VOLUME.commit()
     return result
 
 
@@ -182,7 +195,7 @@ def main(
     run_name: str = "",
     max_positions: int = 8000,
     draft_window: int = 0,
-    prefill_chunk_size: int = 1024,
+    prefill_chunk_size: int = 128,
     progress_every: int = 250,
     png: bool = False,
     compare: bool = False,

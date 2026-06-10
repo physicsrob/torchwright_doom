@@ -18,7 +18,11 @@ RENDER_DRAFT_WINDOW ?= 8
 # ((n_heads, chunk, S) per layer; unchunked at n=3613, S=12288 the widest
 # layer is ~45 GB on the A100 and OOMs the L4 gate).  Chunking is
 # semantically identical — see plan_cuda_graph_decode.md "Memory budget".
-PREFILL_CHUNK_SIZE ?= 1024
+# 128-row chunks keep the per-layer (n_heads, chunk, S) prefill logits
+# transient small for the 64k-stride config on an 80 GB A100 (~8.6 GB at
+# nh=128/S=65536; the int32 clamp alone allows 255 rows = ~17 GB, leaving
+# only ~4 GB headroom there).  Cost: a few extra seconds of prefill.
+PREFILL_CHUNK_SIZE ?= 128
 RENDER_PROGRESS_EVERY ?= 250
 PNG_ZOOM ?= 8
 
