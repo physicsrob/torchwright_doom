@@ -214,6 +214,16 @@ class OnnxTokenRuntime:
         # Persistent n_new=1 decode binding (built lazily per cache object);
         # see _decode_binding_for.
         self._decode_binding: tuple[int, Any] | None = None
+        # Persistent fixed-width batch binding for speculative-decode verify
+        # steps: variable draft batches (n_new in 2..draft_window+1) are
+        # PADDED to this width so one captured graph serves them all (a
+        # captured CUDA graph replays exactly one shape).  Pad rows scatter
+        # into slots beyond the committed length — masked to exactly-zero
+        # weight for every real query, outputs sliced off, deltas not
+        # persisted.  Must be >= draft_window+1 or wide batches fall back to
+        # the uncaptured dynamic path.
+        self._batch_bucket_width = 9
+        self._batch_binding: tuple[int, Any] | None = None
         # Session-lifetime static cache, allocated on first empty_past and
         # zero-reset (never reallocated) on later calls — captured CUDA
         # graphs bake the buffer addresses.
@@ -423,6 +433,56 @@ class OnnxTokenRuntime:
         self._decode_binding = (id(cache), binding)
         return binding
 
+    def _batch_binding_for(self, cache: KVCache):
+        """Build (once per cache) the persistent padded-width batch binding.
+
+        The speculative-decode counterpart of :meth:`_decode_binding_for`:
+        every tensor is sized to the fixed ``_batch_bucket_width`` W, so all
+        spec verify batches replay ONE captured graph (gpu_graph_id "2")
+        regardless of their real width.  The past bindings share the same
+        session-lifetime cache buffers as the width-1 bucket — captured
+        graphs bake addresses, and both recordings see the same cache.
+        """
+        import numpy as np
+
+        if self._batch_binding is not None and self._batch_binding[0] == id(cache):
+            return self._batch_binding[1]
+
+        W = self._batch_bucket_width
+        device_id = int(self._device.index or 0)
+        io = self._session.io_binding()
+        token_ids = torch.zeros(W, dtype=torch.int64, device=self._device)
+        cache_position = torch.zeros(W, dtype=torch.int64, device=self._device)
+        self._bind_cuda(io, "token_ids", token_ids, "in", device_id, np.int64)
+        self._bind_cuda(io, "cache_position", cache_position, "in", device_id, np.int64)
+        delta_k: list[torch.Tensor] = []
+        delta_v: list[torch.Tensor] = []
+        for i in range(self._n_layers):
+            self._bind_cuda(io, f"past_K_{i}", cache.k[i], "in", device_id, np.float32)
+            self._bind_cuda(io, f"past_V_{i}", cache.v[i], "in", device_id, np.float32)
+            nh = cache.k[i].shape[1]
+            dk = torch.empty(W, nh, self._d_head, device=self._device)
+            dv = torch.empty(W, nh, self._d_head, device=self._device)
+            delta_k.append(dk)
+            delta_v.append(dv)
+            self._bind_cuda(io, f"delta_K_{i}", dk, "out", device_id, np.float32)
+            self._bind_cuda(io, f"delta_V_{i}", dv, "out", device_id, np.float32)
+        logits = torch.empty(W, self._logits_width, device=self._device)
+        self._bind_cuda(io, "logits", logits, "out", device_id, np.float32)
+
+        binding = {
+            "io": io,
+            "cache": cache,  # pointer-aliveness, as in _decode_binding_for
+            "token_ids": token_ids,
+            "cache_position": cache_position,
+            "arange_W": torch.arange(W, dtype=torch.int64, device=self._device),
+            "delta_k": delta_k,
+            "delta_v": delta_v,
+            "logits": logits,
+        }
+        self._batch_binding = (id(cache), binding)
+        return binding
+
     def _run_iobinding(self, io, gpu_graph_id: str) -> None:
         """All bound-buffer writes ordered, then run with an EXPLICIT bucket.
 
@@ -470,7 +530,32 @@ class OnnxTokenRuntime:
             # argmax it before stepping again.
             return b["logits"], cache
 
-        # Prefill / speculative batches (variable n_new): per-call binding,
+        W = self._batch_bucket_width
+        if 2 <= n_new <= W and base + W <= cache.max_len:
+            # Speculative verify batch, PADDED to the fixed bucket width so
+            # one captured graph (gpu_graph_id "2") replays every step.
+            # Pad rows repeat the last real token at positions
+            # [base+n_new .. base+W): their in-graph scatter lands in slots
+            # beyond the committed length (exactly-zero mask weight for every
+            # real query — the static-tail theorem), their outputs are
+            # sliced off, and their deltas are never persisted.
+            b = self._batch_binding_for(cache)
+            ids = inputs.detach().reshape(-1).to(
+                device=self._device, dtype=torch.int64
+            )
+            b["token_ids"][:n_new].copy_(ids)
+            b["token_ids"][n_new:] = ids[-1]
+            torch.add(b["arange_W"], base, out=b["cache_position"])
+            self._run_iobinding(b["io"], gpu_graph_id="2")
+            for i in range(self._n_layers):
+                cache.k[i][base : base + n_new] = b["delta_k"][i][:n_new]
+                cache.v[i][base : base + n_new] = b["delta_v"][i][:n_new]
+            cache.length = base + n_new
+            # Sliced view of the persistent buffer — overwritten by the next
+            # batched step; callers argmax before stepping again.
+            return b["logits"][:n_new], cache
+
+        # Prefill / oversized batches (variable n_new): per-call binding,
         # uncaptured path.  The past binds are still the FULL static buffers.
         token_ids = (
             inputs.detach()
