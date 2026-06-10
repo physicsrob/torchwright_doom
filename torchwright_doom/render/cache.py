@@ -70,6 +70,19 @@ def compile_cached(
         build_info=build_info,
         compile_payload=compile_payload,
     )
+    # Always surface the compiled depth (the head-to-head metric across
+    # configs) without needing a render or VERBOSE_COMPILE — read back
+    # from the meta just written so the number is the artifact's, not a
+    # build-info guess.
+    meta = json.loads(meta_path.read_text())
+    print(
+        f"[compile] {meta.get('n_layers')} layers "
+        f"(d={config.model.d}, d_hidden={config.model.d_hidden or config.model.d}, "
+        f"optimize={config.model.optimize}, scale={config.model.scale}, "
+        f"d_embed={meta.get('d_embed')}, vocab_rows={meta.get('n_vocab_rows')}) "
+        f"-> {cache_dir}",
+        flush=True,
+    )
     return cache_dir
 
 
