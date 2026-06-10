@@ -5,7 +5,14 @@ RENDER_Y ?= -3616.0
 RENDER_ANGLE ?= 64
 RENDER_VIEWZ ?= 41.0
 RENDER_MODE ?= spec_decode
-RENDER_MAX_POSITIONS ?= 8000
+# 10240 covers the full e1m1 frame (9739 rollout tokens to DONE) + margin.
+# Smaller gate configs (e1m1_l4_d3072, S=4608) must pass an explicit
+# lower value or empty_past() rejects the demand.
+RENDER_MAX_POSITIONS ?= 10240
+# Modal GPU for render_remote (read at modal_render.py import).
+# a100-80gb | b200 — the captured decode is bandwidth-bound, so B200's
+# ~4x HBM bandwidth maps ~directly to step time.
+RENDER_GPU ?= a100-80gb
 RENDER_DRAFT_WINDOW ?= 8
 # 1024-row chunks bound the static-S prefill logits transient
 # ((n_heads, chunk, S) per layer; unchunked at n=3613, S=12288 the widest
@@ -63,7 +70,7 @@ render-run run:
 		echo "=== Log file: $$LOGFILE ===" | tee "$$LOGFILE" ; \
 		echo "=== Running render on Modal ===" | tee -a "$$LOGFILE" ; \
 		start=$$(date +%s) ; \
-		uv run modal run modal_render.py $(_RENDER_MODAL_ARGS) \
+		RENDER_GPU=$(RENDER_GPU) uv run modal run modal_render.py $(_RENDER_MODAL_ARGS) \
 			2>&1 | tee -a "$$LOGFILE" ; \
 		rc=$${PIPESTATUS[0]} ; \
 		end=$$(date +%s) ; \

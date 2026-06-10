@@ -1,5 +1,10 @@
 wad: doom1.wad
-model: {d: 4096, d_head: 32, scale: 4}
+# cache_stride 65536 (= max_seq_len): the e1m1 frame is 13,352 positions
+# (3613 prefill + 9739 rollout to DONE — the old 8000 cap never finished a
+# frame); 64k leaves ~4 frames of context headroom for multi-frame work.
+# Costs: decode step time scales ~linearly with cache_stride (the captured
+# step is KV-bandwidth-bound), static cache = 35.6 GB on-GPU.
+model: {d: 4096, d_head: 32, scale: 4, cache_stride: 65536}
 region: {x1: 627.2, y1: -3760.0, x2: 1395.2, y2: -2800.0}
 textures:
   wall: [BROWN1, BROWN144, COMPUTE2, DOOR3, DOORSTOP, LITE3, STARTAN3, STEP6, SUPPORT2]

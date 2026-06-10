@@ -58,6 +58,15 @@ CACHE_VOLUME = modal.Volume.from_name(
 # at 8 CPUs). TW_CPSAT_WORKERS below must match this number.
 _COMPILE_CPUS = 64
 
+# Render GPU, read at (local) import time — pass as an env var, not a make
+# variable: RENDER_GPU=b200 make run.  The captured decode step is
+# KV-bandwidth-bound, so GPU HBM bandwidth maps ~directly to step time
+# (A100-80GB ~2 TB/s; B200 ~8 TB/s and 192 GB fits the 64k cache + 1024-row
+# prefill chunks comfortably).
+import os as _os
+
+_RENDER_GPU = _os.environ.get("RENDER_GPU", "a100-80gb")
+
 
 @app.function(
     cpu=_COMPILE_CPUS,
@@ -114,7 +123,7 @@ def _volume_has_compiled(cache_subdir: str) -> bool:
 
 
 @app.function(
-    gpu="a100-80gb",
+    gpu=_RENDER_GPU,
     cpu=8,
     memory=65536,
     timeout=5400,

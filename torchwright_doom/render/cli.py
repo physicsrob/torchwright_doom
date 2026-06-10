@@ -51,7 +51,7 @@ def run_config(
     viewz: float | None = None,
     mode: str = "spec_decode",
     out_dir: str | Path = "out/render",
-    max_positions: int = 8000,
+    max_positions: int = 10240,
     draft_window: int = 0,
     prefill_chunk_size: int = 1024,
     progress_every: int = 250,
@@ -282,7 +282,7 @@ def run_render(
     pose_index: int = 0,
     mode: str = "spec_decode",
     out_dir: str | Path = "out/render",
-    max_positions: int = 8000,
+    max_positions: int = 10240,
     d: int = 4096,
     d_head: int = 32,
     scale: int = 8,
@@ -434,7 +434,7 @@ def main(argv: list[str] | None = None) -> int:
         "--mode", default="spec_decode", choices=["spec_decode", "pure_ar", "both"]
     )
     pr.add_argument("--out-dir", default="out/render", dest="out_dir")
-    pr.add_argument("--max-positions", type=int, default=8000, dest="max_positions")
+    pr.add_argument("--max-positions", type=int, default=10240, dest="max_positions")
     pr.add_argument("--draft-window", type=int, default=0, dest="draft_window")
     pr.add_argument(
         "--prefill-chunk-size", type=int, default=1024, dest="prefill_chunk_size"
@@ -473,7 +473,7 @@ def _legacy_main(argv: list[str]) -> int:
         help="spec_decode (default) | pure_ar | both",
     )
     p.add_argument("--out-dir", default="out/render", dest="out_dir")
-    p.add_argument("--max-positions", type=int, default=8000, dest="max_positions")
+    p.add_argument("--max-positions", type=int, default=10240, dest="max_positions")
     p.add_argument("--d", type=int, default=4096)
     p.add_argument("--d-head", type=int, default=32, dest="d_head")
     p.add_argument("--scale", type=int, default=8)
