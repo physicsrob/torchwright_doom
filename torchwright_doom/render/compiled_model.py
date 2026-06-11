@@ -1,11 +1,13 @@
-"""Build + compile the token-id ``forward`` (the K artifact) and decode outputs.
+"""Build the token-id ``forward`` graph and compile it to the K ONNX artifact.
 
-This is the one place a *compiled* doom forward is constructed for inference. The
-build mirrors ``tests/scene/test_forward_ar_rollout.py::_compiled_rollout`` exactly
-(``build_doom_embedding("token_ids")`` -> ``forward`` -> ``compile_headless``), but
-generalized to return the output ``Node`` too (the diagnostic's ``probe_compiled``
-targets it). Graph nodes are built **inside** ``build_compiled`` — never at import
-(the import-time-node-free rule, twdoom CLAUDE.md).
+``build_graph`` is the one place the doom forward graph is constructed for
+compilation and for artifact debugging (asset banks -> ``AssetIndex`` ->
+``build_doom_embedding("token_ids")`` -> ``forward``).  ``compile_to_onnx_path``
+compiles that graph to the production ONNX artifact; ``OnnxDebugSession`` over
+the cached artifact (see ``cache.load_debug_session``) reuses the same
+construction, which is what its graph-fingerprint check requires.  Graph nodes
+are built **inside** ``build_graph`` — never at import (the
+import-time-node-free rule, twdoom CLAUDE.md).
 """
 
 from __future__ import annotations
@@ -18,27 +20,21 @@ from ..asset_config import DEFAULT_ASSET_CONFIG, AssetConfig
 from ..assets import AssetIndex
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from torchwright.compiler.export import CompiledHeadless
     from torchwright.graph.node import Node
-
-# Default compiled config — H's d=4096 / d_head=32 working point (the radixed-key
-# target the J forward compiles at; see test_forward_compiles / test_forward_ar_rollout).
-DEFAULT_D = 4096
-DEFAULT_D_HEAD = 32
+    from torchwright.graph.pos_encoding import PosEncoding
 
 
-def build_compiled(
-    device,
+def build_graph(
     *,
-    d: int = DEFAULT_D,
-    d_head: int = DEFAULT_D_HEAD,
-    max_layers: int = 200,
-    verbose: bool = False,
     asset_config: AssetConfig | None = None,
     wad_path: str | Path | None = None,
-) -> tuple["CompiledHeadless", "Node"]:
-    """Compile the token-id forward. Returns ``(compiled, output_node)``."""
-    from torchwright.compiler.export import compile_headless
+) -> tuple["Node", "PosEncoding", "Node", Any]:
+    """Construct the token-id forward graph.
+
+    Returns ``(next_token, pos, emb, asset_banks)`` — the output node, the
+    positional encoding, the embedding input node, and the asset banks the
+    graph was built against.
+    """
     from torchwright.ops.inout_nodes import create_pos_encoding
 
     from ..embedding import build_doom_embedding
@@ -60,23 +56,14 @@ def build_compiled(
         pos,
         asset_index=asset_index,
     )
-    compiled = compile_headless(
-        next_token,
-        pos,
-        d=d,
-        d_head=d_head,
-        max_layers=max_layers,
-        verbose=verbose,
-        device=str(device),
-    )
-    return compiled, next_token
+    return next_token, pos, emb, asset_banks
 
 
 def compile_to_onnx_path(
     output_path: str | Path,
     *,
-    d: int = DEFAULT_D,
-    d_head: int = DEFAULT_D_HEAD,
+    d: int = 4096,
+    d_head: int = 32,
     max_layers: int = 200,
     max_seq_len: int = 65536,
     cache_stride: int = 12288,
@@ -97,26 +84,11 @@ def compile_to_onnx_path(
     stride in the kwargs rather than riding alongside it.
     """
     from torchwright.compiler.export import compile_to_onnx
-    from torchwright.ops.inout_nodes import create_pos_encoding
 
-    from ..embedding import TOKEN_VOCAB, build_doom_embedding
-    from ..past import GraphPast
-    from ..render_main import forward
+    from ..embedding import TOKEN_VOCAB
 
-    asset_config = asset_config or DEFAULT_ASSET_CONFIG
-    asset_banks = build_asset_banks(
-        wad_path=wad_path or None,
-        wall_names=asset_config.wall_names,
-        flat_names=asset_config.flat_names,
-    )
-    asset_index = AssetIndex(asset_banks)
-    emb = build_doom_embedding("token_ids")
-    pos = create_pos_encoding()
-    next_token = forward(
-        emb,
-        GraphPast(input_vec=emb, pos_encoding=pos),
-        pos,
-        asset_index=asset_index,
+    next_token, pos, emb, asset_banks = build_graph(
+        asset_config=asset_config, wad_path=wad_path
     )
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)

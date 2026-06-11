@@ -1,18 +1,15 @@
 """YAML-config render CLI.
 
-Primary commands:
+Commands:
 
 ``python -m torchwright_doom.render compile --config job.yaml``
 ``python -m torchwright_doom.render run --config job.yaml --x 1056 --y -3616 --angle 64``
-
-The old fixture CLI is still available by calling this module with no subcommand.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
-import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -297,135 +294,6 @@ def run_config(
     }
 
 
-def run_render(
-    *,
-    fixture: str = "e1m1_subset_textured",
-    pose_index: int = 0,
-    mode: str = "spec_decode",
-    out_dir: str | Path = "out/render",
-    max_positions: int = 10240,
-    d: int = 4096,
-    d_head: int = 32,
-    scale: int = 8,
-    draft_window: int = 0,
-    prefill_chunk_size: int = 128,
-    progress_every: int = 250,
-    verbose_compile: bool = False,
-) -> dict[str, Any]:
-    """Legacy fixture-driven Plan-K render path."""
-    import torch
-
-    from ..constants import SCREEN_HEIGHT, SCREEN_WIDTH
-    from ..vocab import DONE
-    from . import artifacts, compare
-    from .compiled_model import build_compiled
-    from .decode import decode_rows_to_pixels
-    from .inference import pure_ar_rollout
-    from .tokens_bridge import row_index, sandbox_token_to_row
-    from .wad_scene import _ensure_doom_sandbox
-
-    _ensure_doom_sandbox()
-    from doom_sandbox import fixtures
-    from doom_sandbox.implementation import prefill as sb_prefill
-    from doom_sandbox.implementation import reference as sb_ref
-
-    if (sb_ref.SCREEN_WIDTH, sb_ref.SCREEN_HEIGHT) != (SCREEN_WIDTH, SCREEN_HEIGHT):
-        raise RuntimeError(
-            f"screen-dim mismatch: torchwright_doom {SCREEN_WIDTH}x{SCREEN_HEIGHT} "
-            f"vs doom_sandbox {sb_ref.SCREEN_WIDTH}x{sb_ref.SCREEN_HEIGHT}"
-        )
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    scene = fixtures.load_fixture(fixture)
-    pose = scene.test_poses[pose_index]
-    prefill_tokens = list(sb_prefill.get_prefill(scene, pose))
-    prefill_ids = [sandbox_token_to_row(t) for t in prefill_tokens]
-    terminal_row = row_index(DONE, {})
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(
-        f"[legacy] fixture={fixture} pose={pose_index} prefill={len(prefill_ids)} "
-        f"device={device} d={d} d_head={d_head}",
-        flush=True,
-    )
-    t_compile = time.time()
-    compiled, _output_node = build_compiled(
-        device, d=d, d_head=d_head, verbose=verbose_compile
-    )
-    print(f"[legacy] compiled in {time.time() - t_compile:.0f}s", flush=True)
-
-    pure = None
-    spec = None
-    spec_stats = None
-    if mode in ("pure_ar", "both"):
-        pure = pure_ar_rollout(
-            compiled,
-            prefill_ids,
-            max_positions=max_positions,
-            terminal_row=terminal_row,
-            progress_every=progress_every,
-            prefill_chunk_size=prefill_chunk_size,
-        )
-    if mode in ("spec_decode", "both"):
-        from .inference import spec_decode_rollout
-
-        spec, spec_stats = spec_decode_rollout(
-            compiled,
-            prefill_ids,
-            _make_drafter(scene, pose),
-            max_positions=max_positions,
-            terminal_row=terminal_row,
-            draft_window=draft_window,
-            progress_every=progress_every,
-            prefill_chunk_size=prefill_chunk_size,
-        )
-    if mode == "both":
-        assert spec.emitted_rows == pure.emitted_rows
-    rollout = pure if mode == "pure_ar" else spec
-    emitted_rows = rollout.emitted_rows
-    gen = decode_rows_to_pixels(emitted_rows)
-    ref = compare.reference_pixels(scene, pose)
-    options = compare.reference_options(scene, pose)
-    report = compare.compare(gen, ref, options)
-    print(report.format_short(), flush=True)
-    pngs = compare.write_pngs(gen, ref, out_dir, options=options, scale=scale)
-    dump = artifacts.build_token_dump(
-        fixture=fixture,
-        pose_index=pose_index,
-        pose={
-            "x": float(pose.x),
-            "y": float(pose.y),
-            "angle": int(pose.angle),
-            "viewz": float(pose.viewz),
-        },
-        prefill_rows=prefill_ids,
-        emitted_rows=emitted_rows,
-        mode=mode,
-        spec_decode_stats=spec_stats,
-    )
-    dump_path = artifacts.write_token_dump(out_dir / "token_dump.json", dump)
-    return {
-        "report": asdict(report),
-        "report_text": report.format_short(),
-        "pngs": [str(p) for p in pngs],
-        "token_dump": str(dump_path),
-        "rollout": {
-            "mode": mode,
-            "n_tokens": len(emitted_rows),
-            "n_forward_passes": rollout.n_forward_passes,
-            "seconds": rollout.seconds,
-            "stopped": rollout.stopped,
-        },
-        "spec_decode_stats": spec_stats,
-        "out_dir": str(out_dir),
-    }
-
-
-def _make_drafter(scene, pose):
-    from doom_sandbox.implementation.reference_drafter import ARDrafter
-
-    return ARDrafter(scene, pose)
-
-
 def _first_diff(a: list[int], b: list[int]) -> int:
     for i in range(min(len(a), len(b))):
         if a[i] != b[i]:
@@ -494,9 +362,6 @@ def _assert_streams_equivalent(spec_rows: list[int], pure_rows: list[int]) -> li
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv and argv[0] not in ("compile", "run", "-h", "--help"):
-        return _legacy_main(argv)
-
     p = argparse.ArgumentParser(description="Compile and run YAML DOOM render jobs")
     sub = p.add_subparsers(dest="command", required=True)
 
@@ -547,32 +412,6 @@ def main(argv: list[str] | None = None) -> int:
         compile_config(**values)
     else:
         run_config(**values)
-    return 0
-
-
-def _legacy_main(argv: list[str]) -> int:
-    p = argparse.ArgumentParser(description="Legacy Plan-K fixture render CLI")
-    p.add_argument("--fixture", default="e1m1_subset_textured")
-    p.add_argument("--pose", type=int, default=0, dest="pose_index")
-    p.add_argument(
-        "--mode",
-        default="spec_decode",
-        choices=["spec_decode", "pure_ar", "both"],
-        help="spec_decode (default) | pure_ar | both",
-    )
-    p.add_argument("--out-dir", default="out/render", dest="out_dir")
-    p.add_argument("--max-positions", type=int, default=10240, dest="max_positions")
-    p.add_argument("--d", type=int, default=4096)
-    p.add_argument("--d-head", type=int, default=32, dest="d_head")
-    p.add_argument("--scale", type=int, default=8)
-    p.add_argument("--draft-window", type=int, default=0, dest="draft_window")
-    p.add_argument(
-        "--prefill-chunk-size", type=int, default=128, dest="prefill_chunk_size"
-    )
-    p.add_argument("--progress-every", type=int, default=250, dest="progress_every")
-    p.add_argument("--verbose-compile", action="store_true", dest="verbose_compile")
-    args = p.parse_args(argv)
-    run_render(**vars(args))
     return 0
 
 

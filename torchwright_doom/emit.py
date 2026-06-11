@@ -30,7 +30,9 @@ there could improve argmax, and a non-zero value would bias toward
 rows that happen to carry those columns.
 
 Depth, measured by compiling each helper alone with ``d=1024`` against
-``compile_headless`` and reading ``compiled._n_layers``:
+``compile_headless`` (torchwright's in-process debug/test reference
+compiler — not a twdoom inference path, which is the cached ONNX
+artifact) and reading ``compiled._n_layers``:
 
 * Slotless: 1 layer (just the constant `LiteralValue` row).
 * 1-digit slot (cardinality ≤ 256), ``slot.lo == 0``: 1 layer.

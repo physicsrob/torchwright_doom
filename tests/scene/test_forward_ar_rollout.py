@@ -43,7 +43,7 @@ from torchwright.ops.inout_nodes import create_input, create_pos_encoding
 
 from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
 from torchwright_doom.past import GraphPast
-from torchwright_doom.render.compiled_model import build_compiled
+from torchwright_doom.render.compiled_model import build_graph
 from torchwright_doom.render.pure_ar import pure_ar_rollout
 from torchwright_doom.render_main import forward
 from torchwright_doom.vocab import NO_OP
@@ -86,15 +86,39 @@ def _exact_math_rollout(prefill_ids: list[int]) -> list[int]:
     return emitted
 
 
+def _build_compiled(device, *, d: int, d_head: int, max_layers: int = 200):
+    """Compile the token-id forward in-process; returns ``(compiled, output_node)``.
+
+    This test is the one place a compiled doom forward still runs in-process:
+    production inference is the cached ONNX artifact, so the in-process compile
+    lives here (the graph construction is shared via
+    ``render.compiled_model.build_graph``; torchwright's ``compile_headless``
+    is its in-process debug/test reference compiler).
+    """
+    from torchwright.compiler.export import compile_headless
+
+    next_token, pos, _emb, _banks = build_graph()
+    compiled = compile_headless(
+        next_token,
+        pos,
+        d=d,
+        d_head=d_head,
+        max_layers=max_layers,
+        verbose=False,
+        device=str(device),
+    )
+    return compiled, next_token
+
+
 def _compiled_rollout(prefill_ids: list[int], device) -> list[int]:
     """Free-run the compiled transformer: ids in, argmax out, id fed back.
 
     Drives the shipped Plan-K driver (``render.pure_ar.pure_ar_rollout`` over
-    ``render.compiled_model.build_compiled``) so this gate also validates that
-    the autoregressive harness wraps ``compiled.step`` correctly — the compiled
+    the in-process compile above) so this gate also validates that the
+    autoregressive harness wraps ``compiled.step`` correctly — the compiled
     free-run it produces must reproduce the exact-math free-run token for token.
     """
-    compiled, _ = build_compiled(device, d=_D, d_head=_D_HEAD, max_layers=200)
+    compiled, _ = _build_compiled(device, d=_D, d_head=_D_HEAD, max_layers=200)
     result = pure_ar_rollout(
         compiled,
         prefill_ids,

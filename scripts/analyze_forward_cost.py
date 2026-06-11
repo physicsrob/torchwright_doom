@@ -18,6 +18,10 @@ It captures two things during one compile:
   * the residual peak + the live node-set at the peak via an ``allocate`` hook
     on ``ResidualStreamMap`` — for the width breakdown.
 Both are then bucketed by subsystem from the node names.
+
+This deliberately runs the compiler in-process: it measures compile-time
+scheduling, which only exists during a compile — unlike inference, it cannot
+be served by the cached ONNX artifact.
 """
 
 from __future__ import annotations

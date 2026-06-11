@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..asset_config import MISSING_TEXTURE_ID
 from ..vocab import DONE, PIXEL
@@ -18,6 +18,9 @@ from .config import (
 )
 from .inference import OnnxTokenRuntime
 from .tokens_bridge import row_index
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from torchwright.debug.onnx_debug import OnnxDebugSession
 
 
 def compile_cached(
@@ -85,6 +88,65 @@ def compile_cached(
         flush=True,
     )
     return cache_dir
+
+
+def load_debug_session(
+    cache_dir: str | Path | None,
+    config: RenderConfig,
+    *,
+    base_dir: str | Path | None = None,
+    providers=None,
+) -> "OnnxDebugSession":
+    """Open an :class:`OnnxDebugSession` over a cached compiled artifact.
+
+    Rebuilds the forward graph deterministically (``build_graph``) and pairs
+    it with ``<cache_dir>/model.onnx`` — the session's fingerprint check
+    fails loud if the rebuilt graph differs from the one the artifact was
+    compiled from.  ``cache_dir=None`` resolves the config's own cache entry.
+
+    This NEVER compiles: a missing artifact (or its debug sidecar) raises
+    with the recompile recipe instead — production compiles are
+    Modal-scale jobs, not something to trigger from a debug session.
+    """
+    from .compiled_model import build_graph
+
+    wad_path = resolve_wad_path(config, base_dir=base_dir)
+    if cache_dir is None:
+        cache_dir = compile_cache_dir(config, wad_path)
+    else:
+        cache_dir = Path(cache_dir)
+    onnx_path = cache_dir / "model.onnx"
+    sidecar_path = cache_dir / "model.debug.json"
+    recipe = (
+        f"recompile via `python -m torchwright_doom.render compile "
+        f"--config <yaml>` (delete {cache_dir} first if it exists; "
+        f"compile_to_onnx writes the debug sidecar by default)"
+    )
+    if not onnx_path.exists():
+        raise FileNotFoundError(f"no cached artifact at {onnx_path} — {recipe}")
+    if not sidecar_path.exists():
+        raise FileNotFoundError(
+            f"cached artifact {onnx_path} has no debug sidecar "
+            f"{sidecar_path.name} (pre-sidecar cache entry?) — {recipe}"
+        )
+    # The graph rebuild must see the same screen dims the artifact was
+    # compiled at; constants.py reads them from env at import, so a caller
+    # that skipped apply_screen_env() would otherwise surface as an opaque
+    # fingerprint mismatch.
+    from ..constants import SCREEN_HEIGHT, SCREEN_WIDTH
+
+    if (SCREEN_WIDTH, SCREEN_HEIGHT) != config.screen:
+        raise RuntimeError(
+            f"screen dims {SCREEN_WIDTH}x{SCREEN_HEIGHT} were imported before "
+            f"this config's {config.screen[0]}x{config.screen[1]} was applied "
+            f"— call apply_screen_env(config) before importing graph modules"
+        )
+    from torchwright.debug.onnx_debug import OnnxDebugSession
+
+    next_token, pos, _emb, _banks = build_graph(
+        asset_config=config.asset_config(), wad_path=wad_path
+    )
+    return OnnxDebugSession(str(onnx_path), next_token, pos, providers=providers)
 
 
 def load_cached_runtime(

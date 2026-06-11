@@ -1,6 +1,9 @@
-"""Measure where the compiled forward departs exact math at the K divergence.
+"""Measure where the compiled artifact departs exact math at the K divergence.
 
-Builds the graph ONCE (so the oracle and the compiled module share node identity),
+Rebuilds the graph ONCE via ``render.compiled_model.build_graph`` (so the
+exact-math oracle and the artifact's debug session share node identity — the
+session's fingerprint check guarantees the rebuild matches the compiled graph),
+opens an :class:`OnnxDebugSession` over the cached production ONNX,
 teacher-forces the reference stream up to the first hard divergence via the KV
 cache, then:
 
@@ -12,7 +15,10 @@ cache, then:
   exact-math oracle (reference_eval) AT the divergence position, and report the
   first divergent node in topological order — the origin of the fp32 departure.
 
-    .venv/bin/python -m torchwright_doom.scripts.k_probe_divergence --pos 2450
+    .venv/bin/python -m scripts.k_probe_divergence --pos 2450
+
+Needs the config's compiled cache entry to exist already (this never compiles —
+build it via ``python -m torchwright_doom.render compile --config <yaml>``).
 """
 
 from __future__ import annotations
@@ -21,6 +27,9 @@ import argparse
 import os
 import sys
 from pathlib import Path
+
+_REPO = Path(__file__).resolve().parents[1]
+_DEFAULT_CONFIG = _REPO / "configs" / "e1m1.yaml"
 
 
 def _ensure_doom_sandbox() -> None:
@@ -42,30 +51,47 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--pose", type=int, default=0)
     p.add_argument("--pos", type=int, default=2450,
                    help="input stream position whose prediction diverges")
-    p.add_argument("--d", type=int, default=4096)
-    p.add_argument("--d-head", type=int, default=32, dest="d_head")
+    p.add_argument("--config", default=str(_DEFAULT_CONFIG), dest="config_path")
+    p.add_argument(
+        "--cache-dir",
+        default=None,
+        dest="cache_dir",
+        help="compiled cache entry holding model.onnx "
+        "(default: the config's own cache key)",
+    )
     p.add_argument("--phase2", action="store_true",
                    help="run the per-node oracle compare even if no assert fires")
     p.add_argument("--atol", type=float, default=1e-2)
     args = p.parse_args(argv)
 
     os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
+
+    # Screen env BEFORE any graph/sandbox module imports — constants.py bakes
+    # the dims at import and the artifact was compiled at the config's dims.
+    from torchwright_doom.render.config import (
+        apply_screen_env,
+        compile_cache_dir,
+        load_render_config,
+        resolve_wad_path,
+    )
+
+    config_path = Path(args.config_path)
+    config = load_render_config(config_path)
+    apply_screen_env(config)
+
     _ensure_doom_sandbox()
 
     import torch
 
-    import torchwright.graph.node as _node_module
-    from torchwright.compiler.export import compile_headless
+    from torchwright.debug.onnx_debug import OnnxDebugSession
     from torchwright.debug.probe import reference_eval
-    from torchwright.ops.inout_nodes import create_pos_encoding
 
     from doom_sandbox.implementation import prefill as sb_prefill
     from doom_sandbox.implementation import reference_drafter as drafter
     from doom_sandbox import fixtures
 
-    from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED, build_doom_embedding
-    from torchwright_doom.past import GraphPast
-    from torchwright_doom.render_main import forward
+    from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
+    from torchwright_doom.render.compiled_model import build_graph
     from torchwright_doom.render.tokens_bridge import rows_to_input, sandbox_token_to_row
 
     scene = fixtures.load_fixture(args.fixture)
@@ -79,30 +105,52 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[probe] {args.fixture} pose={args.pose} pos={POS} "
           f"expected next = {exp_t.name} {exp_v} (row {expected_next})", flush=True)
 
-    # Build the graph ONCE so oracle and compiled share node identity.
-    _node_module.global_node_id = 0
-    emb = build_doom_embedding("token_ids")
-    pe = create_pos_encoding()
-    next_token = forward(emb, GraphPast(input_vec=emb, pos_encoding=pe), pe)
-    compiled = compile_headless(next_token, pe, d=args.d, d_head=args.d_head,
-                                max_layers=200, verbose=False, device="cuda")
-    w_embed_t = W_EMBED.t().cuda()
+    # Locate the cached artifact (never compile — that's a Modal-scale job).
+    wad_path = resolve_wad_path(config, base_dir=config_path.parent)
+    cache_dir = (
+        Path(args.cache_dir) if args.cache_dir else compile_cache_dir(config, wad_path)
+    )
+    onnx_path = cache_dir / "model.onnx"
+    if not onnx_path.exists() or not (cache_dir / "model.debug.json").exists():
+        raise SystemExit(
+            f"[probe] no debuggable artifact at {cache_dir} (model.onnx + "
+            f"model.debug.json required) — recompile via `python -m "
+            f"torchwright_doom.render compile --config {config_path}`"
+        )
+
+    # Build the graph ONCE so the oracle and the debug session share node
+    # identity; the session's fingerprint check fails loud if this rebuild
+    # differs from the graph the artifact was compiled from.
+    next_token, pos_enc, _emb, _banks = build_graph(
+        asset_config=config.asset_config(), wad_path=wad_path
+    )
+    providers = None
+    if torch.cuda.is_available():
+        # fp32 only: TF32 collapses the content-addressed attention's
+        # unit-score logit gaps (see inference._default_ort_providers).
+        providers = [
+            ("CUDAExecutionProvider", {"use_tf32": "0"}),
+            "CPUExecutionProvider",
+        ]
+    session = OnnxDebugSession(str(onnx_path), next_token, pos_enc, providers=providers)
 
     # Teacher-force to POS via the KV cache: prefill 0..POS-1, then a single debug
     # step at POS (cheap: only one position's residual is captured).
-    past = compiled.empty_past()
-    _, past = compiled.step(rows_to_input(full_rows[:POS]), past, past_len=0)
+    past = session.empty_past()
+    _, past = session.step(rows_to_input(full_rows[:POS]), past, past_len=0)
 
     print("\n[probe] Phase 1: debug=True step at POS (checks all Asserts) ...", flush=True)
     fired = None
     try:
-        out, _ = compiled.step(rows_to_input([full_rows[POS]]), past, past_len=POS, debug=True)
+        out, _ = session.step(rows_to_input([full_rows[POS]]), past, past_len=POS, debug=True)
     except AssertionError as e:
         fired = str(e)
         print(f"[probe] ASSERT FIRED at POS {POS}:\n{fired}", flush=True)
         # Re-run without debug to get the prediction for context.
-        out, _ = compiled.step(rows_to_input([full_rows[POS]]), past, past_len=POS)
-    pred_row = int(torch.argmax(out[-1] @ w_embed_t).item())
+        out, _ = session.step(rows_to_input([full_rows[POS]]), past, past_len=POS)
+    # The session returns LOGITS (the artifact's own unembed) — argmax directly.
+    compiled_logits = out[-1].detach().float()
+    pred_row = int(torch.argmax(compiled_logits).item())
     pred_t, pred_v = TOKEN_VOCAB.row_to_token[pred_row]
     print(f"[probe] compiled prediction at POS {POS}: {pred_t.name} {pred_v} (row {pred_row})"
           f"  {'== expected' if pred_row == expected_next else '!= expected (DIVERGES)'}",
@@ -122,23 +170,21 @@ def main(argv: list[str] | None = None) -> int:
         _misc.Assert._check = _orig
 
     # Phase 3: is the flip in the unembed argmax, or upstream in the graph?
-    # Compare the compiled output embedding to the exact one at POS, and look at
-    # both argmax margins over the two contending rows.
-    comp_emb = out[-1].detach().float().cuda()
-    exact_emb = oracle[next_token][POS].detach().float().cuda()
-    emb_linf = (comp_emb - exact_emb).abs().max().item()
-    print(f"\n[probe] Phase 3: output-embedding compiled-vs-exact  L_inf={emb_linf:.4g}")
-    for label, emb in (("compiled", comp_emb), ("exact   ", exact_emb)):
-        logits = emb @ w_embed_t
+    # Compare the compiled logits row to the exact one at POS (exact side via
+    # the oracle's output embedding @ W_EMBED.T), and look at both argmax
+    # margins over the two contending rows.
+    exact_logits = (oracle[next_token][POS].detach().float() @ W_EMBED.t().float())
+    logit_linf = (compiled_logits - exact_logits).abs().max().item()
+    print(f"\n[probe] Phase 3: logits compiled-vs-exact  L_inf={logit_linf:.4g}")
+    for label, logits in (("compiled", compiled_logits), ("exact   ", exact_logits)):
         top = torch.topk(logits, 3)
         rows = top.indices.tolist()
         vals = top.values.tolist()
         decoded = [f"{TOKEN_VOCAB.row_to_token[r][0].name}{TOKEN_VOCAB.row_to_token[r][1]}" for r in rows]
         print(f"  {label} top-3: " + ", ".join(
             f"{d}(row {r}, logit {v:.6g})" for d, r, v in zip(decoded, rows, vals)))
-    # Margin between the expected (node=3) and predicted (node=1) rows, both ways.
-    for label, emb in (("compiled", comp_emb), ("exact   ", exact_emb)):
-        l = emb @ w_embed_t
+    # Margin between the expected and predicted rows, both ways.
+    for label, l in (("compiled", compiled_logits), ("exact   ", exact_logits)):
         print(f"  {label} logit[expected row {expected_next}]={l[expected_next].item():.6g}  "
               f"logit[predicted row {pred_row}]={l[pred_row].item():.6g}  "
               f"margin(exp-pred)={(l[expected_next]-l[pred_row]).item():.6g}")
@@ -148,7 +194,7 @@ def main(argv: list[str] | None = None) -> int:
     diffs = []
     for node in oracle:
         try:
-            cv = compiled.debug_value(node)
+            cv = session.debug_value(node)
         except Exception:
             cv = None
         if cv is None:

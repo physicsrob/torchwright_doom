@@ -250,7 +250,10 @@ def _cache_len(past) -> int:
     """Logical committed length across the two cache representations the
     generic rollouts thread: the owned :class:`KVCache` (production ONNX
     runtime) and the head-major ``(past_K_tuple, past_V_tuple)`` of the
-    in-process ``CompiledHeadless`` / test mocks."""
+    surviving in-process consumers — the spec-decode test mocks
+    (``tests/render/test_spec_decode_logic.py``) and the small-scene
+    ``compile_headless`` AR-rollout gate
+    (``tests/scene/test_forward_ar_rollout.py``)."""
     if isinstance(past, KVCache):
         return past.length
     return int(past[0][0].shape[1])
@@ -262,8 +265,9 @@ def _commit(past, target: int):
     Owned cache: lower the logical length in place (no copy), and — on a
     windowed cache — flush the accepted prefix of the pending batch into
     freshly-allocated slots (see :func:`_persist_rows`; rejected rows are
-    dropped, never written).  Head-major tuple: trim to ``target`` as the
-    in-process path requires.
+    dropped, never written).  Head-major tuple (the test mocks and the
+    in-process small-scene gate — see :func:`_cache_len`): trim to
+    ``target``.
     """
     if isinstance(past, KVCache):
         _flush_pending(past, target)
@@ -1149,7 +1153,14 @@ def _w_embed_t(device: torch.device) -> torch.Tensor:
 
 
 def argmax_rows(outputs: torch.Tensor) -> list[int]:
-    """Argmax-decode compiled-step outputs to token row ids."""
+    """Argmax-decode compiled-step outputs to token row ids.
+
+    Logits-width outputs (production ``OnnxTokenRuntime`` and
+    ``OnnxDebugSession`` — the artifact owns the unembed) argmax directly;
+    embedding-width outputs (the in-process ``compile_headless`` gate and
+    the spec-decode test mocks) go through the host-side
+    ``@ W_EMBED.T`` unembed first.
+    """
     o = outputs.detach()
     if o.shape[-1] != W_EMBED.shape[1] and o.shape[-1] == W_EMBED.shape[0]:
         return o.argmax(dim=-1).cpu().tolist()
@@ -1170,7 +1181,9 @@ def run_prefill(
 
     Allocates the run's single owned cache (``max_cache_len`` rows) up front
     via ``compiled.empty_past(max_cache_len)`` and writes prefill straight into
-    it; the in-process reference runtime ignores the cap and grows tuples.
+    it; the in-process consumers (test mocks + the small-scene
+    ``compile_headless`` gate, see :func:`_cache_len`) ignore the cap and
+    grow tuples.
     """
     if not prefill_ids:
         raise ValueError("prefill_ids must be non-empty")

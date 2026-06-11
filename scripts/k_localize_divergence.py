@@ -1,15 +1,19 @@
 """Localize the first teacher-forced divergence of the compiled free-run (Plan K).
 
-Feeds the *reference* token stream through the compiled model in one wide forward
-(no AR rollout) and reports the first position whose compiled argmax hard-diverges
-from the reference under the J2 bars. Distinguishes a per-position compiled error
-(teacher-forced hard-diverges -> an op exceeds its noise budget, localizable with
-probe_compiled) from pure AR-feedback amplification (teacher-forced stays clean).
+Feeds the *reference* token stream through the cached production ONNX artifact
+(via ``render.cache.load_debug_session`` — the same bits production renders
+with) in one wide forward (no AR rollout) and reports the first position whose
+compiled argmax hard-diverges from the reference under the J2 bars.
+Distinguishes a per-position compiled error (teacher-forced hard-diverges -> an
+op exceeds its noise budget, localizable with ``k_probe_divergence``) from pure
+AR-feedback amplification (teacher-forced stays clean).
 
-    .venv/bin/python -m torchwright_doom.scripts.k_localize_divergence --window 3000
+    .venv/bin/python -m scripts.k_localize_divergence --window 3000
 
-GPU + a ~65s compile. The single wide forward is O(n_pos^2) in attention memory,
-so ``--window`` caps the fed prefix (3000 covers the observed AR onset at ~2448).
+Needs the config's compiled cache entry to exist already (this never compiles —
+build it via ``python -m torchwright_doom.render compile --config <yaml>``).
+The single wide forward is O(n_pos^2) in attention memory, so ``--window`` caps
+the fed prefix (3000 covers the observed AR onset at ~2448).
 """
 
 from __future__ import annotations
@@ -18,6 +22,9 @@ import argparse
 import os
 import sys
 from pathlib import Path
+
+_REPO = Path(__file__).resolve().parents[1]
+_DEFAULT_CONFIG = _REPO / "configs" / "e1m1.yaml"
 
 
 def _ensure_doom_sandbox() -> None:
@@ -38,18 +45,33 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--fixture", default="e1m1_subset_textured")
     p.add_argument("--pose", type=int, default=0)
     p.add_argument("--window", type=int, default=3000)
-    p.add_argument("--d", type=int, default=4096)
-    p.add_argument("--d-head", type=int, default=32, dest="d_head")
+    p.add_argument("--config", default=str(_DEFAULT_CONFIG), dest="config_path")
+    p.add_argument(
+        "--cache-dir",
+        default=None,
+        dest="cache_dir",
+        help="compiled cache entry holding model.onnx "
+        "(default: the config's own cache key)",
+    )
     args = p.parse_args(argv)
 
     os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
+
+    # Screen env BEFORE any graph/sandbox module imports — constants.py bakes
+    # the dims at import and the artifact was compiled at the config's dims.
+    from torchwright_doom.render.config import apply_screen_env, load_render_config
+
+    config_path = Path(args.config_path)
+    config = load_render_config(config_path)
+    apply_screen_env(config)
+
     _ensure_doom_sandbox()
     from doom_sandbox import fixtures
     from doom_sandbox.implementation import prefill as sb_prefill
     from doom_sandbox.implementation import reference_drafter as drafter
 
     from torchwright_doom.render import compare
-    from torchwright_doom.render.compiled_model import build_compiled
+    from torchwright_doom.render.cache import load_debug_session
     from torchwright_doom.render.diagnostic import teacher_forced_scan
     from torchwright_doom.render.tokens_bridge import sandbox_token_to_row
 
@@ -69,9 +91,18 @@ def main(argv: list[str] | None = None) -> int:
 
     import torch
 
-    compiled, _ = build_compiled(torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-                                 d=args.d, d_head=args.d_head)
-    divs = teacher_forced_scan(compiled, full_rows, begin, options, window=args.window)
+    providers = None
+    if torch.cuda.is_available():
+        # fp32 only: TF32 collapses the content-addressed attention's
+        # unit-score logit gaps (see inference._default_ort_providers).
+        providers = [
+            ("CUDAExecutionProvider", {"use_tf32": "0"}),
+            "CPUExecutionProvider",
+        ]
+    session = load_debug_session(
+        args.cache_dir, config, base_dir=config_path.parent, providers=providers
+    )
+    divs = teacher_forced_scan(session, full_rows, begin, options, window=args.window)
 
     fed = min(args.window, len(full_rows))
     n_ar = fed - begin - 1
