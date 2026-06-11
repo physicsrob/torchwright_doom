@@ -1,15 +1,16 @@
 # The production default (e1m1_d8192_h16384_opt2: 160x100, d=8192/16k MLP,
-# CP-SAT opt2) adapted to the WINDOWED cache (ring plan).  cache_window
-# 8192 = the "4k scene + 4k ring" sizing call: prefill 3,613 pins the
-# sink, leaving a 4,579-slot ring.  The ~21.7k-token 160x100 rollout
-# wraps the ring ~5x, so this run is ALSO the span experiment: output is
-# token-identical to the unbounded default ONLY IF every attention read
-# lands within the ring (occlusion/visplane spans at 160x100 are
-# uncensused) — divergence here is span information, not necessarily a
-# runtime bug.  Attention width is constant ~8.2k all frame (vs growing
-# to 25k+), KV residency ~6 GB vs ~17 GB.
+# CP-SAT opt2) on the WINDOWED cache with the permanent/expiring slot
+# policy: only PIXEL rows (63% of the stream, publish nothing, read only
+# at offset <= 3) recycle their slots; the prefill and every protocol row
+# stay resident.  Measured permanent demand for the 160x100 e1m1 frame:
+# 3,613 prefill + ~9.5k non-pixel rollout = ~13.1k -> cache_window 16384
+# leaves a ~3.3k resident-pixel pool.  Attention width is a constant
+# ~16.4k + pass width (vs growing to 25k+ unbounded); KV residency
+# ~12 GB vs ~43 GB.  Expected: token-identical to the unbounded default
+# (out/render/token_dump.json, 25,350 tokens) — the run that falsifies
+# this would be the first evidence of a long-range pixel-row read.
 wad: doom1.wad
-model: {d: 8192, d_head: 32, scale: 2, d_hidden: 16384, optimize: 2, cache_window: 8192}
+model: {d: 8192, d_head: 32, scale: 2, d_hidden: 16384, optimize: 2, cache_window: 16384}
 region: {x1: 627.2, y1: -3760.0, x2: 1395.2, y2: -2800.0}
 textures:
   wall: [BROWN1, BROWN144, COMPUTE2, DOOR3, DOORSTOP, LITE3, STARTAN3, STEP6, SUPPORT2]

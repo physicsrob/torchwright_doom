@@ -97,12 +97,24 @@ def load_cached_runtime(
     import os
 
     providers = ["CPUExecutionProvider"] if os.environ.get("TWDOOM_FORCE_CPU") else None
+    # Windowed-cache expiry policy (runtime knob, no recompile): comma-
+    # separated token type names whose rows may be recycled once the
+    # window fills.  Default: pixel rows only — they publish no channels
+    # and are read only at offset <= 3, so evicting old ones is safe by
+    # construction; everything else stays resident.
+    env_types = os.environ.get("TWDOOM_EXPIRING_TYPES")
+    expiring_types = (
+        tuple(t.strip() for t in env_types.split(",") if t.strip())
+        if env_types is not None
+        else ("pixel",)
+    )
     return OnnxTokenRuntime(
         Path(cache_dir) / "model.onnx",
         providers=providers,
         enable_profiling=enable_profiling,
         profile_dir=profile_dir,
         attention_buckets=attention_buckets,
+        expiring_types=expiring_types,
     )
 
 

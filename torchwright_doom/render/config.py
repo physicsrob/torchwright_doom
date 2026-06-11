@@ -39,21 +39,27 @@ class ModelConfig:
     # busts every compile-cache key once (it enters the payload via
     # asdict(config.model)) — intended.
     cache_stride: int = 12288
-    # Windowed-cache protocol (attention sink + sliding window — the ring
-    # plan, ring_idea.md): the committed KV cache becomes a fixed
-    # cache_window-slot host-managed window.  The runtime pins the
-    # prefill in the sink slots [0, prefill_len) and wraps rollout rows
-    # through the remaining ring slots, so committed pixel rows
-    # evaporate by overwrite and the attention width stays CONSTANT
+    # Windowed-cache protocol (the ring plan, ring_idea.md, revised to
+    # the permanent/expiring policy): the committed KV cache becomes a
+    # fixed cache_window-slot host-managed window.  Every committed row
+    # is either PERMANENT (resident for the whole run — the prefill and
+    # all protocol rows) or EXPIRING (recyclable once the window fills
+    # — by default only PIXEL rows, which publish no channels and are
+    # read only at offset <= 3).  Attention width is CONSTANT
     # (cache_window + pass width) for the whole frame.  None = the
     # unbounded static cache above.  When set, cache_stride is IGNORED
     # (the window IS the slot count; the exporter rejects both).
     # Positions stay absolute and run to max_seq_len regardless.
-    # Output equals the unbounded cache ONLY IF every attention read's
-    # span fits what the window keeps resident (the span condition —
-    # ring_idea.md); size it from the span census, with margin.  Enters
-    # the compile-cache key via asdict like every model field (and like
-    # cache_stride, adding it busts every key once — intended).
+    # SIZE IT for the run's permanent rows: prefill + non-expiring
+    # rollout (measured 160x100 e1m1: 3,613 + ~9.5k -> 16384 is
+    # comfortable), plus slack for the resident-pixel pool; the runtime
+    # fails loud on saturation.  Output equals the unbounded cache as
+    # long as no read targets an evicted (expiring-type) row — a far
+    # smaller condition than the old per-channel span condition.
+    # Enters the compile-cache key via asdict like every model field
+    # (and like cache_stride, adding it busts every key once).
+    # The expiring-type set itself is a RUNTIME knob
+    # (TWDOOM_EXPIRING_TYPES), not a compile parameter.
     cache_window: int | None = None
 
 

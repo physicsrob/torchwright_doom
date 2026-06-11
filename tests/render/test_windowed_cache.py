@@ -1,24 +1,29 @@
-"""Windowed-cache (attention sink + sliding window) host-policy tests, no GPU.
+"""Windowed-cache host-policy tests (permanent/expiring slots), no GPU.
 
 The torchwright exporter owns the graph half of the windowed protocol
-(mask + staging scatter — tested in torchwright's
+(writtenness mask + staging scatter — tested in torchwright's
 test_windowed_cache_onnx.py); this file pins the HOST half that
 ``OnnxTokenRuntime`` layers on top:
 
-  - the sink+ring slot mapping (prefill at identity slots, rollout rows
-    wrapping through the ring),
-  - persistence scheduling — and especially the speculative-decode rule
-    that a multi-row rollout batch is stashed on ``cache.pending`` and
-    only its ACCEPTED prefix reaches the ring at ``_commit``.  The
-    unbounded cache tolerated persist-then-lower-length on a reject; in
-    a ring that order would evict a live in-window row for a draft that
-    never becomes part of the stream.  The regression test here fails
-    against that (old) behavior by construction.
+  - slot allocation: strictly sequential while the buffer fills (the
+    graph's ``j < base`` writtenness mask requires first-fill in slot
+    order), then recycling of EXPIRED slots in cursor order — permanent
+    rows are never overwritten, and saturation (all slots permanent)
+    fails loud;
+  - persistence scheduling: single-row decodes write through; every
+    multi-row batch (speculative verify batches AND prefill chunks)
+    pends on ``cache.pending`` and ``_commit`` allocates slots for
+    exactly the accepted prefix — a rejected draft row never consumes a
+    slot (the regression that motivated the pending discipline: under
+    persist-then-rollback it would evict a live row for a row that
+    never becomes part of the stream).
 
 The mock mirrors ``_MockKVCompiled`` in test_spec_decode_logic.py but
 routes every write through the production ``_persist_rows`` /
-``_commit`` helpers, and writes K = position / V = token so the buffer
-contents are checkable against the final stream.
+``_commit`` helpers with a per-row expiring tag (the body tokens
+100..110 "are pixels"; 50 and the terminal are permanent), and writes
+K = position / V = token so buffer contents are checkable against the
+final stream.
 """
 
 from __future__ import annotations
@@ -29,11 +34,12 @@ import torch
 from torchwright_doom.render import pure_ar, spec_decode
 from torchwright_doom.render.inference import (
     KVCache,
+    _alloc_runs,
+    _alloc_slot,
     _commit,
     _flush_pending,
     _persist_rows,
-    _window_slot,
-    _window_slot_runs,
+    run_prefill,
 )
 
 _TERMINAL = 999
@@ -47,15 +53,20 @@ def _model_next(r: int) -> int:
     return _TERMINAL
 
 
-def _windowed_cache(window: int, sink: int | None, staging: int = 16) -> KVCache:
+def _is_expiring_token(token: int) -> bool:
+    """The mock policy: body tokens are 'pixels'; 50/terminal permanent."""
+    return 100 <= token < 999
+
+
+def _windowed_cache(window: int, staging: int = 16) -> KVCache:
     return KVCache(
         k=[torch.zeros(window + staging, 1, 1)],
         v=[torch.zeros(window + staging, 1, 1)],
         length=0,
         max_len=10_000,
         window=window,
-        sink_len=sink,
         staging=staging,
+        slot_expiring=[False] * window,
     )
 
 
@@ -64,43 +75,51 @@ def _rows(values: list[float]) -> list[torch.Tensor]:
 
 
 # ---------------------------------------------------------------------------
-# Slot mapping
+# Slot allocation
 # ---------------------------------------------------------------------------
 
 
-def test_window_slot_identity_then_wrap():
-    cache = _windowed_cache(window=8, sink=4)
-    # Sink positions persist at identity slots.
-    assert [_window_slot(cache, p) for p in range(4)] == [0, 1, 2, 3]
-    # Ring positions wrap through slots [4, 8).
-    assert [_window_slot(cache, p) for p in range(4, 14)] == [
-        4,
-        5,
-        6,
-        7,
-        4,
-        5,
-        6,
-        7,
-        4,
-        5,
-    ]
+def test_alloc_sequential_fill_then_recycle_skips_permanent():
+    cache = _windowed_cache(window=6)
+    # Fill: slots 0..5, alternating permanent/expiring tags.
+    flags = [False, True, False, True, True, False]  # permanent at 0, 2, 5
+    assert [_alloc_slot(cache, f) for f in flags] == [0, 1, 2, 3, 4, 5]
+    assert cache.n_permanent == 3
+    # Recycling visits only the expired slots, in cursor order.
+    assert _alloc_slot(cache, True) == 1
+    assert _alloc_slot(cache, True) == 3
+    assert _alloc_slot(cache, True) == 4
+    # Second revolution wraps back to slot 1.
+    assert _alloc_slot(cache, True) == 1
 
 
-def test_window_slot_requires_sink_len():
-    cache = _windowed_cache(window=8, sink=None)
-    with pytest.raises(RuntimeError, match="sink_len"):
-        _window_slot(cache, 5)
+def test_alloc_recycled_slot_can_become_permanent():
+    cache = _windowed_cache(window=4)
+    for f in (False, True, True, False):
+        _alloc_slot(cache, f)
+    # A permanent row recycles an expired slot — the pool shrinks.
+    assert _alloc_slot(cache, False) == 1
+    assert cache.n_permanent == 3
+    # Only slot 2 is left expiring.
+    assert _alloc_slot(cache, True) == 2
+    assert _alloc_slot(cache, True) == 2  # sole expired slot, every time
 
 
-def test_window_slot_runs_split_at_wrap():
-    cache = _windowed_cache(window=8, sink=4)
-    # Positions 6..9 -> slots 6, 7, 4, 5: one wrap, two contiguous runs.
-    assert _window_slot_runs(cache, 6, 4) == [(6, 0, 2), (4, 2, 2)]
-    # Fully inside one revolution: a single run.
-    assert _window_slot_runs(cache, 4, 3) == [(4, 0, 3)]
-    # Prefill (identity): a single run.
-    assert _window_slot_runs(cache, 0, 4) == [(0, 0, 4)]
+def test_alloc_saturation_raises():
+    cache = _windowed_cache(window=3)
+    for _ in range(3):
+        _alloc_slot(cache, False)
+    with pytest.raises(RuntimeError, match="saturated"):
+        _alloc_slot(cache, True)
+
+
+def test_alloc_runs_compress_contiguous_assignments():
+    cache = _windowed_cache(window=8)
+    # Pure fill: one run.
+    assert _alloc_runs(cache, [True] * 5) == [[0, 0, 5]]
+    assert _alloc_runs(cache, [False] * 3) == [[5, 0, 3]]
+    # Recycling: slots 0..4 are expired and contiguous -> one run again.
+    assert _alloc_runs(cache, [True] * 3) == [[0, 0, 3]]
 
 
 # ---------------------------------------------------------------------------
@@ -108,105 +127,108 @@ def test_window_slot_runs_split_at_wrap():
 # ---------------------------------------------------------------------------
 
 
-def _fill(cache: KVCache, upto: int) -> None:
-    """Commit positions [length, upto) one row at a time (K=pos, V=1000+pos)."""
+def _fill(cache: KVCache, upto: int, expiring_fn=_is_expiring_token) -> None:
+    """Commit positions [length, upto) one row at a time
+    (K=pos, V=1000+pos, expiring iff expiring_fn(pos) — position stands in
+    for the token here)."""
     for p in range(cache.length, upto):
-        _persist_rows(cache, p, 1, _rows([float(p)]), _rows([1000.0 + p]))
+        _persist_rows(
+            cache, p, 1, _rows([float(p)]), _rows([1000.0 + p]), [expiring_fn(p)]
+        )
         cache.length = p + 1
 
 
-def test_prefill_identity_and_single_row_wrap():
-    cache = _windowed_cache(window=8, sink=4)
-    # Prefill batch (all below sink): immediate, identity slots.
-    _persist_rows(cache, 0, 4, _rows([0.0, 1.0, 2.0, 3.0]), _rows([0.0] * 4))
-    cache.length = 4
-    assert cache.k[0][:4, 0, 0].tolist() == [0.0, 1.0, 2.0, 3.0]
+def test_single_row_writes_through_and_multi_row_pends():
+    cache = _windowed_cache(window=6)
+    _persist_rows(cache, 0, 1, _rows([0.0]), _rows([1000.0]), [False])
+    cache.length = 1
+    assert cache.k[0][0, 0, 0].item() == 0.0
     assert cache.pending is None
-    # Single-row decodes: immediate, wrapping after one ring revolution.
-    _fill(cache, 13)  # positions 4..12; ring slots hold the last 4
-    # slot(12)=4+(12-4)%4=4, slot(9)=5, slot(10)=6, slot(11)=7
-    assert cache.k[0][4:8, 0, 0].tolist() == [12.0, 9.0, 10.0, 11.0]
-    assert cache.pending is None
-
-
-def test_spec_batch_pends_and_commit_flushes_accepted_only():
-    """THE ring regression: rejected speculative rows must never reach the
-    ring.  The old persist-then-lower-length order would have evicted two
-    live in-window rows here."""
-    cache = _windowed_cache(window=8, sink=4)
-    _fill(cache, 10)  # ring slots [4,5,6,7] hold positions [8, 9, 6, 7]
-    ring_before = cache.k[0][4:8, 0, 0].tolist()
-    assert ring_before == [8.0, 9.0, 6.0, 7.0]
-
-    # A 3-row speculative batch at positions 10..12 (slots 6, 7, 4): the
-    # step stashes it — the ring must be untouched until the commit.
+    # Multi-row: stashed, nothing written, no slots consumed.
     _persist_rows(
-        cache, 10, 3, _rows([10.0, 11.0, 12.0]), _rows([1010.0, 1011.0, 1012.0])
+        cache, 1, 3, _rows([1.0, 2.0, 3.0]), _rows([0.0] * 3), [True, True, True]
     )
-    cache.length = 13
+    cache.length = 4
     assert cache.pending is not None
-    assert cache.k[0][4:8, 0, 0].tolist() == ring_before
+    assert cache.write_head == 1
 
-    # Accept only the first row (the model rejected the drafts at 11, 12).
-    _commit(cache, 11)
+
+def test_commit_flushes_accepted_prefix_only():
+    """A rejected draft row never consumes a slot — the core discipline."""
+    cache = _windowed_cache(window=6)
+    _persist_rows(
+        cache,
+        0,
+        3,
+        _rows([0.0, 1.0, 2.0]),
+        _rows([10.0, 11.0, 12.0]),
+        [False, True, True],
+    )
+    cache.length = 3
+    _commit(cache, 2)  # accept rows 0..1, reject row 2
     assert cache.pending is None
-    assert cache.length == 11
-    # Position 10 landed at slot 6 (evicting position 6 — correctly out of
-    # window); positions 7, 8, 9 survive.  Under the old order, slots 7 and
-    # 4 would now hold the REJECTED rows 11 and 12, having evicted the
-    # live rows 7 and 8.
-    assert cache.k[0][4:8, 0, 0].tolist() == [8.0, 9.0, 10.0, 7.0]
-    assert cache.v[0][6, 0, 0].item() == 1010.0
-
-
-def test_full_accept_flushes_everything():
-    cache = _windowed_cache(window=8, sink=4)
-    _fill(cache, 10)
-    _persist_rows(cache, 10, 3, _rows([10.0, 11.0, 12.0]), _rows([0.0] * 3))
-    cache.length = 13
-    _commit(cache, 13)
-    # slots: 10->6, 11->7, 12->4; position 9 (slot 5) survives.
-    assert cache.k[0][4:8, 0, 0].tolist() == [12.0, 9.0, 10.0, 11.0]
+    assert cache.length == 2
+    assert cache.write_head == 2  # only two slots ever allocated
+    assert cache.k[0][:2, 0, 0].tolist() == [0.0, 1.0]
+    assert cache.k[0][2, 0, 0].item() == 0.0  # rejected row never landed
 
 
 def test_commit_at_base_drops_whole_batch():
-    cache = _windowed_cache(window=8, sink=4)
-    _fill(cache, 10)
-    ring_before = cache.k[0][4:8, 0, 0].tolist()
-    _persist_rows(cache, 10, 2, _rows([10.0, 11.0]), _rows([0.0] * 2))
-    cache.length = 12
-    _commit(cache, 10)  # reject-at-0 (commit includes only the corrected row
-    # in production; here: drop everything)
+    cache = _windowed_cache(window=6)
+    _fill(cache, 4, expiring_fn=lambda p: False)
+    _persist_rows(cache, 4, 2, _rows([4.0, 5.0]), _rows([0.0] * 2), [True, True])
+    cache.length = 6
+    _commit(cache, 4)
     assert cache.pending is None
-    assert cache.k[0][4:8, 0, 0].tolist() == ring_before
+    assert cache.write_head == 4  # no slots consumed by the dropped batch
 
 
 def test_double_pending_raises():
-    cache = _windowed_cache(window=8, sink=4)
-    _fill(cache, 10)
-    _persist_rows(cache, 10, 2, _rows([10.0, 11.0]), _rows([0.0] * 2))
+    cache = _windowed_cache(window=6)
+    _persist_rows(cache, 0, 2, _rows([0.0, 1.0]), _rows([0.0] * 2), [True, True])
     with pytest.raises(RuntimeError, match="uncommitted"):
-        _persist_rows(cache, 12, 2, _rows([12.0, 13.0]), _rows([0.0] * 2))
+        _persist_rows(cache, 2, 2, _rows([2.0, 3.0]), _rows([0.0] * 2), [True, True])
+
+
+def test_windowed_persist_requires_flags():
+    cache = _windowed_cache(window=6)
+    with pytest.raises(RuntimeError, match="expiring tag"):
+        _persist_rows(cache, 0, 1, _rows([0.0]), _rows([0.0]))
 
 
 def test_flush_pending_noop_without_pending():
-    cache = _windowed_cache(window=8, sink=4)
-    _fill(cache, 6)
-    _flush_pending(cache, 6)  # no pending: a no-op, not an error
-    assert cache.length == 6
+    cache = _windowed_cache(window=6)
+    _fill(cache, 3)
+    _flush_pending(cache, 3)
+    assert cache.length == 3
+
+
+def test_recycling_preserves_permanent_rows():
+    """Drive past the fill boundary with mixed types: every permanent row
+    stays resident, expired rows recycle oldest-first."""
+    cache = _windowed_cache(window=6)
+    # positions 0..5 fill the window; 0 and 3 permanent (per the token fn:
+    # use explicit flags via a custom fn)
+    perm = {0, 3}
+    _fill(cache, 9, expiring_fn=lambda p: p not in perm)
+    resident = {int(cache.k[0][s, 0, 0].item()) for s in range(6)}
+    assert perm <= resident, resident
+    # 9 rows over 6 slots with 2 permanent: the 4 most recent expiring
+    # rows + the 2 permanent ones are resident.
+    assert resident == {0, 3, 5, 6, 7, 8}, resident
 
 
 # ---------------------------------------------------------------------------
-# Full spec-decode control flow over a windowed mock: the emitted stream is
-# bit-identical to pure AR, and the final buffer contents equal the committed
-# stream (sink + last-ring-revolution positions) — drafts never leak.
+# Full control flow over a windowed mock: spec-decode and pure-AR streams
+# are bit-identical to the unbounded mock's, and the final buffer holds
+# every permanent row + only committed values (drafts never leak).
 # ---------------------------------------------------------------------------
 
 
 class _MockWindowedKVCompiled:
     """Windowed twin of test_spec_decode_logic's _MockKVCompiled: memoryless
     transition-table model whose step persists through the production
-    ``_persist_rows`` (K = position, V = fed token)."""
+    helpers (K = position, V = fed token, expiring = body tokens)."""
 
     def __init__(self, window: int, staging: int = 16):
         self.window = window
@@ -221,6 +243,7 @@ class _MockWindowedKVCompiled:
             max_len=max_len,
             window=self.window,
             staging=self.staging,
+            slot_expiring=[False] * self.window,
         )
         return self._last_cache
 
@@ -228,12 +251,11 @@ class _MockWindowedKVCompiled:
         flat = inputs.reshape(-1)
         n = int(flat.shape[0])
         base = cache.length
-        preds = torch.tensor(
-            [[float(_model_next(int(round(float(flat[i])))))] for i in range(n)]
-        )
+        tokens = [int(round(float(flat[i]))) for i in range(n)]
+        preds = torch.tensor([[float(_model_next(t))] for t in tokens])
         dk = [torch.arange(base, base + n, dtype=torch.float32).reshape(n, 1, 1)]
         dv = [flat.reshape(n, 1, 1).to(torch.float32)]
-        _persist_rows(cache, base, n, dk, dv)
+        _persist_rows(cache, base, n, dk, dv, [_is_expiring_token(t) for t in tokens])
         cache.length = base + n
         return preds, cache
 
@@ -247,52 +269,6 @@ def _patch_decode(monkeypatch):
 
 
 _EXPECTED = [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 999]
-
-
-def _assert_buffer_matches_stream(cache: KVCache, stream: list[int]):
-    """Every committed slot holds the row for the LAST position mapped to it,
-    with V = the token fed at that position — drafts never leak."""
-    assert cache.sink_len is not None
-    assert cache.pending is None
-    for slot in range(cache.window):
-        candidates = [p for p in range(cache.length) if _window_slot(cache, p) == slot]
-        if not candidates:
-            continue
-        p = max(candidates)
-        assert cache.k[0][slot, 0, 0].item() == float(p), (slot, p)
-        assert cache.v[0][slot, 0, 0].item() == float(stream[p]), (slot, p)
-
-
-def test_windowed_spec_decode_stream_and_ring_contents(monkeypatch):
-    _patch_decode(monkeypatch)
-    # window=6, sink=1 (the [50] prefill), ring=5: the 13-position
-    # trajectory wraps the ring twice.  Mispredicted drafts force partial
-    # accepts, exercising the pending->commit flush on every batch.
-    drafts = [100, 101, 102, 555, 104, 105, 777, 107, 108, 109, 110, 999]
-    compiled = _MockWindowedKVCompiled(window=6)
-    res, stats = spec_decode.spec_decode_rollout(
-        compiled,
-        [50],
-        _Drafter(drafts),
-        max_positions=50,
-        terminal_row=_TERMINAL,
-        draft_window=4,
-    )
-    assert res.emitted_rows == _EXPECTED
-    assert stats["mispredicts"] >= 1
-    assert compiled._last_cache is not None
-    _assert_buffer_matches_stream(compiled._last_cache, [50] + _EXPECTED)
-
-
-def test_windowed_pure_ar_stream_and_ring_contents(monkeypatch):
-    _patch_decode(monkeypatch)
-    compiled = _MockWindowedKVCompiled(window=6)
-    res = pure_ar.pure_ar_rollout(
-        compiled, [50], max_positions=50, terminal_row=_TERMINAL
-    )
-    assert res.emitted_rows == _EXPECTED
-    assert compiled._last_cache is not None
-    _assert_buffer_matches_stream(compiled._last_cache, [50] + _EXPECTED)
 
 
 class _Drafter:
@@ -311,3 +287,71 @@ class _Drafter:
 
     def rollback(self, snap):
         self.i = snap
+
+
+def _assert_buffer_matches_stream(cache: KVCache, stream: list[int]):
+    """Every slot holds a committed row (K = its position, V = the token
+    fed there, expiring tag matching the token's type), and every
+    PERMANENT position is resident — drafts and evicted rows never leak."""
+    assert cache.pending is None
+    resident: dict[int, float] = {}
+    for slot in range(min(cache.window, cache.write_head)):
+        p = int(cache.k[0][slot, 0, 0].item())
+        v = cache.v[0][slot, 0, 0].item()
+        assert 0 <= p < cache.length, (slot, p)
+        assert v == float(stream[p]), (slot, p, v)
+        assert cache.slot_expiring[slot] == _is_expiring_token(stream[p])
+        resident[p] = v
+    for p in range(cache.length):
+        if not _is_expiring_token(stream[p]):
+            assert p in resident, f"permanent position {p} evicted"
+
+
+def test_windowed_spec_decode_stream_and_buffer(monkeypatch):
+    _patch_decode(monkeypatch)
+    # window=6 over a 12-row stream (1 permanent prefill + 11 body rows):
+    # the window fills and recycling runs for half the rollout, while
+    # mispredicted drafts force partial accepts through pending/commit.
+    drafts = [100, 101, 102, 555, 104, 105, 777, 107, 108, 109, 110, 999]
+    compiled = _MockWindowedKVCompiled(window=6)
+    res, stats = spec_decode.spec_decode_rollout(
+        compiled,
+        [50],
+        _Drafter(drafts),
+        max_positions=50,
+        terminal_row=_TERMINAL,
+        draft_window=4,
+    )
+    assert res.emitted_rows == _EXPECTED
+    assert stats["mispredicts"] >= 1
+    assert compiled._last_cache is not None
+    assert compiled._last_cache.write_head == 6  # the window really filled
+    _assert_buffer_matches_stream(compiled._last_cache, [50] + _EXPECTED)
+
+
+def test_windowed_pure_ar_stream_and_buffer(monkeypatch):
+    _patch_decode(monkeypatch)
+    compiled = _MockWindowedKVCompiled(window=6)
+    res = pure_ar.pure_ar_rollout(
+        compiled, [50], max_positions=50, terminal_row=_TERMINAL
+    )
+    assert res.emitted_rows == _EXPECTED
+    assert compiled._last_cache is not None
+    _assert_buffer_matches_stream(compiled._last_cache, [50] + _EXPECTED)
+
+
+def test_windowed_chunked_prefill_commits_per_chunk(monkeypatch):
+    """Prefill chunks ride the pending/commit path: run_prefill commits
+    after every chunk, so multi-chunk prefill lands fully resident."""
+    _patch_decode(monkeypatch)
+    compiled = _MockWindowedKVCompiled(window=10)
+    prefill = [50, 50, 50, 50, 50]  # permanent type
+    out, past, passes = run_prefill(
+        compiled, prefill, max_cache_len=100, chunk_size=2, label="test"
+    )
+    assert passes == 3  # 2 + 2 + 1
+    assert past.pending is None
+    assert past.length == 5
+    assert past.write_head == 5
+    assert past.k[0][:5, 0, 0].tolist() == [0.0, 1.0, 2.0, 3.0, 4.0]
+    assert past.n_permanent == 5

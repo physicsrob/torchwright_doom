@@ -57,78 +57,126 @@ class KVCache:
     v: list[torch.Tensor]
     length: int
     max_len: int  # == cache_stride (the static allocation)
-    # --- Windowed-cache (attention sink + sliding window) state; all four
-    # stay at their defaults on the unbounded protocol above. ---
+    # --- Windowed-cache state (permanent/expiring slot policy); all of
+    # these stay at their defaults on the unbounded protocol above. ---
     # window = C, the committed slot count of a cache_window model: the
     # buffers are (C + staging, nh, d_head) and ``length`` keeps counting
-    # absolute committed POSITIONS (it exceeds C once the ring wraps).
+    # absolute committed POSITIONS (it exceeds C once recycling starts).
     window: int | None = None
-    # The host placement policy: positions < sink_len persist at identity
-    # slots (the permanently-resident scene prefix); positions >= sink_len
-    # wrap through the ring slots [sink_len, window).  run_prefill sets
-    # this to len(prefill_ids) BEFORE the first step — required, because
-    # the runtime cannot tell a prefill chunk from a rollout batch.
-    sink_len: int | None = None
     # Allocated staging-tail width = the widest pass this cache can bind
     # (the graph scatters new rows at slots [C, C + n_new)).
     staging: int = 0
+    # THE PLACEMENT POLICY: every committed row is either PERMANENT (it
+    # stays resident for the whole run) or EXPIRING (its slot may be
+    # recycled), decided purely by the row's token type — see
+    # ``OnnxTokenRuntime._expiring_rows`` (default: only PIXEL rows
+    # expire; pixels publish no channels and are only ever read at
+    # offset <= 3, so evicting old ones is safe by construction).
+    # Slots fill strictly sequentially (the graph's ``j < base``
+    # writtenness mask requires first-fill in slot order); once all C
+    # slots are written, new rows recycle the slots of expired rows,
+    # cursor order, skipping permanent ones.  Prefill needs no special
+    # case — scene tokens are permanent because of their types.
+    slot_expiring: list | None = None  # per-slot tag of the current occupant
+    write_head: int = 0  # slots written so far (== fill progress, <= C)
+    recycle_cursor: int = 0  # next candidate slot for recycling
+    n_permanent: int = 0  # capacity guard: permanent rows can never exceed C
     # A multi-row ROLLOUT batch is speculative: some of its rows may be
-    # rejected, and writing a rejected row into the ring would evict a
-    # live in-window row for a row that never becomes part of the stream
-    # (the unbounded cache tolerated persist-then-lower-length; the ring
-    # cannot).  So the step stashes (base, n_new, dk_rows, dv_rows) here
-    # and ``_commit`` flushes exactly the accepted prefix into the ring.
-    # The stashed tensors are VIEWS of the persistent binding buffers —
-    # safe because _commit always runs before the next step (step()
-    # raises on an unflushed pending).
+    # rejected, and a rejected row must never consume a slot (it would
+    # evict a live row for a row that never becomes part of the stream).
+    # So the step stashes (base, n_new, dk_rows, dv_rows, expiring) here
+    # and ``_commit`` flushes exactly the accepted prefix.  The stashed
+    # tensors are VIEWS of the persistent binding buffers — safe because
+    # _commit always runs before the next step (step() raises on an
+    # unflushed pending).  Prefill chunks ride the same path:
+    # ``run_prefill`` commits after every chunk.
     pending: tuple | None = None
 
 
-def _window_slot(cache: KVCache, pos: int) -> int:
-    """The committed slot a position persists to under the sink+ring policy."""
-    sink = cache.sink_len
-    assert cache.window is not None
-    if sink is None:
-        raise RuntimeError(
-            "windowed KVCache has no sink_len; run_prefill sets it to the "
-            "prefill length before the first step (direct step() drivers "
-            "must set cache.sink_len themselves)"
-        )
-    if pos < sink:
-        return pos
-    ring = cache.window - sink
-    return sink + (pos - sink) % ring
+_RECYCLE_POOL_WARN = 256
 
 
-def _window_slot_runs(cache: KVCache, base: int, n: int) -> list[tuple[int, int, int]]:
-    """Contiguous (slot_start, row_offset, count) runs for positions
-    [base, base+n) — the ring wrap splits a batch into at most one extra
-    run, so persistence stays slice assignments."""
-    runs: list[tuple[int, int, int]] = []
-    row = 0
-    while row < n:
-        slot = _window_slot(cache, base + row)
-        count = 1
-        while (
-            row + count < n and _window_slot(cache, base + row + count) == slot + count
+def _alloc_slot(cache: KVCache, expiring: bool) -> int:
+    """Allocate the committed slot for one new row.
+
+    Sequential while the buffer is filling (the writtenness-mask
+    contract); afterwards, recycle the next expired slot in cursor
+    order.  A full revolution without an expired slot means the cache
+    is saturated with permanent rows — fail loud, that's a
+    "recompile with a larger cache_window" event.
+    """
+    C = cache.window
+    assert C is not None and cache.slot_expiring is not None
+    if cache.write_head < C:
+        slot = cache.write_head
+        cache.write_head += 1
+    else:
+        cur = cache.recycle_cursor
+        for _ in range(C):
+            if cache.slot_expiring[cur % C]:
+                break
+            cur += 1
+        else:
+            raise RuntimeError(
+                f"windowed cache saturated: all {C} slots hold permanent "
+                f"rows ({cache.n_permanent} permanent committed); recompile "
+                f"with a larger model.cache_window or expire more token types"
+            )
+        slot = cur % C
+        cache.recycle_cursor = cur + 1
+    if not expiring:
+        cache.n_permanent += 1
+        free = C - cache.n_permanent
+        if free == _RECYCLE_POOL_WARN:
+            print(
+                f"[kvcache] WARNING: recycle pool down to {free} slots "
+                f"({cache.n_permanent}/{C} permanent) — nearing saturation",
+                flush=True,
+            )
+    cache.slot_expiring[slot] = expiring
+    return slot
+
+
+def _alloc_runs(cache: KVCache, expiring: list) -> list[list[int]]:
+    """Allocate slots for a batch of rows (in position order) and compress
+    the assignments into contiguous [slot_start, row_start, count] runs —
+    sequential fill is one run; recycling fragments only as much as the
+    expired slots do."""
+    runs: list[list[int]] = []
+    for row, flag in enumerate(expiring):
+        slot = _alloc_slot(cache, bool(flag))
+        if (
+            runs
+            and runs[-1][0] + runs[-1][2] == slot
+            and runs[-1][1] + runs[-1][2] == row
         ):
-            count += 1
-        runs.append((slot, row, count))
-        row += count
+            runs[-1][2] += 1
+        else:
+            runs.append([slot, row, 1])
     return runs
 
 
-def _persist_rows(cache: KVCache, base: int, n_new: int, dk_rows, dv_rows) -> None:
+def _write_runs(cache: KVCache, runs, dk_rows, dv_rows) -> None:
+    n_layers = len(cache.k)
+    for slot, row, count in runs:
+        for i in range(n_layers):
+            cache.k[i][slot : slot + count] = dk_rows[i][row : row + count]
+            cache.v[i][slot : slot + count] = dv_rows[i][row : row + count]
+
+
+def _persist_rows(
+    cache: KVCache, base: int, n_new: int, dk_rows, dv_rows, expiring=None
+) -> None:
     """Write a pass's delta rows into the owned cache.
 
     ``dk_rows[i]`` / ``dv_rows[i]`` are the layer-i ``(n_new, nh, d_head)``
     delta tensors (views of the binding buffers are fine — see
     ``KVCache.pending``).  Unbounded protocol: slots == positions, exactly
-    the historical write.  Windowed protocol: prefill rows (all below
-    sink_len) and single-row decodes commit unconditionally and write
-    through at their sink/ring slots; a multi-row rollout batch is
-    speculative and is stashed on ``cache.pending`` for ``_commit`` to
-    flush — rejected rows must never reach the ring.
+    the historical write.  Windowed protocol: ``expiring`` carries the
+    per-row policy tag; single-row decodes commit unconditionally and
+    write through; every multi-row batch (speculative verify batches AND
+    prefill chunks) is stashed on ``cache.pending`` and flushed by
+    ``_commit`` — rejected rows never consume a slot.
     """
     n_layers = len(cache.k)
     if cache.window is None:
@@ -136,36 +184,30 @@ def _persist_rows(cache: KVCache, base: int, n_new: int, dk_rows, dv_rows) -> No
             cache.k[i][base : base + n_new] = dk_rows[i]
             cache.v[i][base : base + n_new] = dv_rows[i]
         return
-    sink = cache.sink_len
-    if sink is None:
+    if expiring is None or len(expiring) != n_new:
         raise RuntimeError(
-            "windowed KVCache has no sink_len; run_prefill sets it to the "
-            "prefill length before the first step (direct step() drivers "
-            "must set cache.sink_len themselves)"
+            "windowed persist requires a per-row expiring tag for every row"
         )
-    if n_new == 1 or base + n_new <= sink:
-        for slot, row, count in _window_slot_runs(cache, base, n_new):
-            for i in range(n_layers):
-                cache.k[i][slot : slot + count] = dk_rows[i][row : row + count]
-                cache.v[i][slot : slot + count] = dv_rows[i][row : row + count]
+    if n_new == 1:
+        _write_runs(cache, _alloc_runs(cache, list(expiring)), dk_rows, dv_rows)
         return
     if cache.pending is not None:
         raise RuntimeError(
-            "windowed KVCache already holds an uncommitted speculative "
-            "batch; _commit must flush it before the next multi-row step"
+            "windowed KVCache already holds an uncommitted batch; _commit "
+            "must flush it before the next multi-row step"
         )
-    cache.pending = (base, n_new, list(dk_rows), list(dv_rows))
+    cache.pending = (base, n_new, list(dk_rows), list(dv_rows), list(expiring))
 
 
 def _flush_pending(cache: KVCache, target: int) -> None:
-    """Flush the accepted prefix of a stashed speculative batch into the
-    ring: rows at positions [pending_base, target) persist, the rejected
-    tail is dropped (its positions are re-drafted by the next pass)."""
+    """Flush the accepted prefix of a stashed batch: rows at positions
+    [pending_base, target) get slots and persist; the rejected tail is
+    dropped (its positions are re-drafted by the next pass)."""
     pending = cache.pending
     if pending is None:
         return
     cache.pending = None
-    pending_base, pending_n, dk_rows, dv_rows = pending
+    pending_base, pending_n, dk_rows, dv_rows, expiring = pending
     keep = target - pending_base
     assert 0 <= keep <= pending_n, (
         f"commit target {target} outside the pending batch "
@@ -173,11 +215,7 @@ def _flush_pending(cache: KVCache, target: int) -> None:
     )
     if keep == 0:
         return
-    n_layers = len(cache.k)
-    for slot, row, count in _window_slot_runs(cache, pending_base, keep):
-        for i in range(n_layers):
-            cache.k[i][slot : slot + count] = dk_rows[i][row : row + count]
-            cache.v[i][slot : slot + count] = dv_rows[i][row : row + count]
+    _write_runs(cache, _alloc_runs(cache, expiring[:keep]), dk_rows, dv_rows)
 
 
 def _resolve_buckets(
@@ -222,8 +260,8 @@ def _commit(past, target: int):
     """Set the committed length to ``target``.
 
     Owned cache: lower the logical length in place (no copy), and — on a
-    windowed cache — flush the accepted prefix of the pending speculative
-    batch into the ring (see :func:`_persist_rows`; rejected rows are
+    windowed cache — flush the accepted prefix of the pending batch into
+    freshly-allocated slots (see :func:`_persist_rows`; rejected rows are
     dropped, never written).  Head-major tuple: trim to ``target`` as the
     in-process path requires.
     """
@@ -249,6 +287,7 @@ class OnnxTokenRuntime:
         enable_profiling: bool = False,
         profile_dir: str | Path | None = None,
         attention_buckets: list[int] | None = None,
+        expiring_types: tuple[str, ...] = ("pixel",),
     ) -> None:
         import os
 
@@ -364,16 +403,19 @@ class OnnxTokenRuntime:
 
         stride_dim = inputs["past_K_0"].shape[0]
         self._symbolic_cache_dim = not isinstance(stride_dim, int)
-        # Windowed-cache protocol discriminator (attention sink + sliding
-        # window): the committed cache is a fixed C-slot host-managed
-        # window, every pass binds exactly (C + n_new) rows, and the
-        # graph's mask is writtenness ("committed slot j visible iff
-        # j < cache_position[0]") instead of slot==position causality.
-        # Same sidecar nesting convention as cache_stride.  Read FIRST: in
-        # windowed mode the window IS the committed slot count — the render
-        # meta's model.cache_stride field is the YAML knob the windowed
-        # compile IGNORED (ModelConfig documents the two as exclusive), so
-        # it must not feed the stride discovery below.
+        # Windowed-cache protocol discriminator: the committed cache is a
+        # fixed C-slot host-managed window, every pass binds exactly
+        # (C + n_new) rows, and the graph's mask is writtenness
+        # ("committed slot j visible iff j < cache_position[0]") instead
+        # of slot==position causality.  Slot PLACEMENT is entirely
+        # host-side: rows whose token type is in ``expiring_types`` may
+        # have their slots recycled once the buffer fills; every other
+        # row is permanent.  Same sidecar nesting convention as
+        # cache_stride.  Read FIRST: in windowed mode the window IS the
+        # committed slot count — the render meta's model.cache_stride
+        # field is the YAML knob the windowed compile IGNORED
+        # (ModelConfig documents the two as exclusive), so it must not
+        # feed the stride discovery below.
         sidecar_window = (self.metadata.get("model") or {}).get(
             "cache_window"
         ) or self.metadata.get("cache_window")
@@ -409,6 +451,29 @@ class OnnxTokenRuntime:
                     "windowed-cache artifact with a static past_K dim — "
                     "the runtime needs the symbolic cache_slots dim to bind "
                     "(C + n_new) per pass width; recompile"
+                )
+        # Per-row expiry policy: token row id -> True iff the row's type is
+        # in expiring_types (default: only "pixel" — pixel rows publish no
+        # channels and are only read at offset <= 3, so recycling old ones
+        # is safe by construction; everything else stays resident).  Built
+        # from the render meta's row_to_token table; without it (a bare
+        # torchwright sidecar) every row is treated as permanent — safe,
+        # the cache just has to fit everything.
+        self._expiring_rows: list[bool] = []
+        self._expiring_types = tuple(expiring_types or ())
+        if self._cache_window is not None:
+            row_to_token = self.metadata.get("row_to_token")
+            if row_to_token:
+                expiring_set = {t.lower() for t in self._expiring_types}
+                self._expiring_rows = [
+                    str(entry.get("type", "")).lower() in expiring_set
+                    for entry in row_to_token
+                ]
+            else:
+                print(
+                    "[kvcache] WARNING: windowed cache with no row_to_token "
+                    "metadata — treating EVERY row as permanent (no recycling)",
+                    flush=True,
                 )
         # Widest staging tail this runtime will bind: prefill chunks (the
         # widest passes) plus the spec-verify bucket.  Sizes the windowed
@@ -453,7 +518,11 @@ class OnnxTokenRuntime:
             f"[kvcache] layers={self._n_layers} total_heads={_total_heads} "
             f"d_head={self._d_head} cache_stride={self._cache_stride} "
             + (
-                f"WINDOWED window={self._cache_window} " f"staging={self._staging_max} "
+                f"WINDOWED window={self._cache_window} "
+                f"staging={self._staging_max} "
+                f"expiring_types={list(self._expiring_types)} "
+                f"({sum(self._expiring_rows)} of {len(self._expiring_rows)} "
+                f"vocab rows expire) "
                 if self._cache_window is not None
                 else f"buckets={self._buckets} "
             )
@@ -618,6 +687,7 @@ class OnnxTokenRuntime:
         # allocated cache would replay against the first rollout's (freed)
         # buffers.  Overwriting CONTENTS between replays is allowed; moving
         # buffers is not.
+        windowed = self._cache_window is not None
         if self._static_cache is not None:
             cache = self._static_cache
             for t in cache.k:
@@ -625,12 +695,18 @@ class OnnxTokenRuntime:
             for t in cache.v:
                 t.zero_()
             cache.length = 0
-            cache.max_len = max_len if self._cache_window is not None else cache.max_len
-            cache.sink_len = None  # a new run re-pins its prefill
+            cache.max_len = max_len if windowed else cache.max_len
             cache.pending = None
+            if windowed:
+                # A new run starts a fresh fill: all slots free, no
+                # permanent rows yet (the prefill re-establishes them).
+                cache.slot_expiring = [False] * self._cache_window
+                cache.write_head = 0
+                cache.recycle_cursor = 0
+                cache.n_permanent = 0
             return cache
         device = self._device
-        if self._cache_window is not None:
+        if windowed:
             # C committed slots + the widest staging tail any pass binds.
             S_alloc = self._cache_window + self._staging_max
             cache_max_len = max_len  # demand cap in POSITIONS, not slots
@@ -651,7 +727,8 @@ class OnnxTokenRuntime:
             length=0,
             max_len=cache_max_len,
             window=self._cache_window,
-            staging=self._staging_max if self._cache_window is not None else 0,
+            staging=self._staging_max if windowed else 0,
+            slot_expiring=[False] * self._cache_window if windowed else None,
         )
         return self._static_cache
 
@@ -691,11 +768,22 @@ class OnnxTokenRuntime:
             f"drives the mask (bound-view length / windowed writtenness), so "
             f"the mask and pos-encoding would disagree"
         )
+        # Per-row expiry tags for the windowed placement policy (token row
+        # id -> expiring type?).  Computed once per pass; the CPU<->GPU
+        # sync this costs on the decode hot path is subsumed by the stream
+        # synchronize every _run_iobinding already performs.
+        expiring = None
+        if cache.window is not None:
+            rows = inputs.detach().reshape(-1).to(torch.int64).cpu().tolist()
+            lut = self._expiring_rows
+            expiring = [bool(lut[r]) if r < len(lut) else False for r in rows]
         if self._use_cuda_io:
-            return self._step_cuda_io(inputs, cache, past_len, n_new, base)
-        return self._step_cpu(inputs, cache, past_len, n_new, base)
+            return self._step_cuda_io(inputs, cache, past_len, n_new, base, expiring)
+        return self._step_cpu(inputs, cache, past_len, n_new, base, expiring)
 
-    def _step_cpu(self, inputs, cache: KVCache, past_len: int, n_new: int, base: int):
+    def _step_cpu(
+        self, inputs, cache: KVCache, past_len: int, n_new: int, base: int, expiring
+    ):
         import numpy as np
 
         token_ids = (
@@ -738,7 +826,7 @@ class OnnxTokenRuntime:
             torch.from_numpy(results[1 + 2 * i + 1]).to(cache.v[i].dtype)
             for i in range(self._n_layers)
         ]
-        _persist_rows(cache, base, n_new, dk_rows, dv_rows)
+        _persist_rows(cache, base, n_new, dk_rows, dv_rows, expiring)
         cache.length = base + n_new
         return logits, cache
 
@@ -870,7 +958,7 @@ class OnnxTokenRuntime:
         self._session.run_with_iobinding(io, ro)
 
     def _step_cuda_io(
-        self, inputs, cache: KVCache, past_len: int, n_new: int, base: int
+        self, inputs, cache: KVCache, past_len: int, n_new: int, base: int, expiring
     ):
         import numpy as np
 
@@ -891,7 +979,7 @@ class OnnxTokenRuntime:
             self._run_iobinding(
                 b["io"], gpu_graph_id=self._graph_id_for(s_eff, 1), shape=(s_eff, 1)
             )
-            _persist_rows(cache, base, 1, b["delta_k"], b["delta_v"])
+            _persist_rows(cache, base, 1, b["delta_k"], b["delta_v"], expiring)
             cache.length = base + 1
             # NOTE: the returned logits tensor is the persistent buffer — it
             # is overwritten by the NEXT decode step.  Both rollout loops
@@ -926,15 +1014,16 @@ class OnnxTokenRuntime:
             )
             # Windowed: this is the speculative path — _persist_rows stashes
             # the rows on cache.pending and the rollout's _commit flushes
-            # only the accepted prefix into the ring (rejected rows must
-            # never evict live in-window rows).  Unbounded: direct write,
-            # rejection just lowers length as before.
+            # only the accepted prefix (rejected rows never consume a
+            # slot).  Unbounded: direct write, rejection just lowers
+            # length as before.
             _persist_rows(
                 cache,
                 base,
                 n_new,
                 [dk[:n_new] for dk in b["delta_k"]],
                 [dv[:n_new] for dv in b["delta_v"]],
+                expiring,
             )
             cache.length = base + n_new
             # Sliced view of the persistent buffer — overwritten by the next
@@ -1001,7 +1090,7 @@ class OnnxTokenRuntime:
         self._run_iobinding(io, gpu_graph_id="-1")
         # Copy the freshly computed deltas into the owned cache slots (the run
         # is complete, so there is no input/output aliasing during execution).
-        _persist_rows(cache, base, n_new, delta_k_outs, delta_v_outs)
+        _persist_rows(cache, base, n_new, delta_k_outs, delta_v_outs, expiring)
         cache.length = base + n_new
         return logits, cache
 
@@ -1111,22 +1200,16 @@ def run_prefill(
 
     past = compiled.empty_past(max_cache_len)
     if isinstance(past, KVCache) and past.window is not None:
-        # Pin the windowed host policy: the prefill is the permanently
-        # resident sink prefix [0, P); rollout rows wrap through the
-        # remaining ring slots.  Must happen before the first step — the
-        # runtime cannot tell a prefill chunk from a rollout batch.
-        ring = past.window - len(prefill_ids)
-        if ring < 1:
+        if len(prefill_ids) >= past.window:
             raise RuntimeError(
-                f"prefill ({len(prefill_ids)} rows) fills the whole "
-                f"{past.window}-slot cache window — no ring slots left; "
-                f"raise model.cache_window"
+                f"prefill ({len(prefill_ids)} rows) does not fit the "
+                f"{past.window}-slot cache window; raise model.cache_window"
             )
-        past.sink_len = len(prefill_ids)
         print(
-            f"[{label}] windowed cache: sink={past.sink_len} ring={ring} "
-            f"(window={past.window}, staging={past.staging}); rollout rows "
-            f"wrap after position {past.sink_len + ring}",
+            f"[{label}] windowed cache: window={past.window} "
+            f"staging={past.staging}; prefill ({len(prefill_ids)} rows) "
+            f"and every non-expiring rollout row stay resident; expiring "
+            f"rows recycle slots once the window fills",
             flush=True,
         )
     out = None
@@ -1137,6 +1220,10 @@ def run_prefill(
         t0 = time.time()
         out, past = compiled.step(rows_to_input(chunk), past, past_len=offset)
         offset += len(chunk)
+        # Multi-row batches pend on a windowed cache (the speculative-batch
+        # discipline; prefill rides the same path) — every chunk is fully
+        # accepted, so commit it before the next step.
+        past = _commit(past, offset)
         passes += 1
         dt = time.time() - t0
         if progress_every and (n_chunks > 1 or dt >= 5.0 or chunk_idx == n_chunks - 1):
