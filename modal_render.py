@@ -1,7 +1,7 @@
 """Compile + render on Modal, with artifact sync-back.
 
-    uv run modal run modal_render.py --config configs/e1m1_start_room.yaml
-    uv run modal run modal_render.py --config configs/e1m1_start_room.yaml --mode both --png --compare
+    uv run modal run modal_render.py --config configs/e1m1.yaml
+    uv run modal run modal_render.py --config configs/e1m1.yaml --mode both --png --compare
 
 Two remote stages: ``compile_remote`` (CPU-only, 64 cores so CP-SAT's parallel
 search gets real width; writes the ONNX into the cache volume) and
@@ -185,7 +185,7 @@ def _remote_config_path(config: str) -> Path:
 
 @app.local_entrypoint()
 def main(
-    config: str = "configs/e1m1_start_room.yaml",
+    config: str = "configs/e1m1.yaml",
     x: float = 1056.0,
     y: float = -3616.0,
     angle: int = 64,

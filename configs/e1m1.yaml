@@ -1,0 +1,21 @@
+# THE renderer configuration — the single committed config (one map, one
+# config).  `make run` and every doc reference point here; when parameters
+# change, update this file in place.  Variant configs are NEVER committed:
+# an experiment or gate that needs a tweak copies this file to /tmp,
+# edits the field, and runs with --config /tmp/<name>.yaml (see CLAUDE.md,
+# "One configuration").
+#
+# Current state: full resolution (scale 2 = 160x100), d=8192 with a
+# decoupled 16k MLP width, CP-SAT-optimized schedule (optimize: 2), and
+# the WINDOWED KV cache (cache_window: 16384, permanent/expiring slot
+# policy — only pixel rows recycle; see ModelConfig.cache_window).
+# Measured at this state (B200, spec decode, dw8): the 25,350-token
+# 160x100 frame in 344s rollout, token-identical to the unbounded
+# cache, 11.4 GB KV resident.  Permanent-row demand measured 13.1k;
+# the window leaves a ~3.3k resident-pixel pool.
+wad: doom1.wad
+model: {d: 8192, d_head: 32, scale: 2, d_hidden: 16384, optimize: 2, cache_window: 16384}
+region: {x1: 627.2, y1: -3760.0, x2: 1395.2, y2: -2800.0}
+textures:
+  wall: [BROWN1, BROWN144, COMPUTE2, DOOR3, DOORSTOP, LITE3, STARTAN3, STEP6, SUPPORT2]
+  flat: [CEIL3_5, FLAT14, FLAT5_5, FLOOR4_8, FLOOR7_1, F_SKY1]

@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-CONFIG = "configs/e1m1_d8192_h16384.yaml"
+CONFIG = "configs/e1m1.yaml"
 DUMP = "out/render_d8192/token_dump.json"
 X, Y, ANGLE, VIEWZ = 1056.0, -3616.0, 64, 41.0
 

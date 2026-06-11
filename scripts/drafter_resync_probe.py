@@ -16,7 +16,7 @@ isolates the drafter's recovery behavior from the model's per-pass numerics.
     TORCHWRIGHT_DOOM_SCREEN_WIDTH=80 TORCHWRIGHT_DOOM_SCREEN_HEIGHT=50 \
     TORCHWRIGHT_DOOM_RENDER_SCALE=4 DOOM_SANDBOX_SCREEN_WIDTH=80 \
     DOOM_SANDBOX_SCREEN_HEIGHT=50 uv run python -m scripts.drafter_resync_probe \
-        --config configs/e1m1_d8192_h16384.yaml \
+        --config configs/e1m1.yaml \
         --dump out/render_d8192/token_dump.json \
         --x 1056 --y -3616 --angle 64 --viewz 41
 """

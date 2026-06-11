@@ -123,6 +123,46 @@ discover existing code that violates this principle — host-side logic
 that does anything beyond token I/O and pixel blitting — flag it to
 the user immediately and stop other work until resolved.
 
+# One configuration
+
+There is exactly ONE committed render config: `configs/e1m1.yaml`.
+`make run`, the Makefile default, and every doc reference point at it.
+When parameters change, **update that file in place** — never add a
+sibling.
+
+Config proliferation was a recurring failure mode (wrong-config runs,
+stale variants, an umbrella-proxy OOM from drifted defaults). The rule
+that prevents it: an experiment or gate that needs a variant **copies
+the one config to /tmp, edits the field, and runs with
+`--config /tmp/<name>.yaml`**. Variants are ephemeral by construction;
+if you find yourself about to commit a second YAML under `configs/`,
+stop and update `e1m1.yaml` instead (or keep the variant in /tmp).
+
+The umbrella Makefile proxies these defaults — change them in lockstep
+or the stale copy bites (it has).
+
+# Windowed KV cache — the protocol invariant
+
+The compiled model uses a fixed-size windowed KV cache
+(`model.cache_window`): every committed row is PERMANENT (resident for
+the whole run) or EXPIRING (its slot recycles once the window fills),
+decided by token type at the inference layer
+(`render/inference.py`; runtime knob `TWDOOM_EXPIRING_TYPES`, default
+`pixel`).
+
+This rests on one protocol invariant: **no attention read may target
+an expiring-type row at long range.** Pixel rows qualify today —
+they publish zero channels and are only read at position offsets
+<= 3. If you design a protocol change that reads pixel history at a
+distance (sprites, post-processing, anything that revisits emitted
+pixels), the windowed cache breaks SILENTLY at design time and only
+shows up as token divergence in gates — either rethink the read, or
+remove `pixel` from the expiring set and re-budget `cache_window`.
+The same bar applies before adding any other type to the expiring
+set: certify that nothing reads that type's rows beyond the resident
+pool, then gate against an unbounded baseline (the /tmp-variant
+pattern above).
+
 # Testing
 
 Tests live under `tests/` (`tests/embedding/`, `tests/scene/`,

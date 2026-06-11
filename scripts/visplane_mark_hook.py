@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-CONFIG = "configs/e1m1_d8192_h16384.yaml"
+CONFIG = "configs/e1m1.yaml"
 X, Y, ANGLE, VIEWZ = 1056.0, -3616.0, 64, 41.0
 TP, TVP = 1, 1
 

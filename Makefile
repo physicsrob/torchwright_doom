@@ -1,23 +1,22 @@
-CONFIG ?= configs/e1m1_d8192_h16384_opt2.yaml
+# THE config — the single committed configuration (see CLAUDE.md, "One
+# configuration").  Experiments copy it to /tmp and override CONFIG=.
+CONFIG ?= configs/e1m1.yaml
 OUT_DIR ?= out/render
 RENDER_X ?= 1056.0
 RENDER_Y ?= -3616.0
 RENDER_ANGLE ?= 64
 RENDER_VIEWZ ?= 41.0
 RENDER_MODE ?= spec_decode
-# 61440 covers a full 160x100 frame within the default config's 64k cache
-# (prefill 3613 + draft headroom leaves 61,916 rollout slots; the 80x50
-# frame was 9,739 tokens, 160x100 has 4x the pixels).  Smaller gate
-# configs (e1m1_l4_d3072 S=4608: pass ~980; e1m1_start_room S=65536 at
-# 80x50: 10240 suffices) should pass an explicit lower value — an
-# oversized demand makes empty_past() reject before prefill.
+# 61440 covers a full 160x100 frame (25,350 tokens measured) with ample
+# headroom; the windowed cache bounds SLOTS, not positions, so the cap
+# is the pos-encoding table (max_seq_len 65536), and an oversized demand
+# makes empty_past() reject before prefill.
 RENDER_MAX_POSITIONS ?= 61440
 # Modal GPU for render_remote (read at modal_render.py import).
 # b200 | a100-80gb — B200 is the default: the captured decode is
 # bandwidth-bound (B200's ~4x HBM bandwidth maps ~directly to step time,
-# measured 14.3 ms + 0.522 us/slot x S_eff per width-1 step), and the
-# 64k-stride config is memory-marginal on the A100 (58 GB weights+cache
-# of 80 GB; it runs, but prefill/capture transients leave little slack).
+# measured 14.3 ms + 0.522 us/slot x S_eff per width-1 step).  With the
+# windowed cache (~11.4 GB KV + ~17 GB weights) the A100 also has slack.
 RENDER_GPU ?= b200
 RENDER_DRAFT_WINDOW ?= 8
 # 1024-row chunks bound the static-S prefill logits transient
