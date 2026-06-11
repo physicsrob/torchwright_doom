@@ -80,6 +80,7 @@ def compile_to_onnx_path(
     max_layers: int = 200,
     max_seq_len: int = 65536,
     cache_stride: int = 12288,
+    cache_window: int | None = None,
     verbose: bool = False,
     trim_heads: bool = True,
     optimize: int = 0,
@@ -88,7 +89,13 @@ def compile_to_onnx_path(
     asset_config: AssetConfig | None = None,
     wad_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Compile the token-id forward to ONNX and return basic build metadata."""
+    """Compile the token-id forward to ONNX and return basic build metadata.
+
+    ``cache_window`` selects the windowed-cache export (attention sink +
+    sliding window; see ModelConfig.cache_window).  The exporter rejects
+    cache_stride + cache_window together, so the window replaces the
+    stride in the kwargs rather than riding alongside it.
+    """
     from torchwright.compiler.export import compile_to_onnx
     from torchwright.ops.inout_nodes import create_pos_encoding
 
@@ -117,13 +124,16 @@ def compile_to_onnx_path(
         "d": d,
         "d_head": d_head,
         "max_seq_len": max_seq_len,
-        "cache_stride": cache_stride,
         "max_layers": max_layers,
         "verbose": verbose,
         "trim_heads": trim_heads,
         "optimize": optimize,
         "assume_zero_init": assume_zero_init,
     }
+    if cache_window is not None:
+        kwargs["cache_window"] = cache_window
+    else:
+        kwargs["cache_stride"] = cache_stride
     if d_hidden is not None:
         kwargs["d_hidden"] = d_hidden
     compile_to_onnx(

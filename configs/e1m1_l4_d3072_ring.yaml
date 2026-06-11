@@ -1,0 +1,14 @@
+# Ring-cache gate config: the local-L4 d3072 gate point on the WINDOWED
+# cache protocol (attention sink + sliding window; ModelConfig.cache_window).
+# cache_window 4608 = the same slot count the unbounded L4 config strides,
+# so the two runs are memory-comparable.  Prefill ~3613 -> ring = 995
+# slots, which COVERS the 400-token gate rollout: zero eviction, so the
+# gate contract is strict — token-identical to the unbounded L4 run.
+# (Eviction behavior under W < rollout is the span-census experiment, run
+# separately; it is conditional on read spans, not a pass/fail gate.)
+wad: doom1.wad
+model: {d: 3072, d_head: 32, scale: 4, cache_window: 4608}
+region: {x1: 627.2, y1: -3760.0, x2: 1395.2, y2: -2800.0}
+textures:
+  wall: [BROWN1, BROWN144, COMPUTE2, DOOR3, DOORSTOP, LITE3, STARTAN3, STEP6, SUPPORT2]
+  flat: [CEIL3_5, FLAT14, FLAT5_5, FLOOR4_8, FLOOR7_1, F_SKY1]

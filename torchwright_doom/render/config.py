@@ -39,6 +39,22 @@ class ModelConfig:
     # busts every compile-cache key once (it enters the payload via
     # asdict(config.model)) — intended.
     cache_stride: int = 12288
+    # Windowed-cache protocol (attention sink + sliding window — the ring
+    # plan, ring_idea.md): the committed KV cache becomes a fixed
+    # cache_window-slot host-managed window.  The runtime pins the
+    # prefill in the sink slots [0, prefill_len) and wraps rollout rows
+    # through the remaining ring slots, so committed pixel rows
+    # evaporate by overwrite and the attention width stays CONSTANT
+    # (cache_window + pass width) for the whole frame.  None = the
+    # unbounded static cache above.  When set, cache_stride is IGNORED
+    # (the window IS the slot count; the exporter rejects both).
+    # Positions stay absolute and run to max_seq_len regardless.
+    # Output equals the unbounded cache ONLY IF every attention read's
+    # span fits what the window keeps resident (the span condition —
+    # ring_idea.md); size it from the span census, with margin.  Enters
+    # the compile-cache key via asdict like every model field (and like
+    # cache_stride, adding it busts every key once — intended).
+    cache_window: int | None = None
 
 
 @dataclass(frozen=True)
@@ -120,6 +136,7 @@ def load_render_config(path: str | Path) -> RenderConfig:
             max_seq_len=int(model.get("max_seq_len", 65536)),
             optimize=int(model.get("optimize", 0)),
             cache_stride=int(model.get("cache_stride", 12288)),
+            cache_window=_optional_int(model.get("cache_window")),
         ),
         region=RegionConfig(
             x1=float(region.get("x1", 627.2)),
@@ -203,6 +220,14 @@ def _validate_config(config: RenderConfig) -> None:
         raise ValueError(
             f"model.cache_stride {config.model.cache_stride} must be in "
             f"[1, max_seq_len={config.model.max_seq_len}]"
+        )
+    if config.model.cache_window is not None and not (
+        1 <= config.model.cache_window <= config.model.max_seq_len
+    ):
+        raise ValueError(
+            f"model.cache_window {config.model.cache_window} must be in "
+            f"[1, max_seq_len={config.model.max_seq_len}] (a window wider "
+            f"than the position space can never fill)"
         )
     if len(config.textures.wall) != N_WALL_TEXTURES:
         raise ValueError(

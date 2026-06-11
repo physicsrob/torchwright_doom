@@ -57,9 +57,132 @@ class KVCache:
     v: list[torch.Tensor]
     length: int
     max_len: int  # == cache_stride (the static allocation)
+    # --- Windowed-cache (attention sink + sliding window) state; all four
+    # stay at their defaults on the unbounded protocol above. ---
+    # window = C, the committed slot count of a cache_window model: the
+    # buffers are (C + staging, nh, d_head) and ``length`` keeps counting
+    # absolute committed POSITIONS (it exceeds C once the ring wraps).
+    window: int | None = None
+    # The host placement policy: positions < sink_len persist at identity
+    # slots (the permanently-resident scene prefix); positions >= sink_len
+    # wrap through the ring slots [sink_len, window).  run_prefill sets
+    # this to len(prefill_ids) BEFORE the first step — required, because
+    # the runtime cannot tell a prefill chunk from a rollout batch.
+    sink_len: int | None = None
+    # Allocated staging-tail width = the widest pass this cache can bind
+    # (the graph scatters new rows at slots [C, C + n_new)).
+    staging: int = 0
+    # A multi-row ROLLOUT batch is speculative: some of its rows may be
+    # rejected, and writing a rejected row into the ring would evict a
+    # live in-window row for a row that never becomes part of the stream
+    # (the unbounded cache tolerated persist-then-lower-length; the ring
+    # cannot).  So the step stashes (base, n_new, dk_rows, dv_rows) here
+    # and ``_commit`` flushes exactly the accepted prefix into the ring.
+    # The stashed tensors are VIEWS of the persistent binding buffers —
+    # safe because _commit always runs before the next step (step()
+    # raises on an unflushed pending).
+    pending: tuple | None = None
 
 
-def _resolve_buckets(attention_buckets: list[int] | None, cache_stride: int) -> list[int]:
+def _window_slot(cache: KVCache, pos: int) -> int:
+    """The committed slot a position persists to under the sink+ring policy."""
+    sink = cache.sink_len
+    assert cache.window is not None
+    if sink is None:
+        raise RuntimeError(
+            "windowed KVCache has no sink_len; run_prefill sets it to the "
+            "prefill length before the first step (direct step() drivers "
+            "must set cache.sink_len themselves)"
+        )
+    if pos < sink:
+        return pos
+    ring = cache.window - sink
+    return sink + (pos - sink) % ring
+
+
+def _window_slot_runs(cache: KVCache, base: int, n: int) -> list[tuple[int, int, int]]:
+    """Contiguous (slot_start, row_offset, count) runs for positions
+    [base, base+n) — the ring wrap splits a batch into at most one extra
+    run, so persistence stays slice assignments."""
+    runs: list[tuple[int, int, int]] = []
+    row = 0
+    while row < n:
+        slot = _window_slot(cache, base + row)
+        count = 1
+        while (
+            row + count < n and _window_slot(cache, base + row + count) == slot + count
+        ):
+            count += 1
+        runs.append((slot, row, count))
+        row += count
+    return runs
+
+
+def _persist_rows(cache: KVCache, base: int, n_new: int, dk_rows, dv_rows) -> None:
+    """Write a pass's delta rows into the owned cache.
+
+    ``dk_rows[i]`` / ``dv_rows[i]`` are the layer-i ``(n_new, nh, d_head)``
+    delta tensors (views of the binding buffers are fine — see
+    ``KVCache.pending``).  Unbounded protocol: slots == positions, exactly
+    the historical write.  Windowed protocol: prefill rows (all below
+    sink_len) and single-row decodes commit unconditionally and write
+    through at their sink/ring slots; a multi-row rollout batch is
+    speculative and is stashed on ``cache.pending`` for ``_commit`` to
+    flush — rejected rows must never reach the ring.
+    """
+    n_layers = len(cache.k)
+    if cache.window is None:
+        for i in range(n_layers):
+            cache.k[i][base : base + n_new] = dk_rows[i]
+            cache.v[i][base : base + n_new] = dv_rows[i]
+        return
+    sink = cache.sink_len
+    if sink is None:
+        raise RuntimeError(
+            "windowed KVCache has no sink_len; run_prefill sets it to the "
+            "prefill length before the first step (direct step() drivers "
+            "must set cache.sink_len themselves)"
+        )
+    if n_new == 1 or base + n_new <= sink:
+        for slot, row, count in _window_slot_runs(cache, base, n_new):
+            for i in range(n_layers):
+                cache.k[i][slot : slot + count] = dk_rows[i][row : row + count]
+                cache.v[i][slot : slot + count] = dv_rows[i][row : row + count]
+        return
+    if cache.pending is not None:
+        raise RuntimeError(
+            "windowed KVCache already holds an uncommitted speculative "
+            "batch; _commit must flush it before the next multi-row step"
+        )
+    cache.pending = (base, n_new, list(dk_rows), list(dv_rows))
+
+
+def _flush_pending(cache: KVCache, target: int) -> None:
+    """Flush the accepted prefix of a stashed speculative batch into the
+    ring: rows at positions [pending_base, target) persist, the rejected
+    tail is dropped (its positions are re-drafted by the next pass)."""
+    pending = cache.pending
+    if pending is None:
+        return
+    cache.pending = None
+    pending_base, pending_n, dk_rows, dv_rows = pending
+    keep = target - pending_base
+    assert 0 <= keep <= pending_n, (
+        f"commit target {target} outside the pending batch "
+        f"[{pending_base}, {pending_base + pending_n}]"
+    )
+    if keep == 0:
+        return
+    n_layers = len(cache.k)
+    for slot, row, count in _window_slot_runs(cache, pending_base, keep):
+        for i in range(n_layers):
+            cache.k[i][slot : slot + count] = dk_rows[i][row : row + count]
+            cache.v[i][slot : slot + count] = dv_rows[i][row : row + count]
+
+
+def _resolve_buckets(
+    attention_buckets: list[int] | None, cache_stride: int
+) -> list[int]:
     """Normalize the attention-window bucket table.
 
     Default (None): quarters of the stride — e.g. S=65536 ->
@@ -98,10 +221,14 @@ def _cache_len(past) -> int:
 def _commit(past, target: int):
     """Set the committed length to ``target``.
 
-    Owned cache: lower the logical length in place (no copy).  Head-major
-    tuple: trim to ``target`` as the in-process path requires.
+    Owned cache: lower the logical length in place (no copy), and — on a
+    windowed cache — flush the accepted prefix of the pending speculative
+    batch into the ring (see :func:`_persist_rows`; rejected rows are
+    dropped, never written).  Head-major tuple: trim to ``target`` as the
+    in-process path requires.
     """
     if isinstance(past, KVCache):
+        _flush_pending(past, target)
         past.length = target
         return past
     past_k, past_v = past
@@ -237,11 +364,28 @@ class OnnxTokenRuntime:
 
         stride_dim = inputs["past_K_0"].shape[0]
         self._symbolic_cache_dim = not isinstance(stride_dim, int)
+        # Windowed-cache protocol discriminator (attention sink + sliding
+        # window): the committed cache is a fixed C-slot host-managed
+        # window, every pass binds exactly (C + n_new) rows, and the
+        # graph's mask is writtenness ("committed slot j visible iff
+        # j < cache_position[0]") instead of slot==position causality.
+        # Same sidecar nesting convention as cache_stride.  Read FIRST: in
+        # windowed mode the window IS the committed slot count — the render
+        # meta's model.cache_stride field is the YAML knob the windowed
+        # compile IGNORED (ModelConfig documents the two as exclusive), so
+        # it must not feed the stride discovery below.
+        sidecar_window = (self.metadata.get("model") or {}).get(
+            "cache_window"
+        ) or self.metadata.get("cache_window")
+        self._cache_window = int(sidecar_window) if sidecar_window else None
         # Stride source: the render meta nests it under "model" (asdict of
         # ModelConfig); a bare torchwright token export carries it top-level.
-        sidecar_stride = (self.metadata.get("model") or {}).get(
-            "cache_stride"
-        ) or self.metadata.get("cache_stride")
+        sidecar_stride = (
+            self._cache_window
+            if self._cache_window is not None
+            else (self.metadata.get("model") or {}).get("cache_stride")
+            or self.metadata.get("cache_stride")
+        )
         self._cache_stride = discover_cache_stride(
             inputs, sidecar_stride, self.onnx_path
         )
@@ -249,31 +393,73 @@ class OnnxTokenRuntime:
             int(inputs[f"past_K_{i}"].shape[1]) for i in range(self._n_layers)
         ]
         self._d_head = int(inputs["past_K_0"].shape[2])
+        # Position-space cap (the pos-encoding table length): in windowed
+        # mode positions outrun the slot count, so the demand guard checks
+        # against this instead of the stride.  Only the render meta carries
+        # it; a bare torchwright sidecar leaves it None (no upper guard).
+        _msl = (self.metadata.get("model") or {}).get("max_seq_len")
+        self._max_seq_len = int(_msl) if _msl else None
+        if self._cache_window is not None:
+            assert self._cache_stride == self._cache_window, (
+                f"windowed sidecar disagrees: cache_stride "
+                f"{self._cache_stride} != cache_window {self._cache_window}"
+            )
+            if not self._symbolic_cache_dim:
+                raise RuntimeError(
+                    "windowed-cache artifact with a static past_K dim — "
+                    "the runtime needs the symbolic cache_slots dim to bind "
+                    "(C + n_new) per pass width; recompile"
+                )
+        # Widest staging tail this runtime will bind: prefill chunks (the
+        # widest passes) plus the spec-verify bucket.  Sizes the windowed
+        # allocation; unused on the unbounded protocol.
+        self._batch_bucket_width = 9
+        self._staging_max = max(self._batch_bucket_width, DEFAULT_PREFILL_CHUNK_SIZE)
         # Attention-window buckets (sorted, last == cache_stride): each pass
         # binds the smallest bucket covering committed length + pass width,
         # so early-frame steps pay small-S_eff attention while the cache
         # keeps its full capacity.  A runtime knob — the symbolic-dim graph
         # serves any table without recompiling.  Old static-dim artifacts
-        # are forced to the degenerate single bucket.
-        self._buckets = _resolve_buckets(
-            attention_buckets if self._symbolic_cache_dim else None,
-            self._cache_stride,
-        )
-        if not self._symbolic_cache_dim and attention_buckets:
-            print(
-                "[kvcache] WARNING: static-dim artifact cannot stride-bucket; "
-                "ignoring attention_buckets (recompile to bucket)",
-                flush=True,
+        # are forced to the degenerate single bucket.  The windowed
+        # protocol has nothing to bucket — its attention width is the
+        # CONSTANT C + pass width by construction.
+        if self._cache_window is not None:
+            if attention_buckets:
+                print(
+                    "[kvcache] WARNING: windowed cache has a constant "
+                    "attention width; ignoring attention_buckets",
+                    flush=True,
+                )
+            self._buckets = []
+        else:
+            self._buckets = _resolve_buckets(
+                attention_buckets if self._symbolic_cache_dim else None,
+                self._cache_stride,
             )
+            if not self._symbolic_cache_dim and attention_buckets:
+                print(
+                    "[kvcache] WARNING: static-dim artifact cannot stride-bucket; "
+                    "ignoring attention_buckets (recompile to bucket)",
+                    flush=True,
+                )
         _total_heads = sum(self._per_layer_n_heads)
         _bytes_per_tok = _total_heads * self._d_head * 2 * 4  # K+V, float32
+        _alloc_rows = (
+            self._cache_window + self._staging_max
+            if self._cache_window is not None
+            else self._cache_stride
+        )
         print(
             f"[kvcache] layers={self._n_layers} total_heads={_total_heads} "
             f"d_head={self._d_head} cache_stride={self._cache_stride} "
-            f"buckets={self._buckets} "
-            f"per_layer_heads={self._per_layer_n_heads} "
+            + (
+                f"WINDOWED window={self._cache_window} " f"staging={self._staging_max} "
+                if self._cache_window is not None
+                else f"buckets={self._buckets} "
+            )
+            + f"per_layer_heads={self._per_layer_n_heads} "
             f"bytes/token={_bytes_per_tok} ({_bytes_per_tok / 1e6:.3f} MB); "
-            f"static cache total={self._cache_stride * _bytes_per_tok / 1e9:.2f} GB",
+            f"static cache total={_alloc_rows * _bytes_per_tok / 1e9:.2f} GB",
             flush=True,
         )
         # Persistent bindings, one per (cache, S_eff, width) — width 1 is the
@@ -285,7 +471,7 @@ class OnnxTokenRuntime:
         # deltas not persisted.  Must be >= draft_window+1 or wide batches
         # fall back to the uncaptured dynamic path).  Built lazily; each
         # (S_eff, width) pair captures its own CUDA graph on first use.
-        self._batch_bucket_width = 9
+        # (_batch_bucket_width is defined above, before the staging sizing.)
         self._bindings: dict[tuple[int, int, int], dict] = {}
         # gpu_graph_id -> (S_eff, width) registry: a captured id must never
         # run with a second shape (ORT would replay the baked one — silent
@@ -325,8 +511,17 @@ class OnnxTokenRuntime:
         prefix bucket the prefill will bind, and the clamp scales with that
         S_eff — e.g. 255 rows at S_eff=65536 but 1023 at 16384 (equal-cost
         chunks, ~4x fewer of them).  None = the conservative full stride.
+
+        Windowed mode: S_eff = C + chunk (the chunk sizes its own
+        binding), so solve widest * chunk * (C + chunk) <= 2^31 - 1 for
+        chunk, then cap at the allocated staging width.
         """
         widest = max(self._per_layer_n_heads)
+        if self._cache_window is not None:
+            c = self._cache_window
+            lim = (2**31 - 1) // widest  # chunk * (C + chunk) <= lim
+            chunk = int((-c + (c * c + 4 * lim) ** 0.5) // 2)
+            return max(1, min(chunk, self._staging_max))
         s_eff = (
             self._bucket_for(planned_rows) or self._cache_stride
             if planned_rows is not None
@@ -356,18 +551,40 @@ class OnnxTokenRuntime:
         degenerate table [cache_stride] reproduces the pre-bucketing ids
         {"1", "2"} exactly.  Ids 0 (ORT-internal, capture-eligible) and
         "-1" (uncaptured) are never produced.
+
+        Windowed mode degenerates to exactly two captured shapes for the
+        whole frame — (C+1, 1) and (C+W, W) — so the pre-bucketing ids
+        {"1", "2"} come back; the _graph_id_shapes registry still pins
+        each id to its one shape.
         """
+        if self._cache_window is not None:
+            return "1" if width == 1 else "2"
         b = self._buckets.index(s_eff)
         return str((1 if width == 1 else 2) + 2 * b)
+
+    def _windowed_s_eff(self, width: int) -> int:
+        """Binding width for a windowed pass: the constant C committed
+        slots plus this pass's staging tail — must be EXACT (the in-graph
+        mask is C + n_new wide; any other binding fails loudly at the
+        mask broadcast)."""
+        assert self._cache_window is not None
+        if width > self._staging_max:
+            raise RuntimeError(
+                f"pass width {width} exceeds the allocated staging tail "
+                f"{self._staging_max}; lower the prefill chunk size"
+            )
+        return self._cache_window + width
 
     def empty_past(self, max_len: int) -> KVCache:
         """Allocate the single runtime-owned static cache for a planned run.
 
         ``max_len`` is the run's DEMAND (size it from ``len(prefill_ids) +
         max_positions - 1`` plus any speculative-draft headroom); the actual
-        allocation is always the model's full ``cache_stride`` — the static
-        ``past_K_i`` input shapes reject anything else.  Zero-initialized
-        (load-bearing: masked slots are read with weight exactly 0.0, and
+        allocation is the model's full ``cache_stride`` — or, on a windowed
+        model, the constant ``cache_window + staging`` (positions outrun
+        slots by design there, so the demand checks against the
+        pos-encoding table instead).  Zero-initialized (load-bearing:
+        masked slots are read with weight exactly 0.0, and
         ``0 * NaN = NaN``).
         """
         if max_len is None:
@@ -375,7 +592,18 @@ class OnnxTokenRuntime:
                 "OnnxTokenRuntime.empty_past requires an explicit max_len "
                 "(size from len(prefill_ids) + max_positions - 1 [+ draft_window])"
             )
-        if max_len > self._cache_stride:
+        if self._cache_window is not None:
+            # Windowed protocol: positions outrun the slot count by design,
+            # so the demand is bounded by the POSITION space (the
+            # pos-encoding table), not the allocation.
+            if self._max_seq_len is not None and max_len > self._max_seq_len:
+                raise RuntimeError(
+                    f"run demands up to {max_len} positions but the compiled "
+                    f"model's pos-encoding table is {self._max_seq_len} long; "
+                    f"recompile with a larger model.max_seq_len or lower "
+                    f"max_positions"
+                )
+        elif max_len > self._cache_stride:
             raise RuntimeError(
                 f"run demands up to {max_len} cache rows but the compiled "
                 f"model's static cache_stride is {self._cache_stride}; "
@@ -397,18 +625,34 @@ class OnnxTokenRuntime:
             for t in cache.v:
                 t.zero_()
             cache.length = 0
+            cache.max_len = max_len if self._cache_window is not None else cache.max_len
+            cache.sink_len = None  # a new run re-pins its prefill
+            cache.pending = None
             return cache
         device = self._device
-        S = self._cache_stride
+        if self._cache_window is not None:
+            # C committed slots + the widest staging tail any pass binds.
+            S_alloc = self._cache_window + self._staging_max
+            cache_max_len = max_len  # demand cap in POSITIONS, not slots
+        else:
+            S_alloc = self._cache_stride
+            cache_max_len = S_alloc
         k = [
-            torch.zeros(S, nh, self._d_head, device=device)
+            torch.zeros(S_alloc, nh, self._d_head, device=device)
             for nh in self._per_layer_n_heads
         ]
         v = [
-            torch.zeros(S, nh, self._d_head, device=device)
+            torch.zeros(S_alloc, nh, self._d_head, device=device)
             for nh in self._per_layer_n_heads
         ]
-        self._static_cache = KVCache(k=k, v=v, length=0, max_len=S)
+        self._static_cache = KVCache(
+            k=k,
+            v=v,
+            length=0,
+            max_len=cache_max_len,
+            window=self._cache_window,
+            staging=self._staging_max if self._cache_window is not None else 0,
+        )
         return self._static_cache
 
     def step(self, inputs: torch.Tensor, cache: KVCache, past_len: int | None = None):
@@ -418,6 +662,13 @@ class OnnxTokenRuntime:
             )
         n_new = int(inputs.reshape(-1).shape[0])
         base = cache.length
+        if cache.pending is not None:
+            raise RuntimeError(
+                "windowed KVCache holds an uncommitted speculative batch — "
+                "_commit must run between a multi-row rollout step and the "
+                "next step (the pending deltas are views of binding buffers "
+                "the next pass overwrites)"
+            )
         if base + n_new > cache.max_len:
             raise RuntimeError(
                 f"KV cache overrun: cache_len {base} + n_new {n_new} exceeds "
@@ -426,14 +677,19 @@ class OnnxTokenRuntime:
             )
         if past_len is None:
             past_len = base
-        # Length invariant: the bound past view is cache[:base], so the graph's
-        # mask geometry reads seq-dim == base.  The non-sliding-window contract
-        # requires the absolute query position to equal it.  (A future
-        # sliding-window runtime that hands a trimmed cache with a larger
-        # past_len would relax this.)
+        # Length invariant: the absolute query position must equal the
+        # committed count.  Unbounded protocol: the bound past view is
+        # cache[:base], so the graph's mask geometry reads seq-dim == base
+        # (a host-trimmed cache with a lying past_len was rejected as the
+        # old "sliding window" non-option).  Windowed protocol: the mask is
+        # derived in-graph from cache_position[0] == committed count — the
+        # SUPERSESSION of that retirement (ring_idea.md): the window lives
+        # in the graph's writtenness mask + the host's slot placement, with
+        # nothing lying about positions, so the invariant is the same.
         assert past_len == base, (
-            f"past_len {past_len} != cache_len {base}; the in-place cache binds "
-            f"past_K=cache[:cache_len], so the mask and pos-encoding would disagree"
+            f"past_len {past_len} != cache_len {base}; the committed count "
+            f"drives the mask (bound-view length / windowed writtenness), so "
+            f"the mask and pos-encoding would disagree"
         )
         if self._use_cuda_io:
             return self._step_cuda_io(inputs, cache, past_len, n_new, base)
@@ -445,25 +701,44 @@ class OnnxTokenRuntime:
         token_ids = (
             inputs.detach().cpu().reshape(-1).to(torch.int64).numpy().astype("int64")
         )
+        # Unbounded: bind the full S-row buffer.  Windowed: the mask is
+        # exactly C + n_new wide, so bind that prefix of the C + staging
+        # allocation.
+        bind_rows = (
+            self._windowed_s_eff(n_new)
+            if cache.window is not None
+            else cache.k[0].shape[0]
+        )
         feeds: dict[str, Any] = {
             "token_ids": token_ids,
             "cache_position": np.arange(base, base + n_new, dtype=np.int64),
         }
         for i in range(self._n_layers):
-            # The static past_K_i input shape requires the FULL S-row buffer.
             feeds[f"past_K_{i}"] = (
-                cache.k[i].detach().cpu().numpy().astype("float32", copy=False)
+                cache.k[i][:bind_rows]
+                .detach()
+                .cpu()
+                .numpy()
+                .astype("float32", copy=False)
             )
             feeds[f"past_V_{i}"] = (
-                cache.v[i].detach().cpu().numpy().astype("float32", copy=False)
+                cache.v[i][:bind_rows]
+                .detach()
+                .cpu()
+                .numpy()
+                .astype("float32", copy=False)
             )
         results = self._session.run(self._out_names, feeds)
         logits = torch.from_numpy(results[0])
-        for i in range(self._n_layers):
-            dk = torch.from_numpy(results[1 + 2 * i])
-            dv = torch.from_numpy(results[1 + 2 * i + 1])
-            cache.k[i][base : base + n_new] = dk.to(cache.k[i].dtype)
-            cache.v[i][base : base + n_new] = dv.to(cache.v[i].dtype)
+        dk_rows = [
+            torch.from_numpy(results[1 + 2 * i]).to(cache.k[i].dtype)
+            for i in range(self._n_layers)
+        ]
+        dv_rows = [
+            torch.from_numpy(results[1 + 2 * i + 1]).to(cache.v[i].dtype)
+            for i in range(self._n_layers)
+        ]
+        _persist_rows(cache, base, n_new, dk_rows, dv_rows)
         cache.length = base + n_new
         return logits, cache
 
@@ -594,15 +869,19 @@ class OnnxTokenRuntime:
         ro.add_run_config_entry("gpu_graph_id", gpu_graph_id)
         self._session.run_with_iobinding(io, ro)
 
-    def _step_cuda_io(self, inputs, cache: KVCache, past_len: int, n_new: int, base: int):
+    def _step_cuda_io(
+        self, inputs, cache: KVCache, past_len: int, n_new: int, base: int
+    ):
         import numpy as np
 
+        windowed = cache.window is not None
         if n_new == 1:
-            # Decode: persistent binding at the smallest covering bucket,
-            # contents-only updates.  (base+1 <= max_len is guaranteed by
-            # step()'s overrun guard, and the last bucket == cache_stride,
-            # so a bucket always exists here.)
-            s_eff = self._bucket_for(base + 1)
+            # Decode: persistent binding at the smallest covering bucket
+            # (windowed: the constant C+1), contents-only updates.
+            # (base+1 <= max_len is guaranteed by step()'s overrun guard,
+            # and the last bucket == cache_stride, so a bucket always
+            # exists here.)
+            s_eff = self._windowed_s_eff(1) if windowed else self._bucket_for(base + 1)
             assert s_eff is not None
             b = self._binding_for(cache, s_eff, 1)
             b["token_ids"].copy_(
@@ -612,9 +891,7 @@ class OnnxTokenRuntime:
             self._run_iobinding(
                 b["io"], gpu_graph_id=self._graph_id_for(s_eff, 1), shape=(s_eff, 1)
             )
-            for i in range(self._n_layers):
-                cache.k[i][base : base + 1] = b["delta_k"][i]
-                cache.v[i][base : base + 1] = b["delta_v"][i]
+            _persist_rows(cache, base, 1, b["delta_k"], b["delta_v"])
             cache.length = base + 1
             # NOTE: the returned logits tensor is the persistent buffer — it
             # is overwritten by the NEXT decode step.  Both rollout loops
@@ -622,7 +899,10 @@ class OnnxTokenRuntime:
             return b["logits"], cache
 
         W = self._batch_bucket_width
-        s_eff = self._bucket_for(base + W) if 2 <= n_new <= W else None
+        if 2 <= n_new <= W:
+            s_eff = self._windowed_s_eff(W) if windowed else self._bucket_for(base + W)
+        else:
+            s_eff = None
         if s_eff is not None:
             # Speculative verify batch, PADDED to the fixed bucket width so
             # one captured graph per stride bucket replays every step.
@@ -637,18 +917,25 @@ class OnnxTokenRuntime:
             # through to the uncaptured dynamic path below — the same
             # fallback the pre-bucketing code had via base+W <= max_len.
             b = self._binding_for(cache, s_eff, W)
-            ids = inputs.detach().reshape(-1).to(
-                device=self._device, dtype=torch.int64
-            )
+            ids = inputs.detach().reshape(-1).to(device=self._device, dtype=torch.int64)
             b["token_ids"][:n_new].copy_(ids)
             b["token_ids"][n_new:] = ids[-1]
             torch.add(b["arange_W"], base, out=b["cache_position"])
             self._run_iobinding(
                 b["io"], gpu_graph_id=self._graph_id_for(s_eff, W), shape=(s_eff, W)
             )
-            for i in range(self._n_layers):
-                cache.k[i][base : base + n_new] = b["delta_k"][i][:n_new]
-                cache.v[i][base : base + n_new] = b["delta_v"][i][:n_new]
+            # Windowed: this is the speculative path — _persist_rows stashes
+            # the rows on cache.pending and the rollout's _commit flushes
+            # only the accepted prefix into the ring (rejected rows must
+            # never evict live in-window rows).  Unbounded: direct write,
+            # rejection just lowers length as before.
+            _persist_rows(
+                cache,
+                base,
+                n_new,
+                [dk[:n_new] for dk in b["delta_k"]],
+                [dv[:n_new] for dv in b["delta_v"]],
+            )
             cache.length = base + n_new
             # Sliced view of the persistent buffer — overwritten by the next
             # batched step; callers argmax before stepping again.
@@ -657,9 +944,11 @@ class OnnxTokenRuntime:
         # Prefill / oversized / near-cache-end batches (variable n_new):
         # per-call binding, uncaptured path.  The past binds the smallest
         # prefix bucket covering base + n_new (always exists — step()'s
-        # overrun guard caps base + n_new at max_len == the last bucket),
-        # so prefill rides the small-S_eff attention too.
-        s_eff_dyn = self._bucket_for(base + n_new)
+        # overrun guard caps base + n_new at max_len == the last bucket);
+        # windowed mode binds the exact C + n_new the mask demands.
+        s_eff_dyn = (
+            self._windowed_s_eff(n_new) if windowed else self._bucket_for(base + n_new)
+        )
         assert s_eff_dyn is not None
         token_ids = (
             inputs.detach()
@@ -712,9 +1001,7 @@ class OnnxTokenRuntime:
         self._run_iobinding(io, gpu_graph_id="-1")
         # Copy the freshly computed deltas into the owned cache slots (the run
         # is complete, so there is no input/output aliasing during execution).
-        for i in range(self._n_layers):
-            cache.k[i][base : base + n_new] = delta_k_outs[i]
-            cache.v[i][base : base + n_new] = delta_v_outs[i]
+        _persist_rows(cache, base, n_new, delta_k_outs, delta_v_outs)
         cache.length = base + n_new
         return logits, cache
 
@@ -823,6 +1110,25 @@ def run_prefill(
         )
 
     past = compiled.empty_past(max_cache_len)
+    if isinstance(past, KVCache) and past.window is not None:
+        # Pin the windowed host policy: the prefill is the permanently
+        # resident sink prefix [0, P); rollout rows wrap through the
+        # remaining ring slots.  Must happen before the first step — the
+        # runtime cannot tell a prefill chunk from a rollout batch.
+        ring = past.window - len(prefill_ids)
+        if ring < 1:
+            raise RuntimeError(
+                f"prefill ({len(prefill_ids)} rows) fills the whole "
+                f"{past.window}-slot cache window — no ring slots left; "
+                f"raise model.cache_window"
+            )
+        past.sink_len = len(prefill_ids)
+        print(
+            f"[{label}] windowed cache: sink={past.sink_len} ring={ring} "
+            f"(window={past.window}, staging={past.staging}); rollout rows "
+            f"wrap after position {past.sink_len + ring}",
+            flush=True,
+        )
     out = None
     offset = 0
     passes = 0
