@@ -146,22 +146,50 @@ or the stale copy bites (it has).
 The compiled model uses a fixed-size windowed KV cache
 (`model.cache_window`): every committed row is PERMANENT (resident for
 the whole run) or EXPIRING (its slot recycles once the window fills),
-decided by token type at the inference layer
-(`render/inference.py`; runtime knob `TWDOOM_EXPIRING_TYPES`, default
-`pixel`).
+decided by token type at the inference layer (the
+`expiring_types` config field, default `[pixel]`; the
+`TWDOOM_EXPIRING_TYPES` env var overrides for ad-hoc experiments;
+never a compile parameter).
 
 This rests on one protocol invariant: **no attention read may target
-an expiring-type row at long range.** Pixel rows qualify today —
-they publish zero channels and are only read at position offsets
-<= 3. If you design a protocol change that reads pixel history at a
-distance (sprites, post-processing, anything that revisits emitted
-pixels), the windowed cache breaks SILENTLY at design time and only
-shows up as token divergence in gates — either rethink the read, or
-remove `pixel` from the expiring set and re-budget `cache_window`.
-The same bar applies before adding any other type to the expiring
-set: certify that nothing reads that type's rows beyond the resident
-pool, then gate against an unbounded baseline (the /tmp-variant
-pattern above).
+an expiring-type row at long range.** The certified expiring set
+(production default in `configs/e1m1.yaml`; full census in the
+umbrella's `plan_tier1_expiry.md`, gated token-identical at the
+production config 2026-06-12):
+
+- `pixel` — publishes zero channels, read only at offsets <= 3
+- `setCursorY`, `setCursorDirectionX/Y` — publish nothing, offsets <= 2
+- `wallColU` — one value channel, read only at offset -2
+- `setCursorX` — cursor markers, read within one wall column / one
+  flat span (<= ~164 positions)
+- `screenY` — the wall-column state marker, consumed within its own
+  column cycle (<= ~292)
+- `wallSpanMeta` — span-state marker, consumed within its span
+  (<= ~619 conservative)
+- `clipUpdate` — control marker, consumed at distance 1 (the clip
+  record itself lives on the FOLLOWING screenRange row, which is
+  permanent)
+- `R_MapPlane.row` — flat-span marker, read within its pixel run
+  (<= ~128)
+
+Certified NON-expirable, do not add: `screenRange` (per-column clip
+memory + visplane occupancy, read at frame length by the flat pass),
+`planeMark`, the BSP spine, `value` (mixed-provenance payloads), and
+`R_MakeSpans.col`/`.closeSlot` (bounded by one visplane draw, but
+that reach is scene-dependent and ~6.4k positions on the production
+frame — it competes with the recycle pool).
+
+If you design a protocol change that reads any certified type's
+history at a distance (sprites reading per-column clip state or
+revisiting pixels, post-processing, masked textures), the windowed
+cache breaks SILENTLY at design time and only shows up as token
+divergence in gates — either rethink the read, or remove that type
+from `expiring_types` and re-budget `cache_window`. The same bar
+applies before adding any other type to the expiring set: certify
+that nothing reads that type's rows beyond the resident pool, then
+gate against a pixel-only baseline (the /tmp-variant pattern above;
+pure-AR legs in fresh processes — see plan_tier1_expiry.md "Gate
+findings" for why mode=both legs can't gate this).
 
 # Testing
 
