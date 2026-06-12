@@ -1,11 +1,11 @@
 """The production ONNX inference engine: session ownership + IO binding.
 
 :class:`OnnxTokenRuntime` is the one production
-:class:`~torchwright_doom.render.generation.TokenRuntime`: it owns the
+:class:`~torchwright_doom.inference.generation.TokenRuntime`: it owns the
 onnxruntime session over the cached compiled artifact, the persistent
 CUDA-graph-captured IO bindings (per attention-window bucket), the
 prefill/decode step paths, and the per-row expiry tagging that the
-windowed :class:`~torchwright_doom.render.kv_cache.KVCache` placement
+windowed :class:`~torchwright_doom.inference.kv_cache.KVCache` placement
 policy needs.  The optimum/TRT-LLM analog: the engine that loads an
 exported model and serves ``step``.
 """

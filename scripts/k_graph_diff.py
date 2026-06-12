@@ -34,7 +34,7 @@ def _build_and_eval(graph_kind, full_rows, n):
     from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED, build_doom_embedding
     from torchwright_doom.past import GraphPast
     from torchwright_doom.render_main import forward
-    from torchwright_doom.render.tokens_bridge import rows_to_input
+    from torchwright_doom.inference.tokens_bridge import rows_to_input
 
     _node_module.global_node_id = 0
     if graph_kind == "iv":
@@ -71,7 +71,7 @@ def main(argv=None) -> int:
     args = p.parse_args(argv)
 
     os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
-    from torchwright_doom.render.wad_scene import ensure_doom_sandbox
+    from torchwright_doom.inference.wad_scene import ensure_doom_sandbox
 
     ensure_doom_sandbox()
 
@@ -82,7 +82,7 @@ def main(argv=None) -> int:
     from doom_sandbox.implementation import reference_drafter as drafter
 
     from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
-    from torchwright_doom.render.tokens_bridge import sandbox_token_to_row
+    from torchwright_doom.inference.tokens_bridge import sandbox_token_to_row
 
     scene = fixtures.load_fixture(args.fixture)
     pose = scene.test_poses[args.pose]

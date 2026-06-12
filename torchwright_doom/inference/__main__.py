@@ -1,4 +1,4 @@
-"""Entrypoint for ``python -m torchwright_doom.render``."""
+"""Entrypoint for ``python -m torchwright_doom.inference``."""
 
 from .cli import main
 

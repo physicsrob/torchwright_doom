@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from torchwright_doom.asset_banks import PLAYPAL
-from torchwright_doom.render.decode import (
+from torchwright_doom.inference.decode import (
     _PIXEL_START,
     decode_rows_to_pixels,
     pixel_color_index,
 )
-from torchwright_doom.render.tokens_bridge import row_index
+from torchwright_doom.inference.tokens_bridge import row_index
 from torchwright_doom.vocab import (
     PIXEL,
     SET_CURSOR_DIRECTION_X,

@@ -31,8 +31,8 @@ from __future__ import annotations
 import pytest
 import torch
 
-from torchwright_doom.render.generation import TokenRuntime
-from torchwright_doom.render.kv_cache import (
+from torchwright_doom.inference.generation import TokenRuntime
+from torchwright_doom.inference.kv_cache import (
     KVCache,
     WindowedState,
     alloc_runs,

@@ -18,7 +18,7 @@ cache, then:
     .venv/bin/python -m scripts.k_probe_divergence --pos 2450
 
 Needs the config's compiled cache entry to exist already (this never compiles —
-build it via ``python -m torchwright_doom.render compile --config <yaml>``).
+build it via ``python -m torchwright_doom.inference compile --config <yaml>``).
 The wide prefill pass doesn't fit the local L4 (promoted debug outputs disable
 ORT's memory planning) — run locally on CPU via ``CUDA_VISIBLE_DEVICES=""``.
 """
@@ -65,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Screen env BEFORE any graph/sandbox module imports — constants.py bakes
     # the dims at import and the artifact was compiled at the config's dims.
-    from torchwright_doom.render.config import (
+    from torchwright_doom.inference.config import (
         apply_screen_env,
         compile_cache_dir,
         load_render_config,
@@ -82,9 +82,9 @@ def main(argv: list[str] | None = None) -> int:
     from torchwright.debug.probe import reference_eval
 
     from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
-    from torchwright_doom.render.compiled_model import build_graph
-    from torchwright_doom.render.tokens_bridge import rows_to_input
-    from torchwright_doom.render.wad_scene import reference_stream
+    from torchwright_doom.inference.compiled_model import build_graph
+    from torchwright_doom.inference.tokens_bridge import rows_to_input
+    from torchwright_doom.inference.wad_scene import reference_stream
 
     _sb_scene, sb_pose, prefill_rows, full_rows = reference_stream(
         config,
@@ -114,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(
             f"[probe] no debuggable artifact at {cache_dir} (model.onnx + "
             f"model.debug.json required) — recompile via `python -m "
-            f"torchwright_doom.render compile --config {config_path}`"
+            f"torchwright_doom.inference compile --config {config_path}`"
         )
 
     # Build the graph ONCE so the oracle and the debug session share node

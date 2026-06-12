@@ -34,7 +34,7 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
 
     os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
-    from torchwright_doom.render.wad_scene import ensure_doom_sandbox
+    from torchwright_doom.inference.wad_scene import ensure_doom_sandbox
 
     ensure_doom_sandbox()
 
@@ -55,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
     from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED, build_doom_embedding
     from torchwright_doom.past import GraphPast
     from torchwright_doom.render_main import forward
-    from torchwright_doom.render.tokens_bridge import (
+    from torchwright_doom.inference.tokens_bridge import (
         rows_to_input,
         sandbox_token_to_row,
     )

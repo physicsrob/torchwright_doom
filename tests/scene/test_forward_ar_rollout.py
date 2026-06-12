@@ -43,8 +43,8 @@ from torchwright.ops.inout_nodes import create_input, create_pos_encoding
 
 from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
 from torchwright_doom.past import GraphPast
-from torchwright_doom.render.compiled_model import build_graph
-from torchwright_doom.render.tokens_bridge import rows_to_input
+from torchwright_doom.inference.compiled_model import build_graph
+from torchwright_doom.inference.tokens_bridge import rows_to_input
 from torchwright_doom.render_main import forward
 from torchwright_doom.vocab import NO_OP
 
@@ -124,7 +124,7 @@ def _compiled_rollout(prefill_ids: list[int], device) -> list[int]:
 
     The gate owns its own AR loop: the shipped rollout harness
     (``render.generation``) speaks only the production owned-``KVCache``
-    protocol (and is covered there by ``tests/render/test_spec_decode_logic.py``
+    protocol (and is covered there by ``tests/inference/test_spec_decode_logic.py``
     + ``test_windowed_cache.py``), while ``compile_headless`` threads
     grow-per-step KV tuples.  This test's job is the compiled-vs-exact-math
     trajectory, so it drives ``compiled.step`` directly.

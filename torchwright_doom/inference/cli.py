@@ -2,8 +2,8 @@
 
 Commands:
 
-``python -m torchwright_doom.render compile --config job.yaml``
-``python -m torchwright_doom.render run --config job.yaml --x 1056 --y -3616 --angle 64``
+``python -m torchwright_doom.inference compile --config job.yaml``
+``python -m torchwright_doom.inference run --config job.yaml --x 1056 --y -3616 --angle 64``
 """
 
 from __future__ import annotations

@@ -75,7 +75,7 @@ lint:
 
 .PHONY: render-compile compile
 render-compile compile:
-	uv run python -m torchwright_doom.render compile $(_RENDER_COMPILE_ARGS)
+	uv run python -m torchwright_doom.inference compile $(_RENDER_COMPILE_ARGS)
 
 .PHONY: render-run run
 render-run run:
@@ -97,7 +97,7 @@ render-run run:
 
 .PHONY: render-run-local run-local
 render-run-local run-local:
-	uv run python -m torchwright_doom.render run $(_RENDER_RUN_ARGS)
+	uv run python -m torchwright_doom.inference run $(_RENDER_RUN_ARGS)
 
 .PHONY: test
 test: lint

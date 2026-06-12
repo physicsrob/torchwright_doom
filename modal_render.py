@@ -87,7 +87,7 @@ def compile_remote(
     # Durable schedule cache (see SCHEDULE_VOLUME above).
     os.environ["TW_SCHEDULE_CACHE_DIR"] = "/root/.cache/torchwright_doom/schedules"
 
-    from torchwright_doom.render.cli import compile_config
+    from torchwright_doom.inference.cli import compile_config
 
     # The cache key + payload come from the LOCAL machine: this container has
     # no ``.git``, so deriving them here would collapse the git SHAs to
@@ -134,7 +134,7 @@ def render_remote(run_id: str, kwargs: dict, cache_subdir: str) -> dict:
     if "/root" not in sys.path:
         sys.path.insert(0, "/root")  # make /root/doom_sandbox importable
 
-    from torchwright_doom.render.cli import run_config
+    from torchwright_doom.inference.cli import run_config
 
     # Compilation happens in ``compile_remote`` (a separate 64-CPU container),
     # which writes the ONNX into CACHE_VOLUME under ``cache_subdir``. Reload so
@@ -203,7 +203,7 @@ def main(
     # screen-sized token vocab (the import-order trap that forces
     # ``compile_config`` to call ``apply_screen_env`` before touching
     # ``render.cache``).
-    from torchwright_doom.render.config import (
+    from torchwright_doom.inference.config import (
         cache_key_from_payload,
         canonical_compile_payload,
         load_render_config,

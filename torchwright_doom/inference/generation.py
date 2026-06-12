@@ -5,7 +5,7 @@ abstract trio (``empty_past`` / ``step`` / ``max_safe_prefill_chunk``) is
 exactly the surface the concrete loop methods call, and the loops —
 chunked prefill, pure autoregression, speculative decode — are ordinary
 methods, the way ``model.generate()`` is in every mainstream stack.
-Production is :class:`~torchwright_doom.render.onnx_runtime.OnnxTokenRuntime`;
+Production is :class:`~torchwright_doom.inference.onnx_runtime.OnnxTokenRuntime`;
 the render logic tests subclass with in-memory transition-table models.
 
 ``tokens_bridge`` (and through it the screen-env-dependent vocab) is
@@ -77,7 +77,7 @@ class TokenRuntime(ABC):
     The abstract trio below is exactly the surface the concrete generation
     loops call; production is :class:`OnnxTokenRuntime` — the one real
     runtime — and the render logic tests substitute in-memory
-    transition-table models (``tests/render/test_spec_decode_logic.py`` /
+    transition-table models (``tests/inference/test_spec_decode_logic.py`` /
     ``test_windowed_cache.py``) by subclassing, so a missing or drifted
     method is a definition-time error, not a mid-rollout AttributeError.
 

@@ -26,7 +26,7 @@ def _decode_at(graph_kind: str, dtype, full_rows, expected_row, pred_row):
     from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED, build_doom_embedding
     from torchwright_doom.past import GraphPast
     from torchwright_doom.render_main import forward
-    from torchwright_doom.render.tokens_bridge import rows_to_input
+    from torchwright_doom.inference.tokens_bridge import rows_to_input
 
     torch.set_default_dtype(dtype)  # set BEFORE building so weights are this dtype
     _node_module.global_node_id = 0
@@ -65,7 +65,7 @@ def _decode_at(graph_kind: str, dtype, full_rows, expected_row, pred_row):
 
 def main() -> int:
     os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
-    from torchwright_doom.render.wad_scene import ensure_doom_sandbox
+    from torchwright_doom.inference.wad_scene import ensure_doom_sandbox
 
     ensure_doom_sandbox()
     import torch
@@ -73,7 +73,7 @@ def main() -> int:
     from doom_sandbox import fixtures
     from doom_sandbox.implementation import prefill as sb_prefill
     from doom_sandbox.implementation import reference_drafter as drafter
-    from torchwright_doom.render.tokens_bridge import sandbox_token_to_row
+    from torchwright_doom.inference.tokens_bridge import sandbox_token_to_row
 
     scene = fixtures.load_fixture("e1m1_subset_textured")
     pose = scene.test_poses[0]

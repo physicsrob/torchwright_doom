@@ -22,8 +22,8 @@ X, Y, ANGLE, VIEWZ = 1056.0, -3616.0, 64, 41.0
 
 
 def main() -> int:
-    from torchwright_doom.render.config import apply_screen_env, load_render_config
-    from torchwright_doom.render.wad_scene import (
+    from torchwright_doom.inference.config import apply_screen_env, load_render_config
+    from torchwright_doom.inference.wad_scene import (
         load_render_scene,
         pose_from_world,
         sandbox_scene_for,
@@ -38,7 +38,7 @@ def main() -> int:
 
     from doom_sandbox.api.tokens import Token
     from doom_sandbox.implementation.reference_drafter import ARDrafter
-    from torchwright_doom.render.tokens_bridge import (
+    from torchwright_doom.inference.tokens_bridge import (
         _sandbox_types,
         sandbox_token_to_row,
     )

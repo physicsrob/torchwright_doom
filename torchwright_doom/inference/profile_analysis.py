@@ -19,7 +19,7 @@ treat the single largest run as prefill, and aggregate the rest as decode.
 
 Run standalone on a downloaded trace::
 
-    python -m torchwright_doom.render.profile_analysis out/render/ort_profile_*.json
+    python -m torchwright_doom.inference.profile_analysis out/render/ort_profile_*.json
 """
 
 from __future__ import annotations
@@ -226,7 +226,7 @@ def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args:
         print(
-            "usage: python -m torchwright_doom.render.profile_analysis "
+            "usage: python -m torchwright_doom.inference.profile_analysis "
             "<ort_profile.json>"
         )
         return 2

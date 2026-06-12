@@ -1,7 +1,7 @@
 """Localize the first teacher-forced divergence of the compiled free-run (Plan K).
 
 THE manual faithfulness gate for a cached artifact (it replaced
-``tests/render/test_compiled_divergence.py``): feeds the *reference* token
+``tests/inference/test_compiled_divergence.py``): feeds the *reference* token
 stream — the config scene's prefill plus the sandbox reference renderer's
 expected rollout — through the cached production ONNX (via
 ``render.cache.load_debug_session``, the same bits production renders with) as
@@ -15,7 +15,7 @@ amplification (teacher-forced stays clean).
     .venv/bin/python -m scripts.k_localize_divergence --window 3700
 
 Needs the config's compiled cache entry to exist already (this never compiles —
-build it via ``python -m torchwright_doom.render compile --config <yaml>``).
+build it via ``python -m torchwright_doom.inference compile --config <yaml>``).
 ``--window`` caps the fed prefix; the AR region starts past the prefill
 (~3613 rows on the e1m1 scene), so a useful gate run needs a window beyond
 that.  Debug-session passes don't fit the local L4 (promoted outputs disable
@@ -53,16 +53,16 @@ def main(argv: list[str] | None = None) -> int:
 
     # Screen env BEFORE any graph/sandbox module imports — constants.py bakes
     # the dims at import and the artifact was compiled at the config's dims.
-    from torchwright_doom.render.config import apply_screen_env, load_render_config
+    from torchwright_doom.inference.config import apply_screen_env, load_render_config
 
     config_path = Path(args.config_path)
     config = load_render_config(config_path)
     apply_screen_env(config)
 
-    from torchwright_doom.render import compare
-    from torchwright_doom.render.compile_cache import load_debug_session
-    from torchwright_doom.render.diagnostic import teacher_forced_scan
-    from torchwright_doom.render.wad_scene import reference_stream
+    from torchwright_doom.inference import compare
+    from torchwright_doom.inference.compile_cache import load_debug_session
+    from torchwright_doom.inference.diagnostic import teacher_forced_scan
+    from torchwright_doom.inference.wad_scene import reference_stream
 
     sb_scene, sb_pose, prefill_rows, full_rows = reference_stream(
         config,

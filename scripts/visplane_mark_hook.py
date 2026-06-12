@@ -14,8 +14,8 @@ TP, TVP = 1, 1
 
 
 def main() -> int:
-    from torchwright_doom.render.config import apply_screen_env, load_render_config
-    from torchwright_doom.render.wad_scene import (
+    from torchwright_doom.inference.config import apply_screen_env, load_render_config
+    from torchwright_doom.inference.wad_scene import (
         load_render_scene,
         pose_from_world,
         sandbox_scene_for,

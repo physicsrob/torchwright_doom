@@ -27,7 +27,7 @@ def _rng(node):
 
 def main() -> int:
     os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
-    from torchwright_doom.render.wad_scene import ensure_doom_sandbox
+    from torchwright_doom.inference.wad_scene import ensure_doom_sandbox
 
     ensure_doom_sandbox()
 

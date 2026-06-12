@@ -118,7 +118,7 @@ def load_debug_session(
     onnx_path = cache_dir / "model.onnx"
     sidecar_path = cache_dir / "model.debug.json"
     recipe = (
-        f"recompile via `python -m torchwright_doom.render compile "
+        f"recompile via `python -m torchwright_doom.inference compile "
         f"--config <yaml>` (delete {cache_dir} first if it exists; "
         f"compile_to_onnx writes the debug sidecar by default)"
     )
@@ -200,7 +200,7 @@ def _write_render_meta(
     ]
     payload = {
         **existing,
-        "render_meta_format": "torchwright_doom.render.v1",
+        "render_meta_format": "torchwright_doom.inference.v1",
         # Prefer the handed-over payload: computed remotely it would carry
         # "unknown" git SHAs (see compile_cached docstring).
         "compile_payload": (

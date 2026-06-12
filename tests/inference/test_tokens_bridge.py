@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from torchwright_doom.render import tokens_bridge as tb
+from torchwright_doom.inference import tokens_bridge as tb
 
 
 def _sandbox():
