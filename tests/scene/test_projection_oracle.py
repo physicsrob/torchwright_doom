@@ -23,10 +23,7 @@ stubbed span — which is how the occlusion-discrimination assert below holds.
 
 from __future__ import annotations
 
-import os
-import sys
 from collections import Counter
-from pathlib import Path
 
 import pytest
 import torch
@@ -35,11 +32,14 @@ from torchwright.debug.probe import reference_eval
 from torchwright.ops.inout_nodes import create_input, create_pos_encoding
 
 from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
+from torchwright_doom.graph_debug import silenced_graph_asserts
+from torchwright_doom.inference.diagnostic import carrier_delta as _carrier_delta
 from torchwright_doom.past import GraphPast
 from torchwright_doom.render_main import forward
 from torchwright_doom.vocab import VOCAB_TYPES
 
 from ..prefill_fixture import row_index, tokens_to_input
+from ..sandbox_support import import_sandbox, require_doom_sandbox
 
 # Phase-F protocol markers (sandbox token names). A carrier (value/angleValue)
 # is compared only when the token *before* it is one of these — that excludes
@@ -102,9 +102,6 @@ _CARRIER_MARKERS = {
 _ANGLE_BAM_TOL = 2
 _VALUE_ENC_TOL = 3.0e-3
 
-_VALUE_ROWS = 65536  # VALUE block [0, 65536), one row per quantization level
-_ANGLE_ROW0 = 65536  # ANGLE_VALUE block start
-_ANGLE_LO = -4096  # ANGLE_VALUE IntSlot lo
 
 # Span past the prefill to teacher-force. ``reference_eval`` cost is O(n_pos²)
 # over the F graph's many attention nodes, and the prefill is ~1057 positions,
@@ -116,10 +113,6 @@ _ANGLE_LO = -4096  # ANGLE_VALUE IntSlot lo
 # shorter (so the projection gate stays light).
 _AR_SPAN = 215
 _OCCLUSION_AR_SPAN = 580
-
-
-def _umbrella() -> Path:
-    return Path(__file__).resolve().parents[3]
 
 
 def _is_marker(full, i: int) -> bool:
@@ -138,36 +131,15 @@ def _is_compared(full, i: int) -> bool:
     return _is_marker(full, i) or _is_carrier(full, i)
 
 
-def _carrier_delta(name: str, predicted_row: int, expected_row: int) -> float | None:
-    """Value-space distance between predicted and expected carrier rows, or
-    ``None`` if the predicted token is the wrong *type* (outside the carrier's
-    block)."""
-    if name == "angleValue":
-        if not (_ANGLE_ROW0 <= predicted_row < _ANGLE_ROW0 + 8192):
-            return None
-        pa = predicted_row - _ANGLE_ROW0 + _ANGLE_LO
-        ea = expected_row - _ANGLE_ROW0 + _ANGLE_LO
-        return abs(((pa - ea + 4096) % 8192) - 4096)  # wrap-aware BAM distance
-    # value
-    if not (0 <= predicted_row < _VALUE_ROWS):
-        return None
-    return abs(predicted_row - expected_row) * 2.0 / (_VALUE_ROWS - 1)
-
-
 @pytest.fixture(scope="module")
 def projection_eval():
     """Build the reduced-F ``forward()`` graph once, teacher-force it on the
     sandbox golden stream, and ``reference_eval`` a single pass."""
-    umbrella = _umbrella()
-    if not (umbrella / "doom_sandbox").is_dir():
-        pytest.skip("doom_sandbox sibling not present (standalone checkout)")
-    os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
-    if str(umbrella) not in sys.path:
-        sys.path.insert(0, str(umbrella))
+    require_doom_sandbox()
 
-    fixtures = pytest.importorskip("doom_sandbox.fixtures")
-    sb_prefill = pytest.importorskip("doom_sandbox.implementation.prefill")
-    drafter = pytest.importorskip("doom_sandbox.implementation.reference_drafter")
+    fixtures = import_sandbox("doom_sandbox.fixtures")
+    sb_prefill = import_sandbox("doom_sandbox.implementation.prefill")
+    drafter = import_sandbox("doom_sandbox.implementation.reference_drafter")
 
     name_to_real = {t.name: t for t in VOCAB_TYPES}
 
@@ -187,22 +159,8 @@ def projection_eval():
     past = GraphPast(input_vec=iv, pos_encoding=create_pos_encoding())
     next_token = forward(iv, past, create_pos_encoding())
 
-    # The renderer builds every branch candidate at every position and masks by
-    # token type in the dispatch, so a ``select`` / ``broadcast_select`` cond on
-    # a *discarded* branch can land in a comparator ramp (e.g. ``gt_height`` of
-    # two garbage recovered heights) and trip its ±1 ``c_tol`` Assert. At the
-    # active row the cond is clean (DOOM heights are integers). The gate
-    # validates via next-token agreement, not the debug Asserts, so silence the
-    # Assert predicates for this oracle pass (they are stripped on the compiled
-    # path anyway and only re-checked under ``debug=True``).
-    import torchwright.graph.misc as _misc
-
-    _orig_check = _misc.Assert._check
-    _misc.Assert._check = lambda self, x: None
-    try:
+    with silenced_graph_asserts():
         cache = reference_eval(next_token, inputs, n_pos)
-    finally:
-        _misc.Assert._check = _orig_check
     return {
         "emitted": cache[next_token],
         "full": full,

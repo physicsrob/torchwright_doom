@@ -41,9 +41,14 @@ _ANGLE_LO = -_ANGLE_LEVELS // 2  # angle slot is centered (IntSlot(-N/2, N/2))
 _PIXEL_START, _ = TOKEN_VOCAB.type_to_row_range[PIXEL]
 
 
-def _carrier_delta(name: str, predicted_row: int, expected_row: int):
+def carrier_delta(name: str, predicted_row: int, expected_row: int):
     """Encoded-value distance for a carrier; None if the prediction isn't even the
-    right carrier type (a hard divergence)."""
+    right carrier type (a hard divergence).
+
+    The canonical definition — the scene oracle gates import it too (the
+    per-test copies hardcoded the vocab row ranges; these derive from
+    ``TOKEN_VOCAB`` so a layout change can't silently break the delta math).
+    """
     if name == "angleValue":
         if not (_ANGLE_START <= predicted_row < _ANGLE_END):
             return None
@@ -133,7 +138,7 @@ def teacher_forced_scan(
                 )
         elif exp_type in _CARRIERS:
             tol = _ANGLE_BAM_TOL if exp_type == "angleValue" else _VALUE_ENC_TOL
-            delta = _carrier_delta(exp_type, pred_row, exp_row)
+            delta = carrier_delta(exp_type, pred_row, exp_row)
             if delta is None or delta > tol:
                 divergences.append(
                     Divergence(

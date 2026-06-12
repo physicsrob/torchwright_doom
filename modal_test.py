@@ -11,6 +11,7 @@ Usage (via Makefile):
     make test ARGS="-k test_foo" # filter applied to all shards
 """
 
+import os
 import shlex
 import subprocess
 import sys
@@ -18,9 +19,9 @@ import time
 
 import modal
 
-from modal_image import IMAGE
+from modal_image import TEST_IMAGE
 
-app = modal.App("torchwright-doom-test", image=IMAGE)
+app = modal.App("torchwright-doom-test", image=TEST_IMAGE)
 
 # ── Shard definitions ─────────────────────────────────────────────
 # Simple file-level sharding.  Heavy compiled-test files get their
@@ -50,10 +51,17 @@ SHARDS = [
 # ── Remote function ───────────────────────────────────────────────
 
 
-@app.function(gpu="a100-80gb", cpu=8, memory=32768, timeout=1800)
+# timeout: the cross-submodule oracle gates (reference_eval over the full
+# forward graph, O(n_pos^2)) push the catch-all shard well past the old
+# 30-minute budget.
+@app.function(gpu="a100-80gb", cpu=8, memory=32768, timeout=3600)
 def run_pytest(pytest_args: str, shard_id: int = 0, extra_args: str = "") -> int:
     tag = f"[shard {shard_id}]"
     t0 = time.time()
+    # The oracle gates must RUN here, not skip: tests/sandbox_support.py
+    # fails loud (and tests/test_sandbox_gates_guard.py goes red) if the
+    # doom_sandbox sibling shipped in TEST_IMAGE stops being importable.
+    os.environ["TWDOOM_REQUIRE_SANDBOX_GATES"] = "1"
     cmd = [
         sys.executable,
         "-m",

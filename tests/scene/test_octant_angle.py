@@ -19,10 +19,7 @@ Both are evaluated through ``reference_eval`` (exact math). The companion
 from __future__ import annotations
 
 import math
-import sys
-from pathlib import Path
 
-import pytest
 import torch
 
 from torchwright.debug.probe import reference_eval
@@ -33,6 +30,8 @@ from torchwright_doom.render_ops import (
     signed_world_angle,
     wrap_signed_angle,
 )
+
+from ..sandbox_support import import_sandbox, require_doom_sandbox
 
 ANGLE_BAM = 8192
 
@@ -89,15 +88,8 @@ def test_octant_matches_golden_on_dense_sweep() -> None:
     assert worst <= 1.0, f"octant diverges from golden BAM by {worst}"
 
 
-def _umbrella() -> Path:
-    return Path(__file__).resolve().parents[3]
-
-
 def _e1m1_octant_points() -> list[tuple[float, float]]:
-    umbrella = _umbrella()
-    if str(umbrella) not in sys.path:
-        sys.path.insert(0, str(umbrella))
-    fixtures = pytest.importorskip("doom_sandbox.fixtures")
+    fixtures = import_sandbox("doom_sandbox.fixtures")
     scene = fixtures.load_fixture("e1m1_subset")
     md = scene.map_data
     points: list[tuple[float, float]] = []
@@ -116,9 +108,7 @@ def _e1m1_octant_points() -> list[tuple[float, float]]:
 
 
 def test_octant_exact_on_e1m1_geometry() -> None:
-    umbrella = _umbrella()
-    if not (umbrella / "doom_sandbox").is_dir():
-        pytest.skip("doom_sandbox sibling not present (standalone checkout)")
+    require_doom_sandbox()
     points = _e1m1_octant_points()
 
     # The clamp must cover the geometry: bbox corners reach |d| ~2752, which

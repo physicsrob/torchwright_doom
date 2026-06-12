@@ -38,7 +38,7 @@ def main() -> int:
 
     import torch
 
-    import torchwright.graph.misc as _misc
+    from torchwright_doom.graph_debug import silenced_graph_asserts
     import torchwright.graph.node as _node_module
     from torchwright.compiler.utils import get_ancestor_nodes
     from torchwright.debug.probe import reference_eval
@@ -88,9 +88,7 @@ def main() -> int:
         return am
 
     inputs = {"token_ids": rows_to_input(full_rows[:n])}
-    _orig = _misc.Assert._check
-    _misc.Assert._check = lambda self, x: None
-    try:
+    with silenced_graph_asserts():
         # Float32 baseline (same process, same graph).
         print("[float64] evaluating float32 baseline...")
         cache32 = reference_eval(next_token, inputs, n)
@@ -108,8 +106,6 @@ def main() -> int:
         print("[float64] evaluating float64...")
         cache64 = reference_eval(next_token, inputs, n)
         am64 = decode(cache64, "float64")
-    finally:
-        _misc.Assert._check = _orig
 
     print(
         f"\n[float64] float32 -> row {am32} ({'node3' if am32==ROW_NODE3 else 'node1' if am32==ROW_NODE1 else '?'}); "

@@ -14,30 +14,19 @@ standalone checkout).
 
 from __future__ import annotations
 
-import os
-import sys
-from pathlib import Path
-
 import pytest
 
-
-def _umbrella() -> Path:
-    return Path(__file__).resolve().parents[3]
+from ..sandbox_support import import_sandbox, require_doom_sandbox
 
 
 # box_room is geometry-only (flat "-"); the sandbox's textured get_prefill
 # rejects it. e1m1_subset's flats are compiled into FLAT_ID_BY_NAME.
 @pytest.mark.parametrize("fixture_name", ["e1m1_subset"])
 def test_build_prompt_matches_sandbox_get_prefill(fixture_name: str) -> None:
-    umbrella = _umbrella()
-    if not (umbrella / "doom_sandbox").is_dir():
-        pytest.skip("doom_sandbox sibling not present (standalone checkout)")
-    os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
-    if str(umbrella) not in sys.path:
-        sys.path.insert(0, str(umbrella))
+    require_doom_sandbox()
 
-    fixtures = pytest.importorskip("doom_sandbox.fixtures")
-    sb_prefill = pytest.importorskip("doom_sandbox.implementation.prefill")
+    fixtures = import_sandbox("doom_sandbox.fixtures")
+    sb_prefill = import_sandbox("doom_sandbox.implementation.prefill")
     from torchwright_doom.prompt.build import build_prompt
     from torchwright_doom.prompt.types import GameState as RealGameState
     from torchwright_doom.prompt.types import MapData as RealMapData

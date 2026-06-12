@@ -32,10 +32,7 @@ Cross-submodule: ``importorskip``\\ s ``doom_sandbox`` (skipped standalone).
 
 from __future__ import annotations
 
-import os
-import sys
 from collections import Counter
-from pathlib import Path
 
 import pytest
 import torch
@@ -49,6 +46,7 @@ from torchwright_doom.render_main import forward
 from torchwright_doom.vocab import VOCAB_TYPES
 
 from ..prefill_fixture import row_index, tokens_to_input
+from ..sandbox_support import import_sandbox, require_doom_sandbox
 
 # Traversal token types this phase emits a real next-token for (sandbox names).
 # TRAVERSE_BETWEEN ("bspCheckBack") delegates to the deferred bbox owner, so it
@@ -67,25 +65,16 @@ _IMPLEMENTED = {
 _AR_SPAN = 240
 
 
-def _umbrella() -> Path:
-    return Path(__file__).resolve().parents[3]
-
-
 @pytest.fixture(scope="module")
 def traversal_eval():
     """Build the reduced ``forward()`` graph once, teacher-force it on the
     sandbox golden stream, and ``reference_eval`` a single pass — shared by both
     assertions below (the graph + eval is the expensive part)."""
-    umbrella = _umbrella()
-    if not (umbrella / "doom_sandbox").is_dir():
-        pytest.skip("doom_sandbox sibling not present (standalone checkout)")
-    os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
-    if str(umbrella) not in sys.path:
-        sys.path.insert(0, str(umbrella))
+    require_doom_sandbox()
 
-    fixtures = pytest.importorskip("doom_sandbox.fixtures")
-    sb_prefill = pytest.importorskip("doom_sandbox.implementation.prefill")
-    drafter = pytest.importorskip("doom_sandbox.implementation.reference_drafter")
+    fixtures = import_sandbox("doom_sandbox.fixtures")
+    sb_prefill = import_sandbox("doom_sandbox.implementation.prefill")
+    drafter = import_sandbox("doom_sandbox.implementation.reference_drafter")
 
     name_to_real = {t.name: t for t in VOCAB_TYPES}
 

@@ -32,7 +32,7 @@ def main() -> int:
 
     ensure_doom_sandbox()
 
-    import torchwright.graph.misc as _misc
+    from torchwright_doom.graph_debug import silenced_graph_asserts
     import torchwright.graph.node as _node_module
     from torchwright.graph import Attn
     from torchwright.compiler.utils import get_ancestor_nodes
@@ -108,12 +108,8 @@ def main() -> int:
         f"{[nd.node_id for nd in edge_attns]}"
     )
 
-    _orig = _misc.Assert._check
-    _misc.Assert._check = lambda self, x: None
-    try:
+    with silenced_graph_asserts():
         cache = reference_eval(next_token, inputs, n)
-    finally:
-        _misc.Assert._check = _orig
 
     for attn in edge_attns:
         _inspect(attn, cache, n, MATCH_GAIN_LONG)

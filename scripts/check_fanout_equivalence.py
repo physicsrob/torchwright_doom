@@ -55,12 +55,10 @@ def main():
     n_pos = len(ids)
     w_t = W_EMBED.t()
 
-    import torchwright.graph.misc as _misc
+    from torchwright_doom.graph_debug import silenced_graph_asserts
 
-    _orig = _misc.Assert._check
-    _misc.Assert._check = lambda self, x: None  # garbage candidates trip range asserts
     results = {}
-    try:
+    with silenced_graph_asserts():  # garbage candidates trip range asserts
         for fanout in (2, None):
             pos = create_pos_encoding()
             emb = build_doom_embedding("token_ids")
@@ -69,8 +67,6 @@ def main():
             results[fanout] = [
                 int(torch.argmax(cache[nt][i] @ w_t).item()) for i in range(n_pos)
             ]
-    finally:
-        _misc.Assert._check = _orig
 
     a, b = results[2], results[None]
     mism = [(i, a[i], b[i]) for i in range(n_pos) if a[i] != b[i]]

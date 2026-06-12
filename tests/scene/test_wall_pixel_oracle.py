@@ -25,10 +25,7 @@ sized to reach the first textured columns with margin and no further.
 
 from __future__ import annotations
 
-import os
-import sys
 from collections import Counter
-from pathlib import Path
 
 import pytest
 import torch
@@ -37,11 +34,14 @@ from torchwright.debug.probe import reference_eval
 from torchwright.ops.inout_nodes import create_input, create_pos_encoding
 
 from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
+from torchwright_doom.graph_debug import silenced_graph_asserts
+from torchwright_doom.inference.diagnostic import carrier_delta as _carrier_delta
 from torchwright_doom.past import GraphPast
 from torchwright_doom.render_main import forward
 from torchwright_doom.vocab import PIXEL, VOCAB_TYPES
 
 from ..prefill_fixture import row_index, tokens_to_input
+from ..sandbox_support import import_sandbox, require_doom_sandbox
 
 _CARRIERS = {"value", "angleValue"}
 _ANGLE_BAM_TOL = 2
@@ -49,14 +49,11 @@ _ANGLE_BAM_TOL = 2
 # textured fixture's segs (the H/F projection chain); downstream-absorbed by the
 # ±4 UV pixel option set. 5e-3 covers it; the J-owned R3 v0 carrier sits below.
 _VALUE_ENC_TOL = 5.0e-3
-_VALUE_ROWS = 65536
 # wallColU.u_idx is floor(-(rw_distance·tan)) via a float32 PWL product; near an
 # integer boundary it differs ±1 from the float64 reference's int(). The texel
 # takes it mod texture width and the ±4 UV option set absorbs ±1. ±1-tolerant.
 _WALLCOL_U_NAME = "wallColU"
 _WALLCOL_U_TOL = 1
-_ANGLE_ROW0 = 65536
-_ANGLE_LO = -4096
 
 # Prefill on the textured fixture is ~3613 tokens; the first wall columns *with
 # visible texture spans* (the first PIXEL run) land ~idx 4283, and the third such
@@ -66,10 +63,6 @@ _ANGLE_LO = -4096
 _AR_SPAN = 725
 
 _PIXEL_NAME = PIXEL.name
-
-
-def _umbrella() -> Path:
-    return Path(__file__).resolve().parents[3]
 
 
 def _decode_pixel_xy(full) -> dict[int, tuple[int, int]]:
@@ -98,34 +91,17 @@ def _decode_pixel_xy(full) -> dict[int, tuple[int, int]]:
     return xy
 
 
-def _carrier_delta(name: str, predicted_row: int, expected_row: int):
-    if name == "angleValue":
-        if not (_ANGLE_ROW0 <= predicted_row < _ANGLE_ROW0 + 8192):
-            return None
-        pa = predicted_row - _ANGLE_ROW0 + _ANGLE_LO
-        ea = expected_row - _ANGLE_ROW0 + _ANGLE_LO
-        return abs(((pa - ea + 4096) % 8192) - 4096)
-    if not (0 <= predicted_row < _VALUE_ROWS):
-        return None
-    return abs(predicted_row - expected_row) * 2.0 / (_VALUE_ROWS - 1)
-
-
 @pytest.fixture(scope="module")
 def wall_pixel_eval():
     """Build the J1 ``forward()`` graph once, teacher-force it on the textured
     fixture's golden stream, and ``reference_eval`` a single pass."""
-    umbrella = _umbrella()
-    if not (umbrella / "doom_sandbox").is_dir():
-        pytest.skip("doom_sandbox sibling not present (standalone checkout)")
-    os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
-    if str(umbrella) not in sys.path:
-        sys.path.insert(0, str(umbrella))
+    require_doom_sandbox()
 
-    fixtures = pytest.importorskip("doom_sandbox.fixtures")
-    sb_prefill = pytest.importorskip("doom_sandbox.implementation.prefill")
-    drafter = pytest.importorskip("doom_sandbox.implementation.reference_drafter")
-    reference = pytest.importorskip("doom_sandbox.implementation.reference")
-    asset_banks = pytest.importorskip("doom_sandbox.implementation.asset_banks")
+    fixtures = import_sandbox("doom_sandbox.fixtures")
+    sb_prefill = import_sandbox("doom_sandbox.implementation.prefill")
+    drafter = import_sandbox("doom_sandbox.implementation.reference_drafter")
+    reference = import_sandbox("doom_sandbox.implementation.reference")
+    asset_banks = import_sandbox("doom_sandbox.implementation.asset_banks")
 
     name_to_real = {t.name: t for t in VOCAB_TYPES}
 
@@ -152,16 +128,8 @@ def wall_pixel_eval():
     past = GraphPast(input_vec=iv, pos_encoding=create_pos_encoding())
     next_token = forward(iv, past, create_pos_encoding())
 
-    # Silence debug Assert predicates for the oracle pass (discarded branches can
-    # land a cond in a comparator ramp; validated via next-token agreement).
-    import torchwright.graph.misc as _misc
-
-    _orig_check = _misc.Assert._check
-    _misc.Assert._check = lambda self, x: None
-    try:
+    with silenced_graph_asserts():
         cache = reference_eval(next_token, inputs, n_pos)
-    finally:
-        _misc.Assert._check = _orig_check
 
     # Inverse of the PIXEL color slot: color is the only slot, stride 1.
     pixel_start, _ = TOKEN_VOCAB.type_to_row_range[name_to_real[_PIXEL_NAME]]

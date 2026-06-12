@@ -18,7 +18,7 @@ POS = 2451
 def _decode_at(graph_kind: str, dtype, full_rows, expected_row, pred_row):
     import torch
 
-    import torchwright.graph.misc as _misc
+    from torchwright_doom.graph_debug import silenced_graph_asserts
     import torchwright.graph.node as _node_module
     from torchwright.debug.probe import reference_eval
     from torchwright.ops.inout_nodes import create_input, create_pos_encoding
@@ -42,12 +42,8 @@ def _decode_at(graph_kind: str, dtype, full_rows, expected_row, pred_row):
         GraphPast(input_vec=in_node, pos_encoding=create_pos_encoding()),
         create_pos_encoding(),
     )
-    _orig = _misc.Assert._check
-    _misc.Assert._check = lambda self, x: None
-    try:
+    with silenced_graph_asserts():
         cache = reference_eval(next_token, inputs, n)
-    finally:
-        _misc.Assert._check = _orig
     emb = cache[next_token][POS]
     wt = W_EMBED.t().to(emb.dtype)
     logits = emb @ wt

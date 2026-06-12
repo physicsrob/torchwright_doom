@@ -13,28 +13,14 @@ e.g. a standalone clone of this submodule).
 
 from __future__ import annotations
 
-import os
-import sys
-from pathlib import Path
-
-import pytest
-
-
-def _umbrella() -> Path:
-    # <umbrella>/torchwright_doom/tests/embedding/test_schema_sync.py
-    return Path(__file__).resolve().parents[3]
+from ..sandbox_support import import_sandbox, require_doom_sandbox
 
 
 def test_live_diff_matches_committed_baseline_and_is_empty() -> None:
-    umbrella = _umbrella()
-    if not (umbrella / "doom_sandbox").is_dir():
-        pytest.skip("doom_sandbox sibling not present (standalone checkout)")
-    os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
-    if str(umbrella) not in sys.path:
-        sys.path.insert(0, str(umbrella))
+    umbrella = require_doom_sandbox()
 
-    pytest.importorskip("doom_sandbox.implementation.setup")
-    vocab_diff = pytest.importorskip("scripts.vocab_diff")
+    import_sandbox("doom_sandbox.implementation.setup")
+    vocab_diff = import_sandbox("scripts.vocab_diff")
 
     baseline_path = umbrella / "baseline_vocab_diff.txt"
     assert baseline_path.is_file(), f"missing committed baseline: {baseline_path}"

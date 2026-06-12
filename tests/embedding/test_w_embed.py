@@ -21,7 +21,6 @@ from collections.abc import Mapping, Sequence
 from typing import cast
 
 import numpy as np
-import pytest
 import torch
 
 from torchwright_doom.embedding import (
@@ -42,6 +41,8 @@ from torchwright_doom.vocab import (
     SEG,
     VALUE,
 )
+
+from ..sandbox_support import import_sandbox, require_doom_sandbox
 
 
 def _float_slot(token_type: TokenType, slot_name: str) -> FloatSlot:
@@ -288,17 +289,9 @@ def test_cross_check_against_sandbox() -> None:
     Skipped only when the umbrella checkout isn't laid out the way the
     workspace expects.
     """
-    import os
-    import sys
-
-    umbrella = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..")
-    )
-    if os.path.isdir(os.path.join(umbrella, "doom_sandbox")):
-        if umbrella not in sys.path:
-            sys.path.insert(0, umbrella)
-    sb_api = pytest.importorskip("doom_sandbox.api")
-    sb_runtime = pytest.importorskip("doom_sandbox.runtime.embedding")
+    require_doom_sandbox()
+    sb_api = import_sandbox("doom_sandbox.api")
+    sb_runtime = import_sandbox("doom_sandbox.runtime.embedding")
 
     Derived = sb_api.Derived
     sb_angle_value = sb_api.TokenType(

@@ -19,16 +19,10 @@ does not.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-import pytest
 
 from torchwright_doom.constants import SCREEN_HEIGHT
 
-
-def _umbrella() -> Path:
-    return Path(__file__).resolve().parents[3]
+from ..sandbox_support import import_sandbox, require_doom_sandbox
 
 
 def _make_spans_raw(
@@ -149,12 +143,8 @@ def _random_tables(n: int, seed: int):
 def test_make_spans_raw_matches_reference() -> None:
     """The raw-``t1/b1`` + ``*_non_empty`` formulation equals the reference's
     ``_after``-threaded ``_make_spans`` on every adversarial / random table."""
-    umbrella = _umbrella()
-    if not (umbrella / "doom_sandbox").is_dir():
-        pytest.skip("doom_sandbox sibling not present (standalone checkout)")
-    if str(umbrella) not in sys.path:
-        sys.path.insert(0, str(umbrella))
-    reference = pytest.importorskip("doom_sandbox.implementation.reference")
+    require_doom_sandbox()
+    reference = import_sandbox("doom_sandbox.implementation.reference")
     # Sentinel/height parity between the two implementations.
     assert reference.SCREEN_HEIGHT == SCREEN_HEIGHT
 

@@ -170,16 +170,12 @@ def main(argv: list[str] | None = None) -> int:
     print(
         "\n[probe] Phase 2: per-node compiled-vs-oracle compare at POS ...", flush=True
     )
-    import torchwright.graph.misc as _misc
+    from torchwright_doom.graph_debug import silenced_graph_asserts
 
-    _orig = _misc.Assert._check
-    _misc.Assert._check = lambda self, x: None
-    try:
+    with silenced_graph_asserts():
         oracle = reference_eval(
             next_token, {"token_ids": rows_to_input(full_rows[: POS + 1])}, POS + 1
         )
-    finally:
-        _misc.Assert._check = _orig
 
     # Phase 3: is the flip in the unembed argmax, or upstream in the graph?
     # Compare the compiled logits row to the exact one at POS (exact side via

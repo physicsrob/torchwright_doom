@@ -6,16 +6,18 @@ point on the full token stream the renderer actually emits (round-trip).
 
 from __future__ import annotations
 
-import pytest
 
 from torchwright_doom.inference import tokens_bridge as tb
 
+from ..sandbox_support import import_sandbox, require_doom_sandbox
+
 
 def _sandbox():
-    fixtures = pytest.importorskip("doom_sandbox.fixtures")
-    prefill = pytest.importorskip("doom_sandbox.implementation.prefill")
-    drafter = pytest.importorskip("doom_sandbox.implementation.reference_drafter")
-    setup = pytest.importorskip("doom_sandbox.implementation.setup")
+    require_doom_sandbox()
+    fixtures = import_sandbox("doom_sandbox.fixtures")
+    prefill = import_sandbox("doom_sandbox.implementation.prefill")
+    drafter = import_sandbox("doom_sandbox.implementation.reference_drafter")
+    setup = import_sandbox("doom_sandbox.implementation.setup")
     return fixtures, prefill, drafter, setup
 
 

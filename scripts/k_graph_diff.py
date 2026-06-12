@@ -25,7 +25,7 @@ ROW_NODE1 = 80285  # float32 wrong pick: bspCheckBack(node=1, depth=8)
 
 def _build_and_eval(graph_kind, full_rows, n):
 
-    import torchwright.graph.misc as _misc
+    from torchwright_doom.graph_debug import silenced_graph_asserts
     import torchwright.graph.node as _node_module
     from torchwright.debug.probe import reference_eval
     from torchwright.ops.inout_nodes import create_input, create_pos_encoding
@@ -47,12 +47,8 @@ def _build_and_eval(graph_kind, full_rows, n):
         GraphPast(input_vec=in_node, pos_encoding=create_pos_encoding()),
         create_pos_encoding(),
     )
-    _orig = _misc.Assert._check
-    _misc.Assert._check = lambda self, x: None
-    try:
+    with silenced_graph_asserts():
         cache = reference_eval(next_token, inputs, n)
-    finally:
-        _misc.Assert._check = _orig
     # Snapshot by node_id -> (typename, name, tensor) and node_id -> node object.
     snap = {}
     nodes = {}
