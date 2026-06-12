@@ -120,6 +120,3 @@ def compile_to_onnx_path(
         "d_embed": TOKEN_VOCAB.layout.d_embed,
         "asset_banks": asset_banks,
     }
-
-
-from .inference import OnnxTokenRuntime, argmax_rows  # noqa: E402,F401

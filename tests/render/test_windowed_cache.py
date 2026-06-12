@@ -18,7 +18,7 @@ test_windowed_cache_onnx.py); this file pins the HOST half that
     persist-then-rollback it would evict a live row for a row that
     never becomes part of the stream).
 
-The mock mirrors ``_MockKVCompiled`` in test_spec_decode_logic.py but
+The mock mirrors ``_MockCompiled`` in test_spec_decode_logic.py but
 routes every write through the production ``_persist_rows`` /
 ``_commit`` helpers with a per-row expiring tag (the body tokens
 100..110 "are pixels"; 50 and the terminal are permanent), and writes
@@ -226,7 +226,7 @@ def test_recycling_preserves_permanent_rows():
 
 
 class _MockWindowedKVCompiled:
-    """Windowed twin of test_spec_decode_logic's _MockKVCompiled: memoryless
+    """Windowed twin of test_spec_decode_logic's _MockCompiled: memoryless
     transition-table model whose step persists through the production
     helpers (K = position, V = fed token, expiring = body tokens)."""
 

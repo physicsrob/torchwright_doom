@@ -12,7 +12,7 @@ import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 import torch
 
@@ -246,38 +246,36 @@ def _resolve_buckets(
     return buckets
 
 
-def _cache_len(past) -> int:
-    """Logical committed length across the two cache representations the
-    generic rollouts thread: the owned :class:`KVCache` (production ONNX
-    runtime) and the head-major ``(past_K_tuple, past_V_tuple)`` of the
-    surviving in-process consumers — the spec-decode test mocks
-    (``tests/render/test_spec_decode_logic.py``) and the small-scene
-    ``compile_headless`` AR-rollout gate
-    (``tests/scene/test_forward_ar_rollout.py``)."""
-    if isinstance(past, KVCache):
-        return past.length
-    return int(past[0][0].shape[1])
-
-
-def _commit(past, target: int):
-    """Set the committed length to ``target``.
-
-    Owned cache: lower the logical length in place (no copy), and — on a
-    windowed cache — flush the accepted prefix of the pending batch into
-    freshly-allocated slots (see :func:`_persist_rows`; rejected rows are
-    dropped, never written).  Head-major tuple (the test mocks and the
-    in-process small-scene gate — see :func:`_cache_len`): trim to
-    ``target``.
+def _commit(past: KVCache, target: int) -> KVCache:
+    """Set the committed length to ``target``: lower the logical length in
+    place (no copy), and — on a windowed cache — flush the accepted prefix
+    of the pending batch into freshly-allocated slots (see
+    :func:`_persist_rows`; rejected rows are dropped, never written).
     """
-    if isinstance(past, KVCache):
-        _flush_pending(past, target)
-        past.length = target
-        return past
-    past_k, past_v = past
-    return (
-        tuple(_trim_cache_tensor(k, target) for k in past_k),
-        tuple(_trim_cache_tensor(v, target) for v in past_v),
-    )
+    _flush_pending(past, target)
+    past.length = target
+    return past
+
+
+class TokenStepRuntime(Protocol):
+    """Structural contract the rollout loops require of ``compiled``.
+
+    Production is :class:`OnnxTokenRuntime`; the spec-decode logic tests
+    substitute lightweight in-memory stand-ins
+    (``tests/render/test_spec_decode_logic.py`` / ``test_windowed_cache.py``).
+    Runtimes MAY additionally expose ``max_safe_prefill_chunk(planned_rows)``
+    — :func:`run_prefill` probes for it with ``getattr`` and clamps its
+    chunk size when present.
+    """
+
+    def empty_past(self, max_len: int) -> KVCache: ...
+
+    def step(
+        self,
+        inputs: torch.Tensor,
+        cache: KVCache,
+        past_len: int | None = None,
+    ) -> tuple[torch.Tensor, KVCache]: ...
 
 
 class OnnxTokenRuntime:
@@ -1157,8 +1155,8 @@ def argmax_rows(outputs: torch.Tensor) -> list[int]:
 
     Logits-width outputs (production ``OnnxTokenRuntime`` and
     ``OnnxDebugSession`` — the artifact owns the unembed) argmax directly;
-    embedding-width outputs (the in-process ``compile_headless`` gate and
-    the spec-decode test mocks) go through the host-side
+    embedding-width outputs (the in-process ``compile_headless`` gate,
+    ``tests/scene/test_forward_ar_rollout.py``) go through the host-side
     ``@ W_EMBED.T`` unembed first.
     """
     o = outputs.detach()
@@ -1169,7 +1167,7 @@ def argmax_rows(outputs: torch.Tensor) -> list[int]:
 
 
 def run_prefill(
-    compiled,
+    compiled: TokenStepRuntime,
     prefill_ids: list[int],
     *,
     max_cache_len: int,
@@ -1180,10 +1178,10 @@ def run_prefill(
     """Run prefill in large chunks and return ``(last_out, past, n_passes)``.
 
     Allocates the run's single owned cache (``max_cache_len`` rows) up front
-    via ``compiled.empty_past(max_cache_len)`` and writes prefill straight into
-    it; the in-process consumers (test mocks + the small-scene
-    ``compile_headless`` gate, see :func:`_cache_len`) ignore the cap and
-    grow tuples.
+    via ``compiled.empty_past(max_cache_len)`` and writes prefill straight
+    into it.  ``compiled.empty_past`` must return a :class:`KVCache` — the
+    owned-cache protocol is the loops' one cache representation (the mocks in
+    ``tests/render/test_spec_decode_logic.py`` return real ones).
     """
     if not prefill_ids:
         raise ValueError("prefill_ids must be non-empty")
@@ -1212,7 +1210,7 @@ def run_prefill(
         )
 
     past = compiled.empty_past(max_cache_len)
-    if isinstance(past, KVCache) and past.window is not None:
+    if past.window is not None:
         if len(prefill_ids) >= past.window:
             raise RuntimeError(
                 f"prefill ({len(prefill_ids)} rows) does not fit the "
@@ -1243,7 +1241,7 @@ def run_prefill(
             print(
                 f"[{label}] prefill chunk {chunk_idx + 1}/{n_chunks} "
                 f"rows={len(chunk)} done in {dt:.1f}s "
-                f"cache_len={_cache_len(past)}",
+                f"cache_len={past.length}",
                 flush=True,
             )
 
@@ -1252,7 +1250,7 @@ def run_prefill(
 
 
 def pure_ar_rollout(
-    compiled,
+    compiled: TokenStepRuntime,
     prefill_ids: list[int],
     max_positions: int,
     terminal_row: int,
@@ -1280,7 +1278,7 @@ def pure_ar_rollout(
     if progress_every:
         print(
             f"[pure_ar] prefill done in {time.time() - prefill_t0:.1f}s "
-            f"seed_row={cur} cache_len={_cache_len(past)}",
+            f"seed_row={cur} cache_len={past.length}",
             flush=True,
         )
     seq_pos = len(prefill_ids)
@@ -1302,7 +1300,7 @@ def pure_ar_rollout(
             print(
                 f"[pure_ar] {len(emitted)} tokens  ({time.time() - t0:.1f}s, "
                 f"{(time.time() - t0) / len(emitted) * 1000:.0f} ms/tok, "
-                f"last_forward={step_dt:.1f}s, cache_len={_cache_len(past)})",
+                f"last_forward={step_dt:.1f}s, cache_len={past.length})",
                 flush=True,
             )
     return RolloutResult(
@@ -1337,22 +1335,15 @@ def _new_spec_stats() -> dict[str, Any]:
     }
 
 
-def _trim_cache_tensor(t, target: int):
-    # Head-major in-process / mock tuple cache: seq axis is 1.
-    if t.shape[1] == target:
-        return t
-    return t[:, :target].contiguous()
-
-
 def _single_step(
-    compiled,
-    past,
+    compiled: TokenStepRuntime,
+    past: KVCache,
     input_row: int,
     emitted: list[int],
     stats: dict[str, Any],
     *,
     argmax_fn: Callable[[torch.Tensor], list[int]],
-):
+) -> KVCache:
     out, new_past = compiled.step(rows_to_input([input_row]), past)
     stats["forward_passes"] += 1
     stats["fallback_single_steps"] += 1
@@ -1361,8 +1352,8 @@ def _single_step(
 
 
 def _spec_step(
-    compiled,
-    past,
+    compiled: TokenStepRuntime,
+    past: KVCache,
     next_input_row: int,
     emitted: list[int],
     drafter,
@@ -1379,7 +1370,7 @@ def _spec_step(
     row_to_sandbox_token_fn: Callable[[int], Any],
 ):
     """One batched draft-verify step. Returns (new_past, reuse_tail, health, probe)."""
-    cache_len = _cache_len(past)
+    cache_len = past.length
     snap = drafter.snapshot()
 
     drafts: list = []
@@ -1471,7 +1462,7 @@ def _spec_step(
 
 
 def spec_decode_rollout(
-    compiled,
+    compiled: TokenStepRuntime,
     prefill_ids: list[int],
     drafter,
     max_positions: int,
@@ -1511,7 +1502,7 @@ def spec_decode_rollout(
     if progress_every:
         print(
             f"[spec_decode] prefill done in {time.time() - prefill_t0:.1f}s "
-            f"seed_row={seed_row} cache_len={_cache_len(past)}",
+            f"seed_row={seed_row} cache_len={past.length}",
             flush=True,
         )
 
@@ -1537,7 +1528,7 @@ def spec_decode_rollout(
             break
 
         remaining_capacity = max_positions - len(emitted)
-        step_cache_len = _cache_len(past)
+        step_cache_len = past.length
         step_t0 = time.time()
         if progress_every and stats["forward_passes"] <= 3:
             print(
@@ -1592,7 +1583,7 @@ def spec_decode_rollout(
             print(
                 f"[spec_decode] {len(emitted)} tokens, {stats['forward_passes']} "
                 f"forward passes ({time.time() - t0:.1f}s), "
-                f"last_forward={step_dt:.1f}s, cache_len={_cache_len(past)}, "
+                f"last_forward={step_dt:.1f}s, cache_len={past.length}, "
                 f"accept={stats['accepted_drafts'] / max(1, len(emitted)):.0%} per-tok "
                 f"(drafts {stats['accepted_drafts']}/{stats['attempted_drafts']})",
                 flush=True,

@@ -14,9 +14,10 @@ returned so the local entrypoint mirrors them to ``out/<run>/`` on disk —
 ``make modal-run`` only captures stdout, which is exactly why this dedicated
 entrypoint exists (the one sanctioned new root ``modal_*.py``).
 
-The shared image includes ``numba`` for the ``doom_sandbox`` runtime. This module
-mounts the sibling ``doom_sandbox`` checkout (code + fixture JSONs + WAD) at
-``/root/doom_sandbox`` so the reference renderer and drafter import there.
+The shared image includes ``numba`` for the ``doom_sandbox`` runtime;
+``modal_image.ASSETS_IMAGE`` adds the sibling ``doom_sandbox`` checkout (code +
+fixture JSONs + WAD) at ``/root/doom_sandbox`` so the reference renderer and
+drafter import there.
 """
 
 from __future__ import annotations
@@ -26,31 +27,13 @@ from pathlib import Path
 
 import modal
 
-from modal_image import IMAGE
+from modal_image import ASSETS_IMAGE, CACHE_VOLUME
 
 _HERE = Path(__file__).resolve().parent
-_DOOM_SANDBOX = _HERE.parent / "doom_sandbox"
-_CONFIGS = _HERE / "configs"
 
-_IGNORE_PARTS = {"__pycache__", "token_dumps", "specs", "scripts", ".git", ".venv"}
-
-
-def _ignore(p: Path) -> bool:
-    return any(part in _IGNORE_PARTS for part in p.parts) or p.suffix == ".pyc"
-
-
-RENDER_IMAGE = (
-    IMAGE.add_local_dir(str(_DOOM_SANDBOX), "/root/doom_sandbox", ignore=_ignore)
-    .add_local_dir(str(_CONFIGS), "/root/configs", ignore=_ignore)
-    .add_local_file(str(_HERE / "doom1.wad"), "/root/configs/doom1.wad")
-)
-
-app = modal.App("torchwright-doom-render", image=RENDER_IMAGE)
+app = modal.App("torchwright-doom-render", image=ASSETS_IMAGE)
 RENDER_VOLUME = modal.Volume.from_name(
     "torchwright-doom-render", create_if_missing=True
-)
-CACHE_VOLUME = modal.Volume.from_name(
-    "torchwright-doom-render-cache", create_if_missing=True
 )
 # Solved CP-SAT schedules keyed by graph topology (torchwright
 # schedule_cache): a schedule win is durable across compiles whose graph

@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 from ..embedding import TOKEN_VOCAB
 from ..vocab import ANGLE_VALUE, PIXEL, VALUE
-from .compiled_model import argmax_rows
+from .inference import argmax_rows
 from .decode import decode_xy_by_position
 from .tokens_bridge import rows_to_input
 
@@ -74,16 +74,31 @@ def teacher_forced_scan(
     options: dict[tuple[int, int], set[tuple[int, int, int]]],
     *,
     window: int | None = None,
+    chunk_size: int = 256,
 ) -> list[Divergence]:
-    """Teacher-force ``full_rows`` through the compiled model in one wide forward and
-    return every hard divergence (under the J2 bars) at AR positions ``>= begin``.
+    """Teacher-force ``full_rows`` through the compiled model and return every
+    hard divergence (under the J2 bars) at AR positions ``>= begin``.
 
-    ``window`` caps the number of leading positions fed (memory control for the
-    O(n_pos²) single forward); ``None`` feeds the whole stream.
+    The pass threads the KV cache in ``chunk_size``-row chunks — semantically
+    identical to one wide forward (same mask geometry; production prefill is
+    chunked the same way) but with bounded per-chunk attention transients: a
+    single n-wide pass materializes O(n²) logits, which OOM-kills at full-frame
+    n on a 30 GB box (measured: ~29 GB at n=3700 under the debug session's
+    disabled memory planning).  ``window`` caps the number of leading positions
+    fed; ``None`` feeds the whole stream.
     """
+    import torch
+
     n = len(full_rows) if window is None else min(window, len(full_rows))
-    out, _ = compiled.step(rows_to_input(full_rows[:n]), compiled.empty_past(), past_len=0)
-    predicted = argmax_rows(out)  # one argmax per fed position
+    past = compiled.empty_past()
+    outs = []
+    offset = 0
+    while offset < n:
+        chunk = full_rows[offset : offset + chunk_size]
+        out, past = compiled.step(rows_to_input(chunk), past, past_len=offset)
+        outs.append(out)
+        offset += len(chunk)
+    predicted = argmax_rows(torch.cat(outs))  # one argmax per fed position
     pixel_xy = decode_xy_by_position(full_rows[:n])
 
     divergences: list[Divergence] = []

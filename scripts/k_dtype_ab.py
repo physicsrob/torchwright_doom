@@ -11,21 +11,6 @@ is a float32 round-off at a near-tie, not a logic error.
 from __future__ import annotations
 
 import os
-import sys
-from pathlib import Path
-
-
-def _ensure_doom_sandbox() -> None:
-    try:
-        import doom_sandbox  # noqa: F401
-
-        return
-    except ImportError:
-        pass
-    umbrella = Path(__file__).resolve().parents[2]
-    if (umbrella / "doom_sandbox").is_dir():
-        sys.path.insert(0, str(umbrella))
-    import doom_sandbox  # noqa: F401
 
 
 POS = 2451
@@ -76,7 +61,9 @@ def _decode_at(graph_kind: str, dtype, full_rows, expected_row, pred_row):
 
 def main() -> int:
     os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
-    _ensure_doom_sandbox()
+    from torchwright_doom.render.wad_scene import ensure_doom_sandbox
+
+    ensure_doom_sandbox()
     import torch
 
     from doom_sandbox import fixtures

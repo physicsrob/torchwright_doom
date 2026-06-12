@@ -15,20 +15,6 @@ from __future__ import annotations
 
 import os
 import sys
-from pathlib import Path
-
-
-def _ensure_doom_sandbox() -> None:
-    try:
-        import doom_sandbox  # noqa: F401
-
-        return
-    except ImportError:
-        pass
-    umbrella = Path(__file__).resolve().parents[2]
-    if (umbrella / "doom_sandbox").is_dir():
-        sys.path.insert(0, str(umbrella))
-    import doom_sandbox  # noqa: F401
 
 
 def _rng(node):
@@ -41,7 +27,9 @@ def _rng(node):
 
 def main() -> int:
     os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
-    _ensure_doom_sandbox()
+    from torchwright_doom.render.wad_scene import ensure_doom_sandbox
+
+    ensure_doom_sandbox()
 
     import torch
 

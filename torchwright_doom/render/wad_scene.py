@@ -78,8 +78,42 @@ def prefill_rows_for(scene: LoadedRenderScene, pose: GameState) -> list[int]:
     return [row_index(t.type, dict(t.values)) for t in tokens]
 
 
+def reference_stream(
+    config: RenderConfig,
+    *,
+    base_dir: str | Path | None = None,
+    x: float | None = None,
+    y: float | None = None,
+    angle: int | None = None,
+    viewz: float | None = None,
+):
+    """Reference token stream for one pose of ``config``'s scene.
+
+    Prefill rows from the real prompt builder plus the sandbox reference
+    renderer's expected AR rollout — the teacher-forcing input for the
+    divergence tools (``scripts/k_localize_divergence.py`` /
+    ``k_probe_divergence.py``).  Pose components default to the config's
+    default pose (``pose_from_world``).  Returns
+    ``(sb_scene, sb_pose, prefill_rows, full_rows)``.
+    """
+    from .tokens_bridge import sandbox_token_to_row
+
+    scene = load_render_scene(config, base_dir=base_dir)
+    pose = pose_from_world(scene, x=x, y=y, angle=angle, viewz=viewz)
+    prefill_rows = prefill_rows_for(scene, pose)
+    sb_scene = sandbox_scene_for(scene, pose)
+    sb_pose = sb_scene.test_poses[0]
+    from doom_sandbox.implementation import reference_drafter
+
+    ar_rows = [
+        sandbox_token_to_row(t)
+        for t in reference_drafter.expected_ar_tokens(sb_scene, sb_pose)
+    ]
+    return sb_scene, sb_pose, prefill_rows, prefill_rows + ar_rows
+
+
 def sandbox_scene_for(scene: LoadedRenderScene, pose: GameState):
-    _ensure_doom_sandbox()
+    ensure_doom_sandbox()
     from doom_sandbox.types import GameState as SandboxGameState
     from doom_sandbox.types import Scene as SandboxScene
 
@@ -103,7 +137,7 @@ def patch_sandbox_assets(sb_scene, asset_config: AssetConfig) -> None:
     updated before the drafter/reference render runs. This keeps host work at
     reference/draft generation only; the compiled renderer still owns rendering.
     """
-    _ensure_doom_sandbox()
+    ensure_doom_sandbox()
     import doom_sandbox.implementation.reference as ref
 
     book = _SandboxAssetBook(
@@ -136,7 +170,7 @@ def _texture_dict(texture) -> dict[str, Any]:
     }
 
 
-def _ensure_doom_sandbox() -> None:
+def ensure_doom_sandbox() -> None:
     try:
         import doom_sandbox  # noqa: F401
 

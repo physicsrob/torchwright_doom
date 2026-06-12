@@ -19,38 +19,22 @@ cache, then:
 
 Needs the config's compiled cache entry to exist already (this never compiles —
 build it via ``python -m torchwright_doom.render compile --config <yaml>``).
+The wide prefill pass doesn't fit the local L4 (promoted debug outputs disable
+ORT's memory planning) — run locally on CPU via ``CUDA_VISIBLE_DEVICES=""``.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-import sys
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 _DEFAULT_CONFIG = _REPO / "configs" / "e1m1.yaml"
 
 
-def _ensure_doom_sandbox() -> None:
-    try:
-        import doom_sandbox  # noqa: F401
-
-        return
-    except ImportError:
-        pass
-    umbrella = Path(__file__).resolve().parents[2]
-    if (umbrella / "doom_sandbox").is_dir():
-        sys.path.insert(0, str(umbrella))
-    import doom_sandbox  # noqa: F401
-
-
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--fixture", default="e1m1_subset_textured")
-    p.add_argument("--pose", type=int, default=0)
-    p.add_argument("--pos", type=int, default=2450,
-                   help="input stream position whose prediction diverges")
     p.add_argument("--config", default=str(_DEFAULT_CONFIG), dest="config_path")
     p.add_argument(
         "--cache-dir",
@@ -59,6 +43,12 @@ def main(argv: list[str] | None = None) -> int:
         help="compiled cache entry holding model.onnx "
         "(default: the config's own cache key)",
     )
+    p.add_argument("--pos", type=int, default=2450,
+                   help="input stream position whose prediction diverges")
+    p.add_argument("--x", type=float, help="world pose (default: config default pose)")
+    p.add_argument("--y", type=float)
+    p.add_argument("--angle", type=int)
+    p.add_argument("--viewz", type=float)
     p.add_argument("--phase2", action="store_true",
                    help="run the per-node oracle compare even if no assert fires")
     p.add_argument("--atol", type=float, default=1e-2)
@@ -79,30 +69,29 @@ def main(argv: list[str] | None = None) -> int:
     config = load_render_config(config_path)
     apply_screen_env(config)
 
-    _ensure_doom_sandbox()
-
     import torch
 
     from torchwright.debug.onnx_debug import OnnxDebugSession
     from torchwright.debug.probe import reference_eval
 
-    from doom_sandbox.implementation import prefill as sb_prefill
-    from doom_sandbox.implementation import reference_drafter as drafter
-    from doom_sandbox import fixtures
-
     from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
     from torchwright_doom.render.compiled_model import build_graph
-    from torchwright_doom.render.tokens_bridge import rows_to_input, sandbox_token_to_row
+    from torchwright_doom.render.tokens_bridge import rows_to_input
+    from torchwright_doom.render.wad_scene import reference_stream
 
-    scene = fixtures.load_fixture(args.fixture)
-    pose = scene.test_poses[args.pose]
-    prefill_rows = [sandbox_token_to_row(t) for t in sb_prefill.get_prefill(scene, pose)]
-    ar_rows = [sandbox_token_to_row(t) for t in drafter.expected_ar_tokens(scene, pose)]
-    full_rows = prefill_rows + ar_rows
+    _sb_scene, sb_pose, prefill_rows, full_rows = reference_stream(
+        config,
+        base_dir=config_path.parent,
+        x=args.x,
+        y=args.y,
+        angle=args.angle,
+        viewz=args.viewz,
+    )
     POS = args.pos
     expected_next = full_rows[POS + 1]
     exp_t, exp_v = TOKEN_VOCAB.row_to_token[expected_next]
-    print(f"[probe] {args.fixture} pose={args.pose} pos={POS} "
+    print(f"[probe] {config_path.name} pose=({sb_pose.x:g}, {sb_pose.y:g}, "
+          f"a{sb_pose.angle}) prefill={len(prefill_rows)} pos={POS} "
           f"expected next = {exp_t.name} {exp_v} (row {expected_next})", flush=True)
 
     # Locate the cached artifact (never compile — that's a Modal-scale job).

@@ -1,50 +1,39 @@
 """Localize the first teacher-forced divergence of the compiled free-run (Plan K).
 
-Feeds the *reference* token stream through the cached production ONNX artifact
-(via ``render.cache.load_debug_session`` — the same bits production renders
-with) in one wide forward (no AR rollout) and reports the first position whose
-compiled argmax hard-diverges from the reference under the J2 bars.
-Distinguishes a per-position compiled error (teacher-forced hard-diverges -> an
-op exceeds its noise budget, localizable with ``k_probe_divergence``) from pure
-AR-feedback amplification (teacher-forced stays clean).
+THE manual faithfulness gate for a cached artifact (it replaced
+``tests/render/test_compiled_divergence.py``): feeds the *reference* token
+stream — the config scene's prefill plus the sandbox reference renderer's
+expected rollout — through the cached production ONNX (via
+``render.cache.load_debug_session``, the same bits production renders with) as
+a KV-cached chunked teacher-forced pass (no AR rollout), and reports every
+position whose compiled argmax hard-diverges from the reference under the J2
+bars.  Exits nonzero on any hard divergence.  Distinguishes a per-position
+compiled error (teacher-forced hard-diverges -> an op exceeds its noise
+budget, localizable with ``k_probe_divergence``) from pure AR-feedback
+amplification (teacher-forced stays clean).
 
-    .venv/bin/python -m scripts.k_localize_divergence --window 3000
+    .venv/bin/python -m scripts.k_localize_divergence --window 3700
 
 Needs the config's compiled cache entry to exist already (this never compiles —
 build it via ``python -m torchwright_doom.render compile --config <yaml>``).
-The single wide forward is O(n_pos^2) in attention memory, so ``--window`` caps
-the fed prefix (3000 covers the observed AR onset at ~2448).
+``--window`` caps the fed prefix; the AR region starts past the prefill
+(~3613 rows on the e1m1 scene), so a useful gate run needs a window beyond
+that.  Debug-session passes don't fit the local L4 (promoted outputs disable
+ORT's memory planning) — run locally on CPU via ``CUDA_VISIBLE_DEVICES=""``.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-import sys
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 _DEFAULT_CONFIG = _REPO / "configs" / "e1m1.yaml"
 
 
-def _ensure_doom_sandbox() -> None:
-    try:
-        import doom_sandbox  # noqa: F401
-
-        return
-    except ImportError:
-        pass
-    umbrella = Path(__file__).resolve().parents[2]
-    if (umbrella / "doom_sandbox").is_dir():
-        sys.path.insert(0, str(umbrella))
-    import doom_sandbox  # noqa: F401
-
-
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--fixture", default="e1m1_subset_textured")
-    p.add_argument("--pose", type=int, default=0)
-    p.add_argument("--window", type=int, default=3000)
     p.add_argument("--config", default=str(_DEFAULT_CONFIG), dest="config_path")
     p.add_argument(
         "--cache-dir",
@@ -53,6 +42,11 @@ def main(argv: list[str] | None = None) -> int:
         help="compiled cache entry holding model.onnx "
         "(default: the config's own cache key)",
     )
+    p.add_argument("--window", type=int, default=3000)
+    p.add_argument("--x", type=float, help="world pose (default: config default pose)")
+    p.add_argument("--y", type=float)
+    p.add_argument("--angle", type=int)
+    p.add_argument("--viewz", type=float)
     args = p.parse_args(argv)
 
     os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
@@ -65,27 +59,27 @@ def main(argv: list[str] | None = None) -> int:
     config = load_render_config(config_path)
     apply_screen_env(config)
 
-    _ensure_doom_sandbox()
-    from doom_sandbox import fixtures
-    from doom_sandbox.implementation import prefill as sb_prefill
-    from doom_sandbox.implementation import reference_drafter as drafter
-
     from torchwright_doom.render import compare
     from torchwright_doom.render.cache import load_debug_session
     from torchwright_doom.render.diagnostic import teacher_forced_scan
-    from torchwright_doom.render.tokens_bridge import sandbox_token_to_row
+    from torchwright_doom.render.wad_scene import reference_stream
 
-    scene = fixtures.load_fixture(args.fixture)
-    pose = scene.test_poses[args.pose]
-    prefill_rows = [sandbox_token_to_row(t) for t in sb_prefill.get_prefill(scene, pose)]
-    ar_rows = [sandbox_token_to_row(t) for t in drafter.expected_ar_tokens(scene, pose)]
-    full_rows = prefill_rows + ar_rows
+    sb_scene, sb_pose, prefill_rows, full_rows = reference_stream(
+        config,
+        base_dir=config_path.parent,
+        x=args.x,
+        y=args.y,
+        angle=args.angle,
+        viewz=args.viewz,
+    )
     begin = len(prefill_rows) - 1
-    options = compare.reference_options(scene, pose)
+    options = compare.reference_options(sb_scene, sb_pose)
 
     print(
-        f"[localize] {args.fixture} pose={args.pose} prefill={len(prefill_rows)} "
-        f"reference_rollout={len(ar_rows)} full={len(full_rows)} window={args.window}",
+        f"[localize] {config_path.name} pose=({sb_pose.x:g}, {sb_pose.y:g}, "
+        f"a{sb_pose.angle}) prefill={len(prefill_rows)} "
+        f"reference_rollout={len(full_rows) - len(prefill_rows)} "
+        f"full={len(full_rows)} window={args.window}",
         flush=True,
     )
 
@@ -105,8 +99,15 @@ def main(argv: list[str] | None = None) -> int:
     divs = teacher_forced_scan(session, full_rows, begin, options, window=args.window)
 
     fed = min(args.window, len(full_rows))
-    n_ar = fed - begin - 1
+    n_ar = max(0, fed - begin - 1)
     print(f"[localize] teacher-forced {fed} positions ({n_ar} AR predictions checked)")
+    if n_ar == 0:
+        print(
+            f"[localize] WARNING: window {args.window} does not reach past the "
+            f"prefill ({len(prefill_rows)} rows) — no AR predictions were "
+            f"checked; raise --window above {begin + 2}",
+            flush=True,
+        )
     print(f"[localize] hard divergences: {len(divs)}")
     if not divs:
         print("[localize] CLEAN: teacher-forced compiled matches the reference under the "
@@ -126,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
         f"(rollout token {first.pos - begin}): {first.kind} — "
         f"expected {first.expected_type}, predicted {first.predicted_type}"
     )
-    return 0
+    return 1
 
 
 if __name__ == "__main__":

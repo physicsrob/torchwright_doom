@@ -29,35 +29,12 @@ import shlex
 import subprocess
 import sys
 import time
-from pathlib import Path
 
 import modal
 
-from modal_image import IMAGE
-
-_HERE = Path(__file__).resolve().parent
-_DOOM_SANDBOX = _HERE.parent / "doom_sandbox"
-_CONFIGS = _HERE / "configs"
-
-_IGNORE_PARTS = {"__pycache__", "token_dumps", "specs", "scripts", ".git", ".venv"}
-
-
-def _ignore(p: Path) -> bool:
-    return any(part in _IGNORE_PARTS for part in p.parts) or p.suffix == ".pyc"
-
-
-# GPU image additionally carries the sandbox (reference renderer/drafter for
-# the divergence scripts) and the committed configs — mirrors modal_render.py.
-GPU_IMAGE = (
-    IMAGE.add_local_dir(str(_DOOM_SANDBOX), "/root/doom_sandbox", ignore=_ignore)
-    .add_local_dir(str(_CONFIGS), "/root/configs", ignore=_ignore)
-    .add_local_file(str(_HERE / "doom1.wad"), "/root/configs/doom1.wad")
-)
+from modal_image import ASSETS_IMAGE, CACHE_VOLUME, IMAGE
 
 app = modal.App("torchwright-doom-run", image=IMAGE)
-CACHE_VOLUME = modal.Volume.from_name(
-    "torchwright-doom-render-cache", create_if_missing=True
-)
 
 _CPU = int(os.environ.get("MODAL_RUN_CPU", "4"))
 _MEMORY = int(os.environ.get("MODAL_RUN_MEMORY", "8192"))
@@ -80,7 +57,10 @@ def _build_cmd(module: str, script: str, args: str) -> list[str]:
     cpu=8,
     memory=32768,
     timeout=1800,
-    image=GPU_IMAGE,
+    # The sandbox/configs-augmented image: the artifact-debugging scripts
+    # (k_probe/k_localize) need the reference renderer and the committed
+    # configs next to the mounted compile cache.
+    image=ASSETS_IMAGE,
     volumes={"/root/.cache/torchwright_doom/compiled": CACHE_VOLUME},
 )
 def run_gpu(module: str, script: str, args: str) -> int:
