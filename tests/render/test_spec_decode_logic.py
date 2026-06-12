@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import torch
 
-from torchwright_doom.render import pure_ar, spec_decode
-from torchwright_doom.render.inference import KVCache, _commit
+from torchwright_doom.render.generation import TokenRuntime
+from torchwright_doom.render.kv_cache import KVCache, commit
 
 _TERMINAL = 999
 
@@ -52,20 +52,20 @@ class _MockDrafter:
         self.i = snap
 
 
-class _MockCompiled:
-    """``compiled.step`` over the owned-``KVCache`` contract, model = ``_model_next``.
+class _MockCompiled(TokenRuntime):
+    """``step`` over the owned-``KVCache`` contract, model = ``_model_next``.
 
     Mimics ``OnnxTokenRuntime``: ``empty_past(max_len)`` returns a
     preallocated ``KVCache``, and ``step`` writes each row's K/V into the cache
     tail *in place* and advances ``length`` — exactly the production delta
     write.  Drives the spec-decode in-place commit/overwrite path
-    (``_commit`` lowering ``length``, the dead tail overwritten next step).
+    (``commit`` lowering ``length``, the dead tail overwritten next step).
     The model is memoryless, so batched decode is trivially row-wise
     bit-identical to sequential — a faithful stand-in for the
     strict-optimization property the real artifact provides.
     """
 
-    def empty_past(self, max_len):
+    def empty_past(self, max_len: int) -> KVCache:
         return KVCache(
             k=[torch.zeros(max_len, 1, 1)],
             v=[torch.zeros(max_len, 1, 1)],
@@ -73,7 +73,12 @@ class _MockCompiled:
             max_len=max_len,
         )
 
-    def step(self, inputs, cache, past_len=None):
+    def step(
+        self,
+        inputs: torch.Tensor,
+        cache: KVCache,
+        past_len: int | None = None,
+    ) -> tuple[torch.Tensor, KVCache]:
         flat = inputs.reshape(-1)
         n = int(flat.shape[0])
         base = cache.length
@@ -86,32 +91,43 @@ class _MockCompiled:
         cache.length = base + n
         return preds, cache
 
+    def max_safe_prefill_chunk(self, planned_rows: int | None = None) -> int:
+        return 1 << 30  # no int32-transient limit on an in-memory stand-in
 
-def _patch_decode(monkeypatch):
-    """Make argmax/bridge identity over plain ints (no W_EMBED, no doom_sandbox)."""
-    ident = lambda out: [int(round(float(x))) for x in out[:, 0]]  # noqa: E731
-    monkeypatch.setattr(pure_ar, "argmax_rows", ident)
-    monkeypatch.setattr(spec_decode, "argmax_rows", ident)
-    monkeypatch.setattr(spec_decode, "sandbox_token_to_row", lambda tok: tok)
-    monkeypatch.setattr(spec_decode, "row_to_sandbox_token", lambda row: row)
+
+def _ident_argmax(out: torch.Tensor) -> list[int]:
+    """Identity argmax over plain int 'logits' (no W_EMBED, no doom_sandbox)."""
+    return [int(round(float(x))) for x in out[:, 0]]
+
+
+def _ident_token(tok: int) -> int:
+    return tok
 
 
 _EXPECTED = [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 999]
 
 
-def test_pure_ar_baseline(monkeypatch):
-    _patch_decode(monkeypatch)
-    res = pure_ar.pure_ar_rollout(_MockCompiled(), [50], max_positions=50, terminal_row=_TERMINAL)
+def test_pure_ar_baseline():
+    res = _MockCompiled().pure_ar_rollout(
+        [50], max_positions=50, terminal_row=_TERMINAL, argmax_fn=_ident_argmax
+    )
     assert res.emitted_rows == _EXPECTED
     assert res.stopped == "terminal"
 
 
-def test_spec_decode_perfect_drafter_is_bit_identical(monkeypatch):
-    _patch_decode(monkeypatch)
-    drafts = list(_EXPECTED)  # perfect: drafts == the trajectory (incl. seed + terminal)
-    res, stats = spec_decode.spec_decode_rollout(
-        _MockCompiled(), [50], _MockDrafter(drafts), max_positions=50,
-        terminal_row=_TERMINAL, draft_window=8,
+def test_spec_decode_perfect_drafter_is_bit_identical():
+    drafts = list(
+        _EXPECTED
+    )  # perfect: drafts == the trajectory (incl. seed + terminal)
+    res, stats = _MockCompiled().spec_decode_rollout(
+        [50],
+        _MockDrafter(drafts),
+        max_positions=50,
+        terminal_row=_TERMINAL,
+        draft_window=8,
+        argmax_fn=_ident_argmax,
+        sandbox_token_to_row_fn=_ident_token,
+        row_to_sandbox_token_fn=_ident_token,
     )
     assert res.emitted_rows == _EXPECTED
     assert res.stopped == "terminal"
@@ -121,25 +137,37 @@ def test_spec_decode_perfect_drafter_is_bit_identical(monkeypatch):
     assert res.n_forward_passes < len(_EXPECTED)
 
 
-def test_spec_decode_with_mispredict_is_still_bit_identical(monkeypatch):
-    _patch_decode(monkeypatch)
+def test_spec_decode_with_mispredict_is_still_bit_identical():
     # Corrupt two interior drafts; the model corrects each and the stream is unchanged.
     drafts = [100, 101, 102, 555, 104, 105, 777, 107, 108, 109, 110, 999]
-    res, stats = spec_decode.spec_decode_rollout(
-        _MockCompiled(), [50], _MockDrafter(drafts), max_positions=50,
-        terminal_row=_TERMINAL, draft_window=8,
+    res, stats = _MockCompiled().spec_decode_rollout(
+        [50],
+        _MockDrafter(drafts),
+        max_positions=50,
+        terminal_row=_TERMINAL,
+        draft_window=8,
+        argmax_fn=_ident_argmax,
+        sandbox_token_to_row_fn=_ident_token,
+        row_to_sandbox_token_fn=_ident_token,
     )
     assert res.emitted_rows == _EXPECTED
     assert stats["mispredicts"] >= 1
     assert stats["terminal_truncations"] >= 1
 
 
-def test_spec_decode_matches_pure_ar_exactly(monkeypatch):
-    _patch_decode(monkeypatch)
-    pure = pure_ar.pure_ar_rollout(_MockCompiled(), [50], max_positions=50, terminal_row=_TERMINAL)
-    spec, _ = spec_decode.spec_decode_rollout(
-        _MockCompiled(), [50], _MockDrafter([100, 101, 102, 555, 104]), max_positions=50,
-        terminal_row=_TERMINAL, draft_window=4,
+def test_spec_decode_matches_pure_ar_exactly():
+    pure = _MockCompiled().pure_ar_rollout(
+        [50], max_positions=50, terminal_row=_TERMINAL, argmax_fn=_ident_argmax
+    )
+    spec, _ = _MockCompiled().spec_decode_rollout(
+        [50],
+        _MockDrafter([100, 101, 102, 555, 104]),
+        max_positions=50,
+        terminal_row=_TERMINAL,
+        draft_window=4,
+        argmax_fn=_ident_argmax,
+        sandbox_token_to_row_fn=_ident_token,
+        row_to_sandbox_token_fn=_ident_token,
     )
     assert spec.emitted_rows == pure.emitted_rows
 
@@ -155,7 +183,7 @@ def test_kvcache_reject_then_overwrite():
     assert cache.length == 4
 
     # Accept only the first 2 — the spec reject is a pure length rollback.
-    cache = _commit(cache, 2)
+    cache = commit(cache, 2)
     assert cache.length == 2
 
     # The next batch writes from the lowered length, overwriting rows 2..3.

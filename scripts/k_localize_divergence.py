@@ -60,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
     apply_screen_env(config)
 
     from torchwright_doom.render import compare
-    from torchwright_doom.render.cache import load_debug_session
+    from torchwright_doom.render.compile_cache import load_debug_session
     from torchwright_doom.render.diagnostic import teacher_forced_scan
     from torchwright_doom.render.wad_scene import reference_stream
 
@@ -110,9 +110,11 @@ def main(argv: list[str] | None = None) -> int:
         )
     print(f"[localize] hard divergences: {len(divs)}")
     if not divs:
-        print("[localize] CLEAN: teacher-forced compiled matches the reference under the "
-              "J2 bars over the whole window -> AR failure is feedback amplification, "
-              "not a per-position op error.")
+        print(
+            "[localize] CLEAN: teacher-forced compiled matches the reference under the "
+            "J2 bars over the whole window -> AR failure is feedback amplification, "
+            "not a per-position op error."
+        )
         return 0
     for d in divs[:12]:
         roll = d.pos - begin  # 0-based position in the AR rollout

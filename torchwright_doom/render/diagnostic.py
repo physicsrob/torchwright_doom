@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 from ..embedding import TOKEN_VOCAB
 from ..vocab import ANGLE_VALUE, PIXEL, VALUE
-from .inference import argmax_rows
+from .generation import argmax_rows
 from .decode import decode_xy_by_position
 from .tokens_bridge import rows_to_input
 
@@ -111,42 +111,67 @@ def teacher_forced_scan(
         if exp_type == _PIXEL_NAME:
             xy = pixel_xy.get(i + 1)
             color = pred_row - _PIXEL_START
-            ok = (
-                xy is not None
-                and 0 <= color < 256
-                and pred_type == _PIXEL_NAME
-            )
-            if ok:
+            if xy is None or not (0 <= color < 256) or pred_type != _PIXEL_NAME:
+                ok = False
+            else:
                 from ..asset_banks import PLAYPAL
 
                 rgb = PLAYPAL[color]
                 allowed = options.get(xy)
                 ok = allowed is not None and rgb in allowed
             if not ok:
-                divergences.append(Divergence(
-                    i, exp_type, exp_row, pred_type, pred_row, "pixel",
-                    f"pixel at {xy}: color {color} not in option set",
-                ))
+                divergences.append(
+                    Divergence(
+                        i,
+                        exp_type,
+                        exp_row,
+                        pred_type,
+                        pred_row,
+                        "pixel",
+                        f"pixel at {xy}: color {color} not in option set",
+                    )
+                )
         elif exp_type in _CARRIERS:
             tol = _ANGLE_BAM_TOL if exp_type == "angleValue" else _VALUE_ENC_TOL
             delta = _carrier_delta(exp_type, pred_row, exp_row)
             if delta is None or delta > tol:
-                divergences.append(Divergence(
-                    i, exp_type, exp_row, pred_type, pred_row, "carrier",
-                    f"delta={delta} > tol={tol}",
-                ))
+                divergences.append(
+                    Divergence(
+                        i,
+                        exp_type,
+                        exp_row,
+                        pred_type,
+                        pred_row,
+                        "carrier",
+                        f"delta={delta} > tol={tol}",
+                    )
+                )
         elif exp_type == _WALLCOL_U_NAME:
             if abs(pred_row - exp_row) > _WALLCOL_U_TOL:
-                divergences.append(Divergence(
-                    i, exp_type, exp_row, pred_type, pred_row, "wallColU",
-                    f"|delta|={abs(pred_row - exp_row)} > {_WALLCOL_U_TOL}",
-                ))
+                divergences.append(
+                    Divergence(
+                        i,
+                        exp_type,
+                        exp_row,
+                        pred_type,
+                        pred_row,
+                        "wallColU",
+                        f"|delta|={abs(pred_row - exp_row)} > {_WALLCOL_U_TOL}",
+                    )
+                )
         else:  # marker — exact row required
             if pred_row != exp_row:
-                divergences.append(Divergence(
-                    i, exp_type, exp_row, pred_type, pred_row, "marker",
-                    "marker row mismatch",
-                ))
+                divergences.append(
+                    Divergence(
+                        i,
+                        exp_type,
+                        exp_row,
+                        pred_type,
+                        pred_row,
+                        "marker",
+                        "marker row mismatch",
+                    )
+                )
     return divergences
 
 

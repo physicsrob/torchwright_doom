@@ -1,4 +1,4 @@
-"""Compile cache for YAML render jobs."""
+"""Compile-artifact cache for YAML render jobs (the KV cache lives in kv_cache.py)."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from .config import (
     compile_cache_dir,
     resolve_wad_path,
 )
-from .inference import OnnxTokenRuntime
+from .onnx_runtime import OnnxTokenRuntime
 from .tokens_bridge import row_index
 
 if TYPE_CHECKING:  # pragma: no cover - typing only

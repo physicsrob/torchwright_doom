@@ -26,7 +26,8 @@ Rgb = tuple[int, int, int]
 
 
 def decode_rows_to_pixels(
-    rows, palette: tuple[tuple[int, int, int], ...] | list[tuple[int, int, int]] = PLAYPAL
+    rows,
+    palette: tuple[tuple[int, int, int], ...] | list[tuple[int, int, int]] = PLAYPAL,
 ) -> dict[tuple[int, int], Rgb]:
     """Walk a generated row stream -> ``{(x, y): rgb}``.
 
@@ -55,7 +56,8 @@ def decode_rows_to_pixels(
             color = row - _PIXEL_START  # palette index in [0, 256)
             key = (cursor_x, cursor_y)
             if key not in buf:
-                buf[key] = tuple(int(c) for c in palette[color])
+                r, g, b = palette[color]
+                buf[key] = (int(r), int(g), int(b))
             cursor_x += cursor_dx
             cursor_y += cursor_dy
     return buf

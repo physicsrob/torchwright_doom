@@ -1,221 +1,25 @@
-"""ONNX token inference runtime and autoregressive rollout loops.
+"""The production ONNX inference engine: session ownership + IO binding.
 
-This is the runtime-facing path for render inference: ONNX session ownership,
-GPU I/O binding, prefill chunking, pure AR, and speculative decode. Compile/build
-code belongs in ``compiled_model.py``; CLI/artifact orchestration belongs in
-``cli.py``.
+:class:`OnnxTokenRuntime` is the one production
+:class:`~torchwright_doom.render.generation.TokenRuntime`: it owns the
+onnxruntime session over the cached compiled artifact, the persistent
+CUDA-graph-captured IO bindings (per attention-window bucket), the
+prefill/decode step paths, and the per-row expiry tagging that the
+windowed :class:`~torchwright_doom.render.kv_cache.KVCache` placement
+policy needs.  The optimum/TRT-LLM analog: the engine that loads an
+exported model and serves ``step``.
 """
 
 from __future__ import annotations
 
 import json
-import time
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any
 
 import torch
 
-from ..embedding import W_EMBED
-from .tokens_bridge import row_to_sandbox_token, rows_to_input, sandbox_token_to_row
-
-# 1024-row prefill chunks bound the per-layer (n_heads, chunk, S) logits
-# transient under the static-S cache (unchunked prefill at n=3613, S=12288
-# peaks ~45 GB on the widest d=4096 layer).  Chunking is semantically
-# identical to a single pass; this is a memory knob, not an algorithm change.
-DEFAULT_PREFILL_CHUNK_SIZE = 1024
-
-_W_EMBED_T_BY_DEVICE: dict[str, torch.Tensor] = {}
-
-
-@dataclass
-class RolloutResult:
-    emitted_rows: list[int]
-    stopped: str  # "terminal" | "cap"
-    n_forward_passes: int
-    seconds: float
-
-
-@dataclass
-class KVCache:
-    """Runtime-owned static KV cache for the sequence-major ONNX protocol.
-
-    One preallocated FULL-S buffer per layer per side, shape
-    ``(cache_stride, n_heads, d_head)``, **zero-initialized** — the graph's
-    causal mask gives slots at positions > cache_position softmax weight
-    exactly 0.0, and ``0 * NaN`` from a ``torch.empty`` tail would still be
-    NaN.  The whole buffer is bound as ``past_K_i`` every step (static
-    shape + stable address: the CUDA-graph replay requirements); the
-    committed prefix is ``k[i][:length]`` and the graph re-injects the new
-    rows in-graph via ScatterND.  The runtime persists each step's
-    ``delta_K_i`` output into ``k[i][length:length+n_new]`` after the run.
-    A speculative reject just lowers ``length`` — the rows past it are
-    masked (exactly-zero weight) and overwritten by a later write.
-    """
-
-    k: list[torch.Tensor]  # each (cache_stride, n_heads, d_head)
-    v: list[torch.Tensor]
-    length: int
-    max_len: int  # == cache_stride (the static allocation)
-    # --- Windowed-cache state (permanent/expiring slot policy); all of
-    # these stay at their defaults on the unbounded protocol above. ---
-    # window = C, the committed slot count of a cache_window model: the
-    # buffers are (C + staging, nh, d_head) and ``length`` keeps counting
-    # absolute committed POSITIONS (it exceeds C once recycling starts).
-    window: int | None = None
-    # Allocated staging-tail width = the widest pass this cache can bind
-    # (the graph scatters new rows at slots [C, C + n_new)).
-    staging: int = 0
-    # THE PLACEMENT POLICY: every committed row is either PERMANENT (it
-    # stays resident for the whole run) or EXPIRING (its slot may be
-    # recycled), decided purely by the row's token type — see
-    # ``OnnxTokenRuntime._expiring_rows`` (default: only PIXEL rows
-    # expire; pixels publish no channels and are only ever read at
-    # offset <= 3, so evicting old ones is safe by construction).
-    # Slots fill strictly sequentially (the graph's ``j < base``
-    # writtenness mask requires first-fill in slot order); once all C
-    # slots are written, new rows recycle the slots of expired rows,
-    # cursor order, skipping permanent ones.  Prefill needs no special
-    # case — scene tokens are permanent because of their types.
-    slot_expiring: list | None = None  # per-slot tag of the current occupant
-    write_head: int = 0  # slots written so far (== fill progress, <= C)
-    recycle_cursor: int = 0  # next candidate slot for recycling
-    n_permanent: int = 0  # capacity guard: permanent rows can never exceed C
-    # A multi-row ROLLOUT batch is speculative: some of its rows may be
-    # rejected, and a rejected row must never consume a slot (it would
-    # evict a live row for a row that never becomes part of the stream).
-    # So the step stashes (base, n_new, dk_rows, dv_rows, expiring) here
-    # and ``_commit`` flushes exactly the accepted prefix.  The stashed
-    # tensors are VIEWS of the persistent binding buffers — safe because
-    # _commit always runs before the next step (step() raises on an
-    # unflushed pending).  Prefill chunks ride the same path:
-    # ``run_prefill`` commits after every chunk.
-    pending: tuple | None = None
-
-
-_RECYCLE_POOL_WARN = 256
-
-
-def _alloc_slot(cache: KVCache, expiring: bool) -> int:
-    """Allocate the committed slot for one new row.
-
-    Sequential while the buffer is filling (the writtenness-mask
-    contract); afterwards, recycle the next expired slot in cursor
-    order.  A full revolution without an expired slot means the cache
-    is saturated with permanent rows — fail loud, that's a
-    "recompile with a larger cache_window" event.
-    """
-    C = cache.window
-    assert C is not None and cache.slot_expiring is not None
-    if cache.write_head < C:
-        slot = cache.write_head
-        cache.write_head += 1
-    else:
-        cur = cache.recycle_cursor
-        for _ in range(C):
-            if cache.slot_expiring[cur % C]:
-                break
-            cur += 1
-        else:
-            raise RuntimeError(
-                f"windowed cache saturated: all {C} slots hold permanent "
-                f"rows ({cache.n_permanent} permanent committed); recompile "
-                f"with a larger model.cache_window or expire more token types"
-            )
-        slot = cur % C
-        cache.recycle_cursor = cur + 1
-    if not expiring:
-        cache.n_permanent += 1
-        free = C - cache.n_permanent
-        if free == _RECYCLE_POOL_WARN:
-            print(
-                f"[kvcache] WARNING: recycle pool down to {free} slots "
-                f"({cache.n_permanent}/{C} permanent) — nearing saturation",
-                flush=True,
-            )
-    cache.slot_expiring[slot] = expiring
-    return slot
-
-
-def _alloc_runs(cache: KVCache, expiring: list) -> list[list[int]]:
-    """Allocate slots for a batch of rows (in position order) and compress
-    the assignments into contiguous [slot_start, row_start, count] runs —
-    sequential fill is one run; recycling fragments only as much as the
-    expired slots do."""
-    runs: list[list[int]] = []
-    for row, flag in enumerate(expiring):
-        slot = _alloc_slot(cache, bool(flag))
-        if (
-            runs
-            and runs[-1][0] + runs[-1][2] == slot
-            and runs[-1][1] + runs[-1][2] == row
-        ):
-            runs[-1][2] += 1
-        else:
-            runs.append([slot, row, 1])
-    return runs
-
-
-def _write_runs(cache: KVCache, runs, dk_rows, dv_rows) -> None:
-    n_layers = len(cache.k)
-    for slot, row, count in runs:
-        for i in range(n_layers):
-            cache.k[i][slot : slot + count] = dk_rows[i][row : row + count]
-            cache.v[i][slot : slot + count] = dv_rows[i][row : row + count]
-
-
-def _persist_rows(
-    cache: KVCache, base: int, n_new: int, dk_rows, dv_rows, expiring=None
-) -> None:
-    """Write a pass's delta rows into the owned cache.
-
-    ``dk_rows[i]`` / ``dv_rows[i]`` are the layer-i ``(n_new, nh, d_head)``
-    delta tensors (views of the binding buffers are fine — see
-    ``KVCache.pending``).  Unbounded protocol: slots == positions, exactly
-    the historical write.  Windowed protocol: ``expiring`` carries the
-    per-row policy tag; single-row decodes commit unconditionally and
-    write through; every multi-row batch (speculative verify batches AND
-    prefill chunks) is stashed on ``cache.pending`` and flushed by
-    ``_commit`` — rejected rows never consume a slot.
-    """
-    n_layers = len(cache.k)
-    if cache.window is None:
-        for i in range(n_layers):
-            cache.k[i][base : base + n_new] = dk_rows[i]
-            cache.v[i][base : base + n_new] = dv_rows[i]
-        return
-    if expiring is None or len(expiring) != n_new:
-        raise RuntimeError(
-            "windowed persist requires a per-row expiring tag for every row"
-        )
-    if n_new == 1:
-        _write_runs(cache, _alloc_runs(cache, list(expiring)), dk_rows, dv_rows)
-        return
-    if cache.pending is not None:
-        raise RuntimeError(
-            "windowed KVCache already holds an uncommitted batch; _commit "
-            "must flush it before the next multi-row step"
-        )
-    cache.pending = (base, n_new, list(dk_rows), list(dv_rows), list(expiring))
-
-
-def _flush_pending(cache: KVCache, target: int) -> None:
-    """Flush the accepted prefix of a stashed batch: rows at positions
-    [pending_base, target) get slots and persist; the rejected tail is
-    dropped (its positions are re-drafted by the next pass)."""
-    pending = cache.pending
-    if pending is None:
-        return
-    cache.pending = None
-    pending_base, pending_n, dk_rows, dv_rows, expiring = pending
-    keep = target - pending_base
-    assert 0 <= keep <= pending_n, (
-        f"commit target {target} outside the pending batch "
-        f"[{pending_base}, {pending_base + pending_n}]"
-    )
-    if keep == 0:
-        return
-    _write_runs(cache, _alloc_runs(cache, expiring[:keep]), dk_rows, dv_rows)
+from .generation import DEFAULT_PREFILL_CHUNK_SIZE, TokenRuntime
+from .kv_cache import KVCache, WindowedState, persist_rows
 
 
 def _resolve_buckets(
@@ -246,39 +50,7 @@ def _resolve_buckets(
     return buckets
 
 
-def _commit(past: KVCache, target: int) -> KVCache:
-    """Set the committed length to ``target``: lower the logical length in
-    place (no copy), and — on a windowed cache — flush the accepted prefix
-    of the pending batch into freshly-allocated slots (see
-    :func:`_persist_rows`; rejected rows are dropped, never written).
-    """
-    _flush_pending(past, target)
-    past.length = target
-    return past
-
-
-class TokenStepRuntime(Protocol):
-    """Structural contract the rollout loops require of ``compiled``.
-
-    Production is :class:`OnnxTokenRuntime`; the spec-decode logic tests
-    substitute lightweight in-memory stand-ins
-    (``tests/render/test_spec_decode_logic.py`` / ``test_windowed_cache.py``).
-    Runtimes MAY additionally expose ``max_safe_prefill_chunk(planned_rows)``
-    — :func:`run_prefill` probes for it with ``getattr`` and clamps its
-    chunk size when present.
-    """
-
-    def empty_past(self, max_len: int) -> KVCache: ...
-
-    def step(
-        self,
-        inputs: torch.Tensor,
-        cache: KVCache,
-        past_len: int | None = None,
-    ) -> tuple[torch.Tensor, KVCache]: ...
-
-
-class OnnxTokenRuntime:
+class OnnxTokenRuntime(TokenRuntime):
     """Token-I/O ONNX wrapper with CPU fallback and CUDA I/O binding."""
 
     def __init__(
@@ -565,8 +337,13 @@ class OnnxTokenRuntime:
                 if len(logits_shape) > 1 and isinstance(logits_shape[1], int)
                 else 0
             )
-            or W_EMBED.shape[0]
         )
+        if not self._logits_width:
+            # Last-resort width for sidecar-less artifacts; imported lazily —
+            # W_EMBED is built at import from screen-env-dependent constants.
+            from ..embedding import W_EMBED
+
+            self._logits_width = int(W_EMBED.shape[0])
         self.input_names = ["token_ids"]
 
     def max_safe_prefill_chunk(self, planned_rows: int | None = None) -> int:
@@ -689,7 +466,7 @@ class OnnxTokenRuntime:
         # allocated cache would replay against the first rollout's (freed)
         # buffers.  Overwriting CONTENTS between replays is allowed; moving
         # buffers is not.
-        windowed = self._cache_window is not None
+        window = self._cache_window
         if self._static_cache is not None:
             cache = self._static_cache
             for t in cache.k:
@@ -697,20 +474,20 @@ class OnnxTokenRuntime:
             for t in cache.v:
                 t.zero_()
             cache.length = 0
-            cache.max_len = max_len if windowed else cache.max_len
-            cache.pending = None
-            if windowed:
+            if window is not None:
+                cache.max_len = max_len
                 # A new run starts a fresh fill: all slots free, no
                 # permanent rows yet (the prefill re-establishes them).
-                cache.slot_expiring = [False] * self._cache_window
-                cache.write_head = 0
-                cache.recycle_cursor = 0
-                cache.n_permanent = 0
+                cache.windowed = WindowedState(
+                    window=window,
+                    staging=self._staging_max,
+                    slot_expiring=[False] * window,
+                )
             return cache
         device = self._device
-        if windowed:
+        if window is not None:
             # C committed slots + the widest staging tail any pass binds.
-            S_alloc = self._cache_window + self._staging_max
+            S_alloc = window + self._staging_max
             cache_max_len = max_len  # demand cap in POSITIONS, not slots
         else:
             S_alloc = self._cache_stride
@@ -728,23 +505,34 @@ class OnnxTokenRuntime:
             v=v,
             length=0,
             max_len=cache_max_len,
-            window=self._cache_window,
-            staging=self._staging_max if windowed else 0,
-            slot_expiring=[False] * self._cache_window if windowed else None,
+            windowed=(
+                WindowedState(
+                    window=window,
+                    staging=self._staging_max,
+                    slot_expiring=[False] * window,
+                )
+                if window is not None
+                else None
+            ),
         )
         return self._static_cache
 
-    def step(self, inputs: torch.Tensor, cache: KVCache, past_len: int | None = None):
+    def step(
+        self,
+        inputs: torch.Tensor,
+        cache: KVCache,
+        past_len: int | None = None,
+    ) -> tuple[torch.Tensor, KVCache]:
         if not isinstance(cache, KVCache):
             raise TypeError(
                 "OnnxTokenRuntime.step requires a KVCache from empty_past(max_len)"
             )
         n_new = int(inputs.reshape(-1).shape[0])
         base = cache.length
-        if cache.pending is not None:
+        if cache.windowed is not None and cache.windowed.pending is not None:
             raise RuntimeError(
                 "windowed KVCache holds an uncommitted speculative batch — "
-                "_commit must run between a multi-row rollout step and the "
+                "commit must run between a multi-row rollout step and the "
                 "next step (the pending deltas are views of binding buffers "
                 "the next pass overwrites)"
             )
@@ -775,7 +563,7 @@ class OnnxTokenRuntime:
         # sync this costs on the decode hot path is subsumed by the stream
         # synchronize every _run_iobinding already performs.
         expiring = None
-        if cache.window is not None:
+        if cache.windowed is not None:
             rows = inputs.detach().reshape(-1).to(torch.int64).cpu().tolist()
             lut = self._expiring_rows
             expiring = [bool(lut[r]) if r < len(lut) else False for r in rows]
@@ -796,7 +584,7 @@ class OnnxTokenRuntime:
         # allocation.
         bind_rows = (
             self._windowed_s_eff(n_new)
-            if cache.window is not None
+            if cache.windowed is not None
             else cache.k[0].shape[0]
         )
         feeds: dict[str, Any] = {
@@ -828,7 +616,7 @@ class OnnxTokenRuntime:
             torch.from_numpy(results[1 + 2 * i + 1]).to(cache.v[i].dtype)
             for i in range(self._n_layers)
         ]
-        _persist_rows(cache, base, n_new, dk_rows, dv_rows, expiring)
+        persist_rows(cache, base, n_new, dk_rows, dv_rows, expiring)
         cache.length = base + n_new
         return logits, cache
 
@@ -964,7 +752,7 @@ class OnnxTokenRuntime:
     ):
         import numpy as np
 
-        windowed = cache.window is not None
+        windowed = cache.windowed is not None
         if n_new == 1:
             # Decode: persistent binding at the smallest covering bucket
             # (windowed: the constant C+1), contents-only updates.
@@ -981,7 +769,7 @@ class OnnxTokenRuntime:
             self._run_iobinding(
                 b["io"], gpu_graph_id=self._graph_id_for(s_eff, 1), shape=(s_eff, 1)
             )
-            _persist_rows(cache, base, 1, b["delta_k"], b["delta_v"], expiring)
+            persist_rows(cache, base, 1, b["delta_k"], b["delta_v"], expiring)
             cache.length = base + 1
             # NOTE: the returned logits tensor is the persistent buffer — it
             # is overwritten by the NEXT decode step.  Both rollout loops
@@ -1014,12 +802,12 @@ class OnnxTokenRuntime:
             self._run_iobinding(
                 b["io"], gpu_graph_id=self._graph_id_for(s_eff, W), shape=(s_eff, W)
             )
-            # Windowed: this is the speculative path — _persist_rows stashes
-            # the rows on cache.pending and the rollout's _commit flushes
+            # Windowed: this is the speculative path — persist_rows stashes
+            # the rows on cache.pending and the rollout's commit flushes
             # only the accepted prefix (rejected rows never consume a
             # slot).  Unbounded: direct write, rejection just lowers
             # length as before.
-            _persist_rows(
+            persist_rows(
                 cache,
                 base,
                 n_new,
@@ -1092,7 +880,7 @@ class OnnxTokenRuntime:
         self._run_iobinding(io, gpu_graph_id="-1")
         # Copy the freshly computed deltas into the owned cache slots (the run
         # is complete, so there is no input/output aliasing during execution).
-        _persist_rows(cache, base, n_new, delta_k_outs, delta_v_outs, expiring)
+        persist_rows(cache, base, n_new, delta_k_outs, delta_v_outs, expiring)
         cache.length = base + n_new
         return logits, cache
 
@@ -1105,9 +893,6 @@ class OnnxTokenRuntime:
         self._profiling = False
         print(f"[onnxruntime] profile trace written to {path}", flush=True)
         return str(path)
-
-    def eval(self) -> "OnnxTokenRuntime":
-        return self
 
 
 def _default_ort_providers(ort) -> list:
@@ -1139,462 +924,3 @@ def _default_ort_providers(ort) -> list:
             "CPUExecutionProvider",
         ]
     return ["CPUExecutionProvider"]
-
-
-def _w_embed_t(device: torch.device) -> torch.Tensor:
-    key = str(device)
-    t = _W_EMBED_T_BY_DEVICE.get(key)
-    if t is None:
-        t = W_EMBED.t().contiguous().to(device)
-        _W_EMBED_T_BY_DEVICE[key] = t
-    return t
-
-
-def argmax_rows(outputs: torch.Tensor) -> list[int]:
-    """Argmax-decode compiled-step outputs to token row ids.
-
-    Logits-width outputs (production ``OnnxTokenRuntime`` and
-    ``OnnxDebugSession`` — the artifact owns the unembed) argmax directly;
-    embedding-width outputs (the in-process ``compile_headless`` gate,
-    ``tests/scene/test_forward_ar_rollout.py``) go through the host-side
-    ``@ W_EMBED.T`` unembed first.
-    """
-    o = outputs.detach()
-    if o.shape[-1] != W_EMBED.shape[1] and o.shape[-1] == W_EMBED.shape[0]:
-        return o.argmax(dim=-1).cpu().tolist()
-    wt = _w_embed_t(o.device).to(o.dtype)
-    return (o @ wt).argmax(dim=-1).cpu().tolist()
-
-
-def run_prefill(
-    compiled: TokenStepRuntime,
-    prefill_ids: list[int],
-    *,
-    max_cache_len: int,
-    chunk_size: int = DEFAULT_PREFILL_CHUNK_SIZE,
-    label: str,
-    progress_every: int = 0,
-):
-    """Run prefill in large chunks and return ``(last_out, past, n_passes)``.
-
-    Allocates the run's single owned cache (``max_cache_len`` rows) up front
-    via ``compiled.empty_past(max_cache_len)`` and writes prefill straight
-    into it.  ``compiled.empty_past`` must return a :class:`KVCache` — the
-    owned-cache protocol is the loops' one cache representation (the mocks in
-    ``tests/render/test_spec_decode_logic.py`` return real ones).
-    """
-    if not prefill_ids:
-        raise ValueError("prefill_ids must be non-empty")
-    chunk_size = max(1, int(chunk_size))
-    # Clamp to the runtime's int32-indexability bound (ONNX runtimes expose
-    # it; the in-process reference has no such limit).  Bucket-aware: the
-    # clamp is computed at the prefix bucket the whole prefill will bind,
-    # so smaller buckets allow proportionally larger (equal-cost) chunks.
-    safe_chunk_fn = getattr(compiled, "max_safe_prefill_chunk", None)
-    safe_chunk = (
-        safe_chunk_fn(len(prefill_ids)) if callable(safe_chunk_fn) else safe_chunk_fn
-    )
-    if safe_chunk is not None and chunk_size > safe_chunk:
-        print(
-            f"[{label}] prefill chunk {chunk_size} -> {safe_chunk} "
-            f"(int32 transient-indexability clamp at the prefill's bucket)",
-            flush=True,
-        )
-        chunk_size = safe_chunk
-    n_chunks = (len(prefill_ids) + chunk_size - 1) // chunk_size
-    if progress_every:
-        print(
-            f"[{label}] prefill start rows={len(prefill_ids)} "
-            f"chunk_size={chunk_size} chunks={n_chunks} max_cache_len={max_cache_len}",
-            flush=True,
-        )
-
-    past = compiled.empty_past(max_cache_len)
-    if past.window is not None:
-        if len(prefill_ids) >= past.window:
-            raise RuntimeError(
-                f"prefill ({len(prefill_ids)} rows) does not fit the "
-                f"{past.window}-slot cache window; raise model.cache_window"
-            )
-        print(
-            f"[{label}] windowed cache: window={past.window} "
-            f"staging={past.staging}; prefill ({len(prefill_ids)} rows) "
-            f"and every non-expiring rollout row stay resident; expiring "
-            f"rows recycle slots once the window fills",
-            flush=True,
-        )
-    out = None
-    offset = 0
-    passes = 0
-    for chunk_idx in range(n_chunks):
-        chunk = prefill_ids[offset : offset + chunk_size]
-        t0 = time.time()
-        out, past = compiled.step(rows_to_input(chunk), past, past_len=offset)
-        offset += len(chunk)
-        # Multi-row batches pend on a windowed cache (the speculative-batch
-        # discipline; prefill rides the same path) — every chunk is fully
-        # accepted, so commit it before the next step.
-        past = _commit(past, offset)
-        passes += 1
-        dt = time.time() - t0
-        if progress_every and (n_chunks > 1 or dt >= 5.0 or chunk_idx == n_chunks - 1):
-            print(
-                f"[{label}] prefill chunk {chunk_idx + 1}/{n_chunks} "
-                f"rows={len(chunk)} done in {dt:.1f}s "
-                f"cache_len={past.length}",
-                flush=True,
-            )
-
-    assert out is not None
-    return out, past, passes
-
-
-def pure_ar_rollout(
-    compiled: TokenStepRuntime,
-    prefill_ids: list[int],
-    max_positions: int,
-    terminal_row: int,
-    *,
-    progress_every: int = 0,
-    prefill_chunk_size: int = DEFAULT_PREFILL_CHUNK_SIZE,
-    argmax_fn: Callable[[torch.Tensor], list[int]] | None = None,
-) -> RolloutResult:
-    """Prefill once, then decode one token at a time until terminal or cap."""
-    argmax_fn = argmax_fn or argmax_rows
-    t0 = time.time()
-    prefill_t0 = time.time()
-    # Cache holds prefill + at most (max_positions - 1) decoded rows.
-    max_cache_len = len(prefill_ids) + max_positions - 1
-    out, past, n_passes = run_prefill(
-        compiled,
-        prefill_ids,
-        max_cache_len=max_cache_len,
-        chunk_size=prefill_chunk_size,
-        label="pure_ar",
-        progress_every=progress_every,
-    )
-    cur = argmax_fn(out[-1:])[0]
-    emitted = [cur]
-    if progress_every:
-        print(
-            f"[pure_ar] prefill done in {time.time() - prefill_t0:.1f}s "
-            f"seed_row={cur} cache_len={past.length}",
-            flush=True,
-        )
-    seq_pos = len(prefill_ids)
-    last_timed_print = time.time()
-    while cur != terminal_row and len(emitted) < max_positions:
-        step_t0 = time.time()
-        out, past = compiled.step(rows_to_input([cur]), past, past_len=seq_pos)
-        n_passes += 1
-        seq_pos += 1
-        cur = argmax_fn(out[-1:])[0]
-        emitted.append(cur)
-        step_dt = time.time() - step_t0
-        if progress_every and (
-            len(emitted) % progress_every == 0
-            or step_dt >= 5.0
-            or time.time() - last_timed_print >= 30.0
-        ):
-            last_timed_print = time.time()
-            print(
-                f"[pure_ar] {len(emitted)} tokens  ({time.time() - t0:.1f}s, "
-                f"{(time.time() - t0) / len(emitted) * 1000:.0f} ms/tok, "
-                f"last_forward={step_dt:.1f}s, cache_len={past.length})",
-                flush=True,
-            )
-    return RolloutResult(
-        emitted_rows=emitted,
-        stopped="terminal" if cur == terminal_row else "cap",
-        n_forward_passes=n_passes,
-        seconds=time.time() - t0,
-    )
-
-
-_REUSE_HEALTH_INIT = 4
-_REUSE_HEALTH_CAP = 8
-_REUSE_HEALTH_PENALTY = 2
-_REUSE_PROBE_INTERVAL = 64
-
-
-def _new_spec_stats() -> dict[str, Any]:
-    return {
-        "batches": 0,
-        "forward_passes": 0,
-        "attempted_drafts": 0,
-        "committed_rows": 0,
-        "accepted_drafts": 0,
-        "full_accepts": 0,
-        "mispredicts": 0,
-        "reject_at_0": 0,
-        "terminal_truncations": 0,
-        "fallback_single_steps": 0,
-        "reused_offered": 0,
-        "reused_accepted": 0,
-        "accept_histogram": {},
-    }
-
-
-def _single_step(
-    compiled: TokenStepRuntime,
-    past: KVCache,
-    input_row: int,
-    emitted: list[int],
-    stats: dict[str, Any],
-    *,
-    argmax_fn: Callable[[torch.Tensor], list[int]],
-) -> KVCache:
-    out, new_past = compiled.step(rows_to_input([input_row]), past)
-    stats["forward_passes"] += 1
-    stats["fallback_single_steps"] += 1
-    emitted.append(argmax_fn(out[-1:])[0])
-    return new_past
-
-
-def _spec_step(
-    compiled: TokenStepRuntime,
-    past: KVCache,
-    next_input_row: int,
-    emitted: list[int],
-    drafter,
-    max_drafts: int,
-    terminal_row: int,
-    stats: dict[str, Any],
-    reuse_buffer: list,
-    reuse_health: int,
-    reuse_probe: int,
-    enable_reuse: bool,
-    *,
-    argmax_fn: Callable[[torch.Tensor], list[int]],
-    sandbox_token_to_row_fn: Callable[[Any], int],
-    row_to_sandbox_token_fn: Callable[[int], Any],
-):
-    """One batched draft-verify step. Returns (new_past, reuse_tail, health, probe)."""
-    cache_len = past.length
-    snap = drafter.snapshot()
-
-    drafts: list = []
-    if enable_reuse and reuse_health > 0:
-        for r in reuse_buffer:
-            if len(drafts) >= max_drafts:
-                break
-            drafts.append(r)
-            drafter.consume(r)
-    n_reused = len(drafts)
-    while len(drafts) < max_drafts:
-        d = drafter.next_draft()
-        if d is None:
-            break
-        drafts.append(d)
-        drafter.consume(d)
-
-    n_drafts = len(drafts)
-    if n_drafts == 0:
-        drafter.rollback(snap)
-        new_past = _single_step(
-            compiled, past, next_input_row, emitted, stats, argmax_fn=argmax_fn
-        )
-        drafter.consume(row_to_sandbox_token_fn(emitted[-1]))
-        return new_past, [], reuse_health, reuse_probe
-
-    draft_rows = [sandbox_token_to_row_fn(d) for d in drafts]
-    batch_rows = [next_input_row] + draft_rows
-    out, new_past = compiled.step(rows_to_input(batch_rows), past)
-    stats["forward_passes"] += 1
-    pred = argmax_fn(out)
-
-    accept = n_drafts
-    for i in range(n_drafts):
-        if pred[i] != draft_rows[i]:
-            accept = i
-            break
-    commit = (n_drafts + 1) if accept == n_drafts else (accept + 1)
-
-    terminal_hit = False
-    for i in range(commit):
-        emission_row = draft_rows[i] if i < accept else pred[i]
-        if emission_row == terminal_row:
-            commit = i + 1
-            terminal_hit = True
-            stats["terminal_truncations"] += 1
-            break
-
-    new_past = _commit(new_past, cache_len + commit)
-
-    stats["batches"] += 1
-    stats["attempted_drafts"] += n_drafts
-    stats["committed_rows"] += commit
-    stats["accepted_drafts"] += min(accept, commit)
-    stats["reused_offered"] += n_reused
-    stats["reused_accepted"] += min(accept, n_reused)
-    if accept == n_drafts:
-        stats["full_accepts"] += 1
-    else:
-        stats["mispredicts"] += 1
-        if accept == 0:
-            stats["reject_at_0"] += 1
-    stats["accept_histogram"][accept] = stats["accept_histogram"].get(accept, 0) + 1
-
-    drafter.rollback(snap)
-    for i in range(commit):
-        emission_row = draft_rows[i] if i < accept else pred[i]
-        emission_tok = drafts[i] if i < accept else row_to_sandbox_token_fn(pred[i])
-        drafter.consume(emission_tok)
-        emitted.append(emission_row)
-
-    if n_reused > 0:
-        if accept > 0:
-            reuse_health = min(_REUSE_HEALTH_CAP, reuse_health + 1)
-        else:
-            reuse_health = max(0, reuse_health - _REUSE_HEALTH_PENALTY)
-    if reuse_health == 0:
-        reuse_probe += 1
-        if reuse_probe >= _REUSE_PROBE_INTERVAL:
-            reuse_health = 1
-            reuse_probe = 0
-    else:
-        reuse_probe = 0
-
-    if terminal_hit or not enable_reuse or reuse_health == 0:
-        return new_past, [], reuse_health, reuse_probe
-    reuse_tail = [row_to_sandbox_token_fn(pred[i]) for i in range(commit, n_drafts + 1)]
-    return new_past, reuse_tail, reuse_health, reuse_probe
-
-
-def spec_decode_rollout(
-    compiled: TokenStepRuntime,
-    prefill_ids: list[int],
-    drafter,
-    max_positions: int,
-    terminal_row: int,
-    *,
-    draft_window: int = 8,
-    enable_reuse: bool = True,
-    progress_every: int = 0,
-    prefill_chunk_size: int = DEFAULT_PREFILL_CHUNK_SIZE,
-    argmax_fn: Callable[[torch.Tensor], list[int]] | None = None,
-    sandbox_token_to_row_fn: Callable[[Any], int] | None = None,
-    row_to_sandbox_token_fn: Callable[[int], Any] | None = None,
-) -> tuple[RolloutResult, dict[str, Any]]:
-    """Generate the rollout with speculative decoding. Returns (result, stats)."""
-    argmax_fn = argmax_fn or argmax_rows
-    sandbox_token_to_row_fn = sandbox_token_to_row_fn or sandbox_token_to_row
-    row_to_sandbox_token_fn = row_to_sandbox_token_fn or row_to_sandbox_token
-    stats = _new_spec_stats()
-    t0 = time.time()
-
-    prefill_t0 = time.time()
-    # Cache holds prefill + (max_positions - 1) committed rows; a speculative
-    # batch transiently writes up to draft_window extra rows past cache_len
-    # before committing fewer, so reserve that headroom too.
-    max_cache_len = len(prefill_ids) + max_positions - 1 + max(0, draft_window)
-    out, past, prefill_passes = run_prefill(
-        compiled,
-        prefill_ids,
-        max_cache_len=max_cache_len,
-        chunk_size=prefill_chunk_size,
-        label="spec_decode",
-        progress_every=progress_every,
-    )
-    stats["forward_passes"] += prefill_passes
-    seed_row = argmax_fn(out[-1:])[0]
-    emitted = [seed_row]
-    if progress_every:
-        print(
-            f"[spec_decode] prefill done in {time.time() - prefill_t0:.1f}s "
-            f"seed_row={seed_row} cache_len={past.length}",
-            flush=True,
-        )
-
-    first = drafter.next_draft()
-    if first is not None and sandbox_token_to_row_fn(first) == seed_row:
-        drafter.consume(first)
-
-    reuse_buffer: list = []
-    reuse_health = _REUSE_HEALTH_INIT
-    reuse_probe = 0
-    drafter_done = drafter.next_draft() is None
-    last_print = 1
-    last_timed_print = time.time()
-    stopped = "cap"
-
-    while True:
-        next_input_row = emitted[-1]
-        if next_input_row == terminal_row:
-            stopped = "terminal"
-            break
-        if len(emitted) >= max_positions:
-            stopped = "cap"
-            break
-
-        remaining_capacity = max_positions - len(emitted)
-        step_cache_len = past.length
-        step_t0 = time.time()
-        if progress_every and stats["forward_passes"] <= 3:
-            print(
-                f"[spec_decode] forward start pass={stats['forward_passes'] + 1} "
-                f"emitted={len(emitted)} cache_len={step_cache_len} "
-                f"remaining={remaining_capacity}",
-                flush=True,
-            )
-        if (
-            not drafter_done
-            and remaining_capacity >= 2
-            and (reuse_buffer or drafter.next_draft() is not None)
-        ):
-            past, reuse_buffer, reuse_health, reuse_probe = _spec_step(
-                compiled,
-                past,
-                next_input_row,
-                emitted,
-                drafter,
-                min(draft_window, remaining_capacity - 1),
-                terminal_row,
-                stats,
-                reuse_buffer,
-                reuse_health,
-                reuse_probe,
-                enable_reuse,
-                argmax_fn=argmax_fn,
-                sandbox_token_to_row_fn=sandbox_token_to_row_fn,
-                row_to_sandbox_token_fn=row_to_sandbox_token_fn,
-            )
-            if not reuse_buffer and drafter.next_draft() is None:
-                drafter_done = True
-        else:
-            reuse_buffer = []
-            past = _single_step(
-                compiled, past, next_input_row, emitted, stats, argmax_fn=argmax_fn
-            )
-            if not drafter_done:
-                drafter.consume(row_to_sandbox_token_fn(emitted[-1]))
-                if drafter.next_draft() is None:
-                    drafter_done = True
-
-        step_dt = time.time() - step_t0
-        should_print = progress_every and (
-            len(emitted) - last_print >= progress_every
-            or step_dt >= 5.0
-            or time.time() - last_timed_print >= 30.0
-        )
-        if should_print:
-            last_print = len(emitted)
-            last_timed_print = time.time()
-            print(
-                f"[spec_decode] {len(emitted)} tokens, {stats['forward_passes']} "
-                f"forward passes ({time.time() - t0:.1f}s), "
-                f"last_forward={step_dt:.1f}s, cache_len={past.length}, "
-                f"accept={stats['accepted_drafts'] / max(1, len(emitted)):.0%} per-tok "
-                f"(drafts {stats['accepted_drafts']}/{stats['attempted_drafts']})",
-                flush=True,
-            )
-
-    return (
-        RolloutResult(
-            emitted_rows=emitted,
-            stopped=stopped,
-            n_forward_passes=stats["forward_passes"],
-            seconds=time.time() - t0,
-        ),
-        stats,
-    )

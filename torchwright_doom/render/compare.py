@@ -33,7 +33,8 @@ def reference_pixels(scene, pose) -> PixelBuf:
 
     out: PixelBuf = {}
     for p in expected_pixel_pass(scene, pose):
-        out.setdefault((int(p.x), int(p.y)), tuple(int(c) for c in p.color))
+        r, g, b = p.color
+        out.setdefault((int(p.x), int(p.y)), (int(r), int(g), int(b)))
     return out
 
 
@@ -44,7 +45,7 @@ def reference_options(scene, pose) -> dict[tuple[int, int], set[Rgb]]:
     opts: dict[tuple[int, int], set[Rgb]] = {}
     for o in expected_pixel_color_options(scene, pose):
         opts.setdefault((int(o.x), int(o.y)), set()).update(
-            tuple(int(c) for c in rgb) for rgb in o.colors
+            (int(r), int(g), int(b)) for r, g, b in o.colors
         )
     return opts
 
@@ -70,7 +71,11 @@ class CompareReport:
 
     @property
     def in_option_rate(self) -> float:
-        return self.in_option_matches / self.gen_with_option if self.gen_with_option else 0.0
+        return (
+            self.in_option_matches / self.gen_with_option
+            if self.gen_with_option
+            else 0.0
+        )
 
     @property
     def coverage_rate(self) -> float:
@@ -94,7 +99,9 @@ class CompareReport:
         )
 
 
-def compare(gen: PixelBuf, ref: PixelBuf, options: dict[tuple[int, int], set[Rgb]]) -> CompareReport:
+def compare(
+    gen: PixelBuf, ref: PixelBuf, options: dict[tuple[int, int], set[Rgb]]
+) -> CompareReport:
     gen_keys = set(gen)
     ref_keys = set(ref)
     both = gen_keys & ref_keys
@@ -129,7 +136,9 @@ def _blit(canvas: np.ndarray, buf: PixelBuf) -> None:
             canvas[y, x] = rgb
 
 
-def _diff_canvas(gen: PixelBuf, ref: PixelBuf, options: dict[tuple[int, int], set[Rgb]]) -> np.ndarray:
+def _diff_canvas(
+    gen: PixelBuf, ref: PixelBuf, options: dict[tuple[int, int], set[Rgb]]
+) -> np.ndarray:
     """Color-coded diff: green=in-option, red=color-mismatch, blue=only-ref,
     yellow=only-gen, black=neither."""
     canvas = _canvas((0, 0, 0))

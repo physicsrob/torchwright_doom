@@ -43,6 +43,8 @@ from .vocab import PIXEL, SET_CURSOR_X, WALL_COL_U, make_value
 from .wall_column_renderer import WallColumnRenderer
 
 if TYPE_CHECKING:
+    from torchwright.graph.node import Node
+
     from .seg_projection import SegProjection
 
 
@@ -120,7 +122,9 @@ class PixelDispatcher:
         return self.make_pixel_color(constant(0.0))
 
     def make_pixel_color(self, pixel_index_vec: "Node") -> "Node":
-        return make_token_head(PIXEL, color=self.pixel_lit_palette_index(pixel_index_vec))
+        return make_token_head(
+            PIXEL, color=self.pixel_lit_palette_index(pixel_index_vec)
+        )
 
     def span_v0_at_top(self) -> "Node":
         span = self.projection.wall.wall_span_runtime.span_start_values(

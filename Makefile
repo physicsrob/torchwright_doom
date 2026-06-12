@@ -100,7 +100,7 @@ render-run-local run-local:
 	uv run python -m torchwright_doom.render run $(_RENDER_RUN_ARGS)
 
 .PHONY: test
-test:
+test: lint
 	@bash -c ' \
 		LOGFILE=/tmp/torchwright_doom-test-$$(date +%Y%m%d-%H%M%S).log ; \
 		ln -sfn "$$LOGFILE" /tmp/torchwright_doom-test.log ; \

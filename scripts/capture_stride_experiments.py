@@ -63,10 +63,10 @@ D_HEAD = 16
 PER_LAYER_NH = [4, 4, 2]
 VOCAB = 32
 MAX_SEQ_LEN = 256
-S_MAX = 256                      # cache_stride (arange_S size, cache alloc)
-BUCKETS = [64, 128, 256]         # S_eff prefix windows
+S_MAX = 256  # cache_stride (arange_S size, cache alloc)
+BUCKETS = [64, 128, 256]  # S_eff prefix windows
 PREFILL = 20
-WIDTH_BUCKET = 4                 # spec-verify-style padded width (prod: 9)
+WIDTH_BUCKET = 4  # spec-verify-style padded width (prod: 9)
 SEED = 7
 
 
@@ -105,13 +105,12 @@ def build_variant(variant: str, out_path: Path) -> None:
     w = _weights()
     inits = [numpy_helper.from_array(v, name=k) for k, v in w.items()]
     inits += [
-        numpy_helper.from_array(
-            np.arange(S_MAX, dtype=np.int64), name="arange_S"
-        ),
+        numpy_helper.from_array(np.arange(S_MAX, dtype=np.int64), name="arange_S"),
         numpy_helper.from_array(np.array([0], dtype=np.int64), name="_axes0_1d"),
         numpy_helper.from_array(np.array([1], dtype=np.int64), name="_axes1_1d"),
-        numpy_helper.from_array(np.array(SENTINEL, dtype=np.float32),
-                                name="_f32_causal_sentinel_s"),
+        numpy_helper.from_array(
+            np.array(SENTINEL, dtype=np.float32), name="_f32_causal_sentinel_s"
+        ),
     ]
     if variant == "dyn":
         inits += [
@@ -141,10 +140,12 @@ def build_variant(variant: str, out_path: Path) -> None:
         # baked arange to it.  Shape/shape-slice are CPU-native; the
         # arange-Slice keeps GPU data with CPU scalar bounds.
         add("Shape", ["past_K_0"], ["_pastK0_shape"])
-        add("Slice", ["_pastK0_shape", "_zeros_1d", "_ones_1d", "_axes0_1d"],
-            ["_s_eff_1d"])
-        add("Slice", ["arange_S", "_zeros_1d", "_s_eff_1d", "_axes0_1d"],
-            ["_slots"])
+        add(
+            "Slice",
+            ["_pastK0_shape", "_zeros_1d", "_ones_1d", "_axes0_1d"],
+            ["_s_eff_1d"],
+        )
+        add("Slice", ["arange_S", "_zeros_1d", "_s_eff_1d", "_axes0_1d"], ["_slots"])
         add("Unsqueeze", ["_slots", "_axes0_1d"], ["_slots_row"])
     elif variant == "slotids":
         add("Unsqueeze", ["slot_ids", "_axes0_1d"], ["_slots_row"])
@@ -170,16 +171,25 @@ def build_variant(variant: str, out_path: Path) -> None:
         add("MatMul", [cur, f"{p}_WV"], [f"{p}_V_flat"])
         add("Reshape", [f"{p}_V_flat", f"{p}_qkv_view_shape"], [f"delta_V_{i}"])
         add("Transpose", [f"{p}_Q_sm"], [f"{p}_Q"], perm=[1, 0, 2])
-        add("ScatterND", [f"past_K_{i}", "_cache_pos_col", f"delta_K_{i}"],
-            [f"{p}_K_static"])
-        add("ScatterND", [f"past_V_{i}", "_cache_pos_col", f"delta_V_{i}"],
-            [f"{p}_V_static"])
+        add(
+            "ScatterND",
+            [f"past_K_{i}", "_cache_pos_col", f"delta_K_{i}"],
+            [f"{p}_K_static"],
+        )
+        add(
+            "ScatterND",
+            [f"past_V_{i}", "_cache_pos_col", f"delta_V_{i}"],
+            [f"{p}_V_static"],
+        )
         add("Transpose", [f"{p}_K_static"], [f"{p}_K_full"], perm=[1, 0, 2])
         add("Transpose", [f"{p}_V_static"], [f"{p}_V_full"], perm=[1, 0, 2])
         add("Transpose", [f"{p}_K_full"], [f"{p}_K_T"], perm=[0, 2, 1])
         add("MatMul", [f"{p}_Q", f"{p}_K_T"], [f"{p}_logits"])
-        add("Where", ["mask_bool_3d", "_f32_causal_sentinel_s", f"{p}_logits"],
-            [f"{p}_logits_masked"])
+        add(
+            "Where",
+            ["mask_bool_3d", "_f32_causal_sentinel_s", f"{p}_logits"],
+            [f"{p}_logits_masked"],
+        )
         add("Softmax", [f"{p}_logits_masked"], [f"{p}_weights"], axis=-1)
         add("MatMul", [f"{p}_weights", f"{p}_V_full"], [f"{p}_ctx"])
         add("Transpose", [f"{p}_ctx"], [f"{p}_ctx_t"], perm=[1, 0, 2])
@@ -204,37 +214,43 @@ def build_variant(variant: str, out_path: Path) -> None:
     ]
     if variant == "slotids":
         graph_inputs.append(
-            helper.make_tensor_value_info("slot_ids", TensorProto.INT64,
-                                          ["cache_slots"])
+            helper.make_tensor_value_info(
+                "slot_ids", TensorProto.INT64, ["cache_slots"]
+            )
         )
     graph_outputs = [
-        helper.make_tensor_value_info("logits", TensorProto.FLOAT,
-                                      ["n_new", VOCAB]),
+        helper.make_tensor_value_info("logits", TensorProto.FLOAT, ["n_new", VOCAB]),
     ]
     for i, nh in enumerate(PER_LAYER_NH):
         graph_inputs += [
-            helper.make_tensor_value_info(f"past_K_{i}", TensorProto.FLOAT,
-                                          [s_dim, nh, D_HEAD]),
-            helper.make_tensor_value_info(f"past_V_{i}", TensorProto.FLOAT,
-                                          [s_dim, nh, D_HEAD]),
+            helper.make_tensor_value_info(
+                f"past_K_{i}", TensorProto.FLOAT, [s_dim, nh, D_HEAD]
+            ),
+            helper.make_tensor_value_info(
+                f"past_V_{i}", TensorProto.FLOAT, [s_dim, nh, D_HEAD]
+            ),
         ]
         graph_outputs += [
-            helper.make_tensor_value_info(f"delta_K_{i}", TensorProto.FLOAT,
-                                          ["n_new", nh, D_HEAD]),
-            helper.make_tensor_value_info(f"delta_V_{i}", TensorProto.FLOAT,
-                                          ["n_new", nh, D_HEAD]),
+            helper.make_tensor_value_info(
+                f"delta_K_{i}", TensorProto.FLOAT, ["n_new", nh, D_HEAD]
+            ),
+            helper.make_tensor_value_info(
+                f"delta_V_{i}", TensorProto.FLOAT, ["n_new", nh, D_HEAD]
+            ),
         ]
 
     import onnx
 
-    graph = helper.make_graph(nodes, f"stride_toy_{variant}", graph_inputs,
-                              graph_outputs, initializer=inits)
+    graph = helper.make_graph(
+        nodes, f"stride_toy_{variant}", graph_inputs, graph_outputs, initializer=inits
+    )
     # opset 14 / IR 8 — the SAME opset the production exporters emit
     # (export.py:813 / export.py:1063); kernel registration and optimizer
     # transforms are opset-versioned, so the de-risk must run what the
     # exporter will actually produce.
     model = helper.make_model(
-        graph, opset_imports=[helper.make_opsetid("", 14)],
+        graph,
+        opset_imports=[helper.make_opsetid("", 14)],
         producer_name="capture_stride_experiments",
     )
     model.ir_version = 8
@@ -262,7 +278,7 @@ class Oracle:
         n = len(token_ids)
         base = self.k[0].shape[0]
         ids = t.tensor(token_ids, dtype=t.int64)
-        pos = w["pos_encoding_full"][base:base + n]
+        pos = w["pos_encoding_full"][base : base + n]
         res = w["W_embed"][ids] + pos
         total = base + n
         # causal mask over the DYNAMIC length (j > p blocked)
@@ -273,7 +289,7 @@ class Oracle:
             q = (res @ w[f"l{i}_WQ"]).reshape(n, PER_LAYER_NH[i], D_HEAD)
             dk = (res @ w[f"l{i}_WK"]).reshape(n, PER_LAYER_NH[i], D_HEAD)
             dv = (res @ w[f"l{i}_WV"]).reshape(n, PER_LAYER_NH[i], D_HEAD)
-            kf = t.cat([self.k[i], dk], 0)   # (total, nh, dh)
+            kf = t.cat([self.k[i], dk], 0)  # (total, nh, dh)
             vf = t.cat([self.v[i], dv], 0)
             self.k[i], self.v[i] = kf, vf
             logits = t.einsum("qhd,khd->hqk", q, kf)
@@ -287,20 +303,26 @@ class Oracle:
 
 
 # --------------------------------------------------------------------------
-# Runtime harness (mirrors render/inference.py binding + run discipline)
+# Runtime harness (mirrors render/onnx_runtime.py binding + run discipline)
 # --------------------------------------------------------------------------
 
 
 def _gpu_used_mb() -> int:
-    out = subprocess.run(
-        ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
-        capture_output=True, text=True,
-    ).stdout.strip().splitlines()[0]
+    out = (
+        subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
+            capture_output=True,
+            text=True,
+        )
+        .stdout.strip()
+        .splitlines()[0]
+    )
     return int(out)
 
 
-def _make_session(path: Path, *, capture: bool, profile: bool = False,
-                  severity: int | None = None):
+def _make_session(
+    path: Path, *, capture: bool, profile: bool = False, severity: int | None = None
+):
     import onnxruntime as ort
 
     so = ort.SessionOptions()
@@ -316,7 +338,8 @@ def _make_session(path: Path, *, capture: bool, profile: bool = False,
     if capture:
         cuda_opts["enable_cuda_graph"] = "1"
     return ort.InferenceSession(
-        str(path), sess_options=so,
+        str(path),
+        sess_options=so,
         providers=[("CUDAExecutionProvider", cuda_opts), "CPUExecutionProvider"],
     )
 
@@ -336,10 +359,12 @@ class BucketRunner:
         self.sess = session
         self.variant = variant
         self.dev = torch.device("cuda", 0)
-        self.k = [torch.zeros(S_MAX, nh, D_HEAD, device=self.dev)
-                  for nh in PER_LAYER_NH]
-        self.v = [torch.zeros(S_MAX, nh, D_HEAD, device=self.dev)
-                  for nh in PER_LAYER_NH]
+        self.k = [
+            torch.zeros(S_MAX, nh, D_HEAD, device=self.dev) for nh in PER_LAYER_NH
+        ]
+        self.v = [
+            torch.zeros(S_MAX, nh, D_HEAD, device=self.dev) for nh in PER_LAYER_NH
+        ]
         self.length = 0
         self.bindings: dict[tuple[int, int], dict] = {}
         self.out_names = ["logits"] + [
@@ -348,8 +373,14 @@ class BucketRunner:
 
     def _bind(self, io, name, tensor, kind, np_dtype):
         b = io.bind_input if kind == "in" else io.bind_output
-        b(name, device_type="cuda", device_id=0, element_type=np_dtype,
-          shape=tuple(tensor.shape), buffer_ptr=tensor.data_ptr())
+        b(
+            name,
+            device_type="cuda",
+            device_id=0,
+            element_type=np_dtype,
+            shape=tuple(tensor.shape),
+            buffer_ptr=tensor.data_ptr(),
+        )
 
     def binding_for(self, s_eff: int, width: int) -> dict:
         key = (s_eff, width)
@@ -378,9 +409,16 @@ class BucketRunner:
             self._bind(io, f"delta_V_{i}", dv, "out", np.float32)
         logits = t.empty(width, VOCAB, device=self.dev)
         self._bind(io, "logits", logits, "out", np.float32)
-        b = {"io": io, "token_ids": token_ids, "cache_position": cache_position,
-             "slot_ids": slot_ids, "dk": dks, "dv": dvs, "logits": logits,
-             "captured": False}
+        b = {
+            "io": io,
+            "token_ids": token_ids,
+            "cache_position": cache_position,
+            "slot_ids": slot_ids,
+            "dk": dks,
+            "dv": dvs,
+            "logits": logits,
+            "captured": False,
+        }
         self.bindings[key] = b
         return b
 
@@ -393,9 +431,16 @@ class BucketRunner:
         self.sess.run_with_iobinding(io, ro)
         self.t.cuda.synchronize()
 
-    def step(self, rows: list[int], s_eff: int, width: int,
-             gpu_graph_id: str, *, persist: bool = True,
-             compare_uncaptured: bool = False) -> tuple:
+    def step(
+        self,
+        rows: list[int],
+        s_eff: int,
+        width: int,
+        gpu_graph_id: str,
+        *,
+        persist: bool = True,
+        compare_uncaptured: bool = False,
+    ) -> tuple:
         """One pass at (s_eff, width); rows padded by repeating the last row.
 
         compare_uncaptured: run id "-1" first on the SAME binding/cache state,
@@ -410,27 +455,31 @@ class BucketRunner:
         b = self.binding_for(s_eff, width)
         padded = rows + [rows[-1]] * (width - n)
         b["token_ids"].copy_(t.tensor(padded, dtype=t.int64))
-        b["cache_position"].copy_(
-            t.arange(base, base + width, dtype=t.int64))
+        b["cache_position"].copy_(t.arange(base, base + width, dtype=t.int64))
         max_diff = None
         if compare_uncaptured:
             self.run(b["io"], "-1")
-            ref = (b["logits"].clone(), [d.clone() for d in b["dk"]],
-                   [d.clone() for d in b["dv"]])
+            ref = (
+                b["logits"].clone(),
+                [d.clone() for d in b["dk"]],
+                [d.clone() for d in b["dv"]],
+            )
         self.run(b["io"], gpu_graph_id)
         if not b["captured"]:
             b["captured"] = True
         if compare_uncaptured:
             diffs = [(b["logits"] - ref[0]).abs().max().item()]
-            diffs += [(b["dk"][i] - ref[1][i]).abs().max().item()
-                      for i in range(N_LAYERS)]
-            diffs += [(b["dv"][i] - ref[2][i]).abs().max().item()
-                      for i in range(N_LAYERS)]
+            diffs += [
+                (b["dk"][i] - ref[1][i]).abs().max().item() for i in range(N_LAYERS)
+            ]
+            diffs += [
+                (b["dv"][i] - ref[2][i]).abs().max().item() for i in range(N_LAYERS)
+            ]
             max_diff = max(diffs)
         if persist:
             for i in range(N_LAYERS):
-                self.k[i][base:base + n] = b["dk"][i][:n]
-                self.v[i][base:base + n] = b["dv"][i][:n]
+                self.k[i][base : base + n] = b["dk"][i][:n]
+                self.v[i][base : base + n] = b["dv"][i][:n]
             self.length = base + n
         return b["logits"][:n].clone(), max_diff
 
@@ -452,21 +501,30 @@ def exp_memcpy(variant: str):
     The verdicts to grep from stderr: 'MemcpyTransformer modified: 0' (or a
     'N Memcpy nodes are added' warning = FAIL), per-node placement lines, and
     whether session creation throws (a surviving Memcpy is a hard error)."""
-    print(f"[memcpy] variant={variant} creating capture session "
-          f"(severity-1 log follows on stderr)", flush=True)
+    print(
+        f"[memcpy] variant={variant} creating capture session "
+        f"(severity-1 log follows on stderr)",
+        flush=True,
+    )
     sess = _make_session(WORK / f"{variant}.onnx", capture=True, severity=1)
-    print(f"[memcpy] variant={variant} session created OK; providers="
-          f"{sess.get_providers()}", flush=True)
+    print(
+        f"[memcpy] variant={variant} session created OK; providers="
+        f"{sess.get_providers()}",
+        flush=True,
+    )
 
 
 def exp_rollout(variant: str, compare_each: bool = True):
     import torch  # noqa: F401
 
     buckets = BUCKETS if variant != "static" else [S_MAX]
-    print(f"[rollout] variant={variant} buckets={buckets} "
-          f"prefill={PREFILL} S_MAX={S_MAX} compare_each={compare_each}")
-    sess = _make_session(WORK / f"{variant}.onnx", capture=True, profile=True,
-                         severity=2)
+    print(
+        f"[rollout] variant={variant} buckets={buckets} "
+        f"prefill={PREFILL} S_MAX={S_MAX} compare_each={compare_each}"
+    )
+    sess = _make_session(
+        WORK / f"{variant}.onnx", capture=True, profile=True, severity=2
+    )
     r = BucketRunner(sess, variant)
     oracle = Oracle()
     rng = np.random.RandomState(123)
@@ -500,16 +558,18 @@ def exp_rollout(variant: str, compare_each: bool = True):
         first = not r.binding_for(s_eff, 1)["captured"]
         if first:
             m_before = _gpu_used_mb()
-        out, rep_diff = r.step([cur], s_eff, 1, str(10 + bidx),
-                               compare_uncaptured=compare_each)
+        out, rep_diff = r.step(
+            [cur], s_eff, 1, str(10 + bidx), compare_uncaptured=compare_each
+        )
         if first:
             captures.append((s, s_eff, _gpu_used_mb() - m_before))
         per_bucket_steps[s_eff] = per_bucket_steps.get(s_eff, 0) + 1
         if rep_diff is not None:
             max_replay_diff = max(max_replay_diff, rep_diff)
         o_out = oracle.step([o_cur])
-        max_oracle_diff = max(max_oracle_diff,
-                              float((out[-1].cpu() - o_out[-1]).abs().max()))
+        max_oracle_diff = max(
+            max_oracle_diff, float((out[-1].cpu() - o_out[-1]).abs().max())
+        )
         cur = int(out[-1].argmax())
         o_cur = int(o_out[-1].argmax())
         stream.append(cur)
@@ -518,19 +578,26 @@ def exp_rollout(variant: str, compare_each: bool = True):
             srt = np.sort(o_out[-1].numpy())
             argmax_diffs.append((s, cur, o_cur, float(srt[-1] - srt[-2])))
             o_cur = cur  # resync on the onnx stream (toy margin tie)
-            oracle.k = [k[:r.length] for k in oracle.k]  # no-op, lengths equal
-    print(f"[rollout] width-1 decode: {n_steps} steps "
-          f"per_bucket={per_bucket_steps}")
+            oracle.k = [k[: r.length] for k in oracle.k]  # no-op, lengths equal
+    print(
+        f"[rollout] width-1 decode: {n_steps} steps " f"per_bucket={per_bucket_steps}"
+    )
     print(f"[rollout] captures (step, S_eff, nvidia-smi delta MB): {captures}")
     if compare_each:
-        print(f"[rollout] max |replay - uncaptured| over all steps: "
-              f"{max_replay_diff:.3e}  (expect 0.0)")
+        print(
+            f"[rollout] max |replay - uncaptured| over all steps: "
+            f"{max_replay_diff:.3e}  (expect 0.0)"
+        )
     else:
-        print("[rollout] pure-replay run (no per-step uncaptured compare); "
-              "correctness rests on the oracle stream below")
+        print(
+            "[rollout] pure-replay run (no per-step uncaptured compare); "
+            "correctness rests on the oracle stream below"
+        )
     print(f"[rollout] max |onnx - oracle| logits: {max_oracle_diff:.3e}")
-    print(f"[rollout] argmax mismatches vs oracle: {len(argmax_diffs)} "
-          f"{argmax_diffs[:5]}")
+    print(
+        f"[rollout] argmax mismatches vs oracle: {len(argmax_diffs)} "
+        f"{argmax_diffs[:5]}"
+    )
     tok_id = "IDENTICAL" if stream == o_stream else "DIVERGED"
     print(f"[rollout] token stream vs oracle: {tok_id} ({len(stream)} tokens)")
 
@@ -540,8 +607,10 @@ def exp_rollout(variant: str, compare_each: bool = True):
     # deltas not persisted — the production width-9 spec-bucket semantics),
     # validated per step against the oracle, which never pads anything.
     if variant != "static":
-        print("[rollout] width-interleave: reset cache, prefill, alternate "
-              "width-1 / width-4(n_real=2) passes across buckets")
+        print(
+            "[rollout] width-interleave: reset cache, prefill, alternate "
+            "width-1 / width-4(n_real=2) passes across buckets"
+        )
         for i in range(N_LAYERS):
             r.k[i].zero_()
             r.v[i].zero_()
@@ -569,28 +638,31 @@ def exp_rollout(variant: str, compare_each: bool = True):
             # rows: current token, then (for n_real=2) the oracle's argmax of
             # it — a draft-like continuation, content otherwise arbitrary.
             rows = [cur] * n_real
-            out, rep_diff = r.step(rows, s_eff, width, gid,
-                                   compare_uncaptured=compare_each)
+            out, rep_diff = r.step(
+                rows, s_eff, width, gid, compare_uncaptured=compare_each
+            )
             if first:
-                wb_captures.append((s, s_eff, width,
-                                    _gpu_used_mb() - m_before))
+                wb_captures.append((s, s_eff, width, _gpu_used_mb() - m_before))
             if rep_diff is not None:
                 max_il_diff = max(max_il_diff, rep_diff)
             o_out = oracle2.step(rows)  # oracle steps ONLY the real rows
-            max_il_oracle = max(
-                max_il_oracle, float((out.cpu() - o_out).abs().max()))
+            max_il_oracle = max(max_il_oracle, float((out.cpu() - o_out).abs().max()))
             if int(out[-1].argmax()) != int(o_out[-1].argmax()):
                 il_argmax_mismatch += 1
             cur = int(out[-1].argmax())
-        print(f"[rollout] interleave captures (step, S_eff, W, MB): "
-              f"{wb_captures}")
-        print(f"[rollout] interleave max |replay - uncaptured|: "
-              f"{max_il_diff:.3e}  (expect 0.0; vacuous if compare_each off)")
-        print(f"[rollout] interleave max |onnx - oracle| (sliced real rows): "
-              f"{max_il_oracle:.3e}; argmax mismatches: {il_argmax_mismatch}")
+        print(f"[rollout] interleave captures (step, S_eff, W, MB): " f"{wb_captures}")
+        print(
+            f"[rollout] interleave max |replay - uncaptured|: "
+            f"{max_il_diff:.3e}  (expect 0.0; vacuous if compare_each off)"
+        )
+        print(
+            f"[rollout] interleave max |onnx - oracle| (sliced real rows): "
+            f"{max_il_oracle:.3e}; argmax mismatches: {il_argmax_mismatch}"
+        )
 
-    print(f"[rollout] total nvidia-smi delta since start: "
-          f"{_gpu_used_mb() - mem0} MB")
+    print(
+        f"[rollout] total nvidia-smi delta since start: " f"{_gpu_used_mb() - mem0} MB"
+    )
 
     # --- replay signature: per-run profile event counts
     prof = sess.end_profiling()
@@ -609,13 +681,14 @@ def exp_rollout(variant: str, compare_each: bool = True):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--exp", required=True,
-                    choices=["build", "memcpy", "rollout"])
-    ap.add_argument("--variant", default="dyn",
-                    choices=["static", "dyn", "slotids"])
-    ap.add_argument("--no-compare", action="store_true",
-                    help="pure replay stream (no per-step uncaptured "
-                         "double-run) — the production-shaped run pattern")
+    ap.add_argument("--exp", required=True, choices=["build", "memcpy", "rollout"])
+    ap.add_argument("--variant", default="dyn", choices=["static", "dyn", "slotids"])
+    ap.add_argument(
+        "--no-compare",
+        action="store_true",
+        help="pure replay stream (no per-step uncaptured "
+        "double-run) — the production-shaped run pattern",
+    )
     args = ap.parse_args()
     if args.exp == "build":
         exp_build()

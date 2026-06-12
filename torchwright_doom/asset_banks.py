@@ -21,7 +21,13 @@ import numpy as np
 
 from .asset_config import FLAT_NAMES, WALL_TEXTURE_NAMES
 from .doom_lighting import NUMCOLORMAPS
-from .wad_assets import DOOM1_WAD_PATH, FLAT_SIZE, AssetBook, load_asset_book
+from .wad_assets import (
+    DOOM1_WAD_PATH,
+    FLAT_SIZE,
+    AssetBook,
+    TextureImage,
+    load_asset_book,
+)
 
 
 def _is_sky_flat(flat_name: str) -> bool:
@@ -85,7 +91,7 @@ class AssetBanks:
 
 
 def _build_wall_banks(asset_book: AssetBook) -> tuple[WallBank, ...]:
-    by_size: dict[tuple[int, int], list[tuple[int, object]]] = {}
+    by_size: dict[tuple[int, int], list[tuple[int, "TextureImage"]]] = {}
     for global_id, texture in enumerate(asset_book.wall_textures, start=1):
         by_size.setdefault((texture.width, texture.height), []).append(
             (global_id, texture)
@@ -226,7 +232,7 @@ def build_asset_banks(
         asset_book=asset_book,
         wall_names=wall_names,
         flat_names=flat_names,
-        playpal=tuple(tuple(int(c) for c in rgb) for rgb in asset_book.palette),
+        playpal=tuple((int(r), int(g), int(b)) for r, g, b in asset_book.palette),
         colormap_rows=tuple(
             tuple(int(v) for v in row) for row in asset_book.colormap[:NUMCOLORMAPS]
         ),

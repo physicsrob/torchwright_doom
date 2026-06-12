@@ -1,19 +1,32 @@
-"""Plan K render harness — run the *compiled* DOOM transformer autoregressively
-to *generate* a frame, decode the generated token stream to pixels, and compare
-against the reference render.
+"""The render runtime — compile the DOOM transformer to ONNX, run it
+autoregressively to *generate* a frame, decode the token stream to pixels,
+and compare against the reference render.
 
-Submodules:
+Submodules (the import graph runs one direction, top to bottom):
+
 - ``tokens_bridge`` — token <-> W_EMBED-row encode/decode + sandbox name bridge.
-- ``compiled_model`` — build + compile the token-id ``forward`` (the artifact).
-- ``pure_ar`` — pure autoregressive rollout over ``compiled.step`` (Step 1).
-- ``spec_decode`` — speculative decoding driven by the reference drafter (Step 2),
-  a strict optimization that is bit-identical to ``pure_ar``.
+- ``kv_cache`` — the runtime-owned static :class:`KVCache` + the windowed
+  permanent/expiring slot-placement policy (the HF-StaticCache analog).
+- ``generation`` — :class:`TokenRuntime`, the ABC every generation loop runs
+  on (chunked prefill, pure AR, speculative decode as methods — the
+  GenerationMixin analog).
+- ``onnx_runtime`` — :class:`OnnxTokenRuntime`, the one production runtime:
+  ORT session ownership, CUDA-graph-captured IO bindings, the step paths.
+- ``compiled_model`` — build the forward graph + compile it to the artifact.
+- ``compile_cache`` — the on-disk compile-artifact cache (key = config +
+  git SHAs) + the ``OnnxDebugSession`` loader.
+- ``config`` / ``wad_scene`` — YAML job config; WAD-backed scene + the
+  sandbox adapter and ``reference_stream``.
 - ``decode`` — generated token stream -> screen pixel buffer (dumb host).
 - ``compare`` — fetch the reference render + report image-level agreement stats.
 - ``artifacts`` — write ``token_dump.json`` + the PNGs.
-- ``diagnostic`` — teacher-forced + ``probe_compiled`` divergence localizer.
+- ``diagnostic`` — chunked teacher-forced divergence localizer.
 
-Everything except the CLI is a side-effect-free library of pure functions; all
-``doom_sandbox`` imports are lazy so ``torchwright_doom`` stays importable in a
-standalone checkout.
+This package deliberately re-exports nothing: ``embedding`` builds the
+screen-sized vocab AT IMPORT, so callers must ``apply_screen_env(config)``
+before importing the modules that reach it (``tokens_bridge``,
+``compiled_model``, ``compile_cache``) — the runtime trio
+(``kv_cache``/``generation``/``onnx_runtime``) is import-clean by design.
+All ``doom_sandbox`` imports are lazy so ``torchwright_doom`` stays
+importable in a standalone checkout.
 """

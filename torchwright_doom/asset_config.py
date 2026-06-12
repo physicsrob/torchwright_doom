@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-WALL_TEXTURE_NAMES = (
+WALL_TEXTURE_NAMES: tuple[str, ...] = (
     "BROWN1",
     "BROWN144",
     "COMPUTE2",
@@ -32,7 +32,7 @@ WALL_TEXTURE_NAMES = (
     "SUPPORT2",
 )
 
-FLAT_NAMES = (
+FLAT_NAMES: tuple[str, ...] = (
     "CEIL3_5",
     "FLAT14",
     "FLAT5_5",

@@ -27,7 +27,7 @@ def compile_config(
     config_path = Path(config_path)
     config = load_render_config(config_path)
     apply_screen_env(config)
-    from .cache import compile_cached
+    from .compile_cache import compile_cached
 
     cache_dir = compile_cached(
         config,
@@ -76,9 +76,8 @@ def run_config(
 
     from ..vocab import DONE
     from . import artifacts, compare as compare_mod
-    from .cache import compile_cached, load_cached_runtime
+    from .compile_cache import compile_cached, load_cached_runtime
     from .decode import decode_rows_to_pixels
-    from .inference import pure_ar_rollout
     from .tokens_bridge import row_index
     from .wad_scene import (
         load_render_scene,
@@ -130,8 +129,7 @@ def run_config(
     spec = None
     spec_stats: dict[str, Any] | None = None
     if mode in ("pure_ar", "both"):
-        pure = pure_ar_rollout(
-            compiled,
+        pure = compiled.pure_ar_rollout(
             prefill_ids,
             max_positions=max_positions,
             terminal_row=terminal_row,
@@ -153,10 +151,7 @@ def run_config(
     if mode in ("spec_decode", "both"):
         from doom_sandbox.implementation.reference_drafter import ARDrafter
 
-        from .inference import spec_decode_rollout
-
-        spec, spec_stats = spec_decode_rollout(
-            compiled,
+        spec, spec_stats = compiled.spec_decode_rollout(
             prefill_ids,
             ARDrafter(sb_scene, sb_pose),
             max_positions=max_positions,
@@ -317,11 +312,12 @@ def _assert_streams_equivalent(spec_rows: list[int], pure_rows: list[int]) -> li
     from ..embedding import TOKEN_VOCAB
     from ..vocab import VALUE
 
-    assert len(spec_rows) == len(pure_rows), (
-        f"spec-decode and pure-AR emitted different lengths: "
-        f"{len(spec_rows)} vs {len(pure_rows)} (first diff at "
-        f"{_first_diff(spec_rows, pure_rows)})"
-    )
+    if len(spec_rows) != len(pure_rows):
+        raise RuntimeError(
+            f"spec-decode and pure-AR emitted different lengths: "
+            f"{len(spec_rows)} vs {len(pure_rows)} (first diff at "
+            f"{_first_diff(spec_rows, pure_rows)})"
+        )
     ties: list[int] = []
     propagated: list[tuple[int, str, str]] = []
     for i, (s, p) in enumerate(zip(spec_rows, pure_rows)):
@@ -332,10 +328,11 @@ def _assert_streams_equivalent(spec_rows: list[int], pure_rows: list[int]) -> li
         # Positionwise TYPE alignment is the hard invariant: a spec-decode
         # machinery bug (wrong commit, stale cache row) cascades — every
         # subsequent token shifts and the types misalign immediately.
-        assert s_type is p_type, (
-            f"spec-decode structurally diverged from pure-AR at {i}: "
-            f"{s_type.name} vs {p_type.name} (rows {s} vs {p})"
-        )
+        if s_type is not p_type:
+            raise RuntimeError(
+                f"spec-decode structurally diverged from pure-AR at {i}: "
+                f"{s_type.name} vs {p_type.name} (rows {s} vs {p})"
+            )
         if s_type is VALUE:
             ties.append(i)
         else:
@@ -352,11 +349,12 @@ def _assert_streams_equivalent(spec_rows: list[int], pure_rows: list[int]) -> li
             f"spec {s_txt}",
             flush=True,
         )
-    assert len(propagated) <= _PROPAGATED_TIE_BUDGET, (
-        f"{len(propagated)} non-value token diffs exceeds the propagated-tie "
-        f"budget ({_PROPAGATED_TIE_BUDGET}) — treat as a real divergence: "
-        f"{propagated[:4]}"
-    )
+    if len(propagated) > _PROPAGATED_TIE_BUDGET:
+        raise RuntimeError(
+            f"{len(propagated)} non-value token diffs exceeds the propagated-tie "
+            f"budget ({_PROPAGATED_TIE_BUDGET}) — treat as a real divergence: "
+            f"{propagated[:4]}"
+        )
     return ties + [i for i, _, _ in propagated]
 
 

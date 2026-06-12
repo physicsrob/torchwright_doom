@@ -44,7 +44,6 @@ from torchwright.ops.inout_nodes import create_input, create_pos_encoding
 from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
 from torchwright_doom.past import GraphPast
 from torchwright_doom.render.compiled_model import build_graph
-from torchwright_doom.render.inference import argmax_rows
 from torchwright_doom.render.tokens_bridge import rows_to_input
 from torchwright_doom.render_main import forward
 from torchwright_doom.vocab import NO_OP
@@ -61,6 +60,15 @@ from ..prefill_fixture import TINY_BSP_SCENE, row_index
 _D = 4096
 _D_HEAD = 32
 _MAX_STEPS = 8  # plenty for set_cursor + side precompute + descent on a 1-node scene
+
+
+def _argmax_rows(outputs: torch.Tensor) -> list[int]:
+    """Unembed-argmax for the in-process gate: ``compile_headless`` outputs
+    are embedding-width rows, decoded against ``W_EMBED.T`` host-side.
+    (Production runtimes return logits and argmax directly —
+    ``render.generation.argmax_rows``.)"""
+    wt = W_EMBED.t().to(outputs.device, outputs.dtype)
+    return (outputs.detach() @ wt).argmax(dim=-1).cpu().tolist()
 
 
 def _decode_type(row: int) -> str:
@@ -115,7 +123,7 @@ def _compiled_rollout(prefill_ids: list[int], device) -> list[int]:
     """Free-run the compiled transformer: ids in, argmax out, id fed back.
 
     The gate owns its own AR loop: the shipped rollout harness
-    (``render.inference``) speaks only the production owned-``KVCache``
+    (``render.generation``) speaks only the production owned-``KVCache``
     protocol (and is covered there by ``tests/render/test_spec_decode_logic.py``
     + ``test_windowed_cache.py``), while ``compile_headless`` threads
     grow-per-step KV tuples.  This test's job is the compiled-vs-exact-math
@@ -123,12 +131,14 @@ def _compiled_rollout(prefill_ids: list[int], device) -> list[int]:
     """
     compiled, _ = _build_compiled(device, d=_D, d_head=_D_HEAD, max_layers=200)
     terminal = row_index(NO_OP, {})
-    out, past = compiled.step(rows_to_input(prefill_ids), compiled.empty_past(), past_len=0)
-    emitted = [argmax_rows(out[-1:])[0]]
+    out, past = compiled.step(
+        rows_to_input(prefill_ids), compiled.empty_past(), past_len=0
+    )
+    emitted = [_argmax_rows(out[-1:])[0]]
     while emitted[-1] != terminal and len(emitted) < _MAX_STEPS:
         pos = len(prefill_ids) + len(emitted) - 1
         out, past = compiled.step(rows_to_input([emitted[-1]]), past, past_len=pos)
-        emitted.append(argmax_rows(out[-1:])[0])
+        emitted.append(_argmax_rows(out[-1:])[0])
     return emitted
 
 

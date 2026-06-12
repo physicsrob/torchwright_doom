@@ -34,6 +34,8 @@ from .vocab import (
 )
 
 if TYPE_CHECKING:
+    from torchwright.graph.node import Node
+
     from .seg_projection import SegProjection
 
 
@@ -138,9 +140,7 @@ class FlatPassRenderer:
         )
 
     def after_span_row(self) -> "Node":
-        return make_token_head(
-            SET_CURSOR_Y, y=self.projection.core.inp.span_row_y
-        )
+        return make_token_head(SET_CURSOR_Y, y=self.projection.core.inp.span_row_y)
 
     def after_make_spans_without_close(self) -> "Node":
         projection = self.projection
@@ -168,9 +168,7 @@ class FlatPassRenderer:
                 select(
                     closure.is_sentinel,
                     make_token_head(FLAT_NEXT_VP, p=flat.p, vp=flat.vp),
-                    make_token_head(
-                        MAKE_SPANS_COL, x=add_const(closure.make_x, 1.0)
-                    ),
+                    make_token_head(MAKE_SPANS_COL, x=add_const(closure.make_x, 1.0)),
                 ),
             ),
         )
