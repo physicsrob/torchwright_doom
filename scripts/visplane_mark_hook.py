@@ -16,7 +16,9 @@ TP, TVP = 1, 1
 def main() -> int:
     from torchwright_doom.render.config import apply_screen_env, load_render_config
     from torchwright_doom.render.wad_scene import (
-        load_render_scene, pose_from_world, sandbox_scene_for,
+        load_render_scene,
+        pose_from_world,
+        sandbox_scene_for,
     )
 
     cfg = load_render_config(CONFIG)
@@ -31,23 +33,53 @@ def main() -> int:
     captured = []  # (x, yl, yh, cc, fc, markceiling, markfloor, cpid, cvp, fpid, fvp)
     orig_marks = ref._append_plane_marks
 
-    def patched_marks(*, plane_marks, x, yl, yh, ceilingclip, floorclip,
-                      markceiling, markfloor, ceiling_plane_id, ceiling_vp,
-                      floor_plane_id, floor_vp, runtime_visplanes):
-        if ((ceiling_plane_id == TP and ceiling_vp == TVP)
-                or (floor_plane_id == TP and floor_vp == TVP)):
-            captured.append(dict(
-                x=x, yl=yl, yh=yh, cc=ceilingclip, fc=floorclip,
-                markceiling=markceiling, markfloor=markfloor,
-                cpid=ceiling_plane_id, cvp=ceiling_vp,
-                fpid=floor_plane_id, fvp=floor_vp,
-            ))
+    def patched_marks(
+        *,
+        plane_marks,
+        x,
+        yl,
+        yh,
+        ceilingclip,
+        floorclip,
+        markceiling,
+        markfloor,
+        ceiling_plane_id,
+        ceiling_vp,
+        floor_plane_id,
+        floor_vp,
+        runtime_visplanes,
+    ):
+        if (ceiling_plane_id == TP and ceiling_vp == TVP) or (
+            floor_plane_id == TP and floor_vp == TVP
+        ):
+            captured.append(
+                dict(
+                    x=x,
+                    yl=yl,
+                    yh=yh,
+                    cc=ceilingclip,
+                    fc=floorclip,
+                    markceiling=markceiling,
+                    markfloor=markfloor,
+                    cpid=ceiling_plane_id,
+                    cvp=ceiling_vp,
+                    fpid=floor_plane_id,
+                    fvp=floor_vp,
+                )
+            )
         return orig_marks(
-            plane_marks=plane_marks, x=x, yl=yl, yh=yh,
-            ceilingclip=ceilingclip, floorclip=floorclip,
-            markceiling=markceiling, markfloor=markfloor,
-            ceiling_plane_id=ceiling_plane_id, ceiling_vp=ceiling_vp,
-            floor_plane_id=floor_plane_id, floor_vp=floor_vp,
+            plane_marks=plane_marks,
+            x=x,
+            yl=yl,
+            yh=yh,
+            ceilingclip=ceilingclip,
+            floorclip=floorclip,
+            markceiling=markceiling,
+            markfloor=markfloor,
+            ceiling_plane_id=ceiling_plane_id,
+            ceiling_vp=ceiling_vp,
+            floor_plane_id=floor_plane_id,
+            floor_vp=floor_vp,
             runtime_visplanes=runtime_visplanes,
         )
 
@@ -78,8 +110,10 @@ def main() -> int:
             fm_top = max(0, fm_top)
             fm_bot = min(ref.SCREEN_HEIGHT - 1, c["fc"] - 1)
             which.append(f"FLOOR(top={fm_top},bot={fm_bot},occ={fm_top<=fm_bot})")
-        print(f"  x={c['x']:3d} yl={c['yl']:3d} yh={c['yh']:3d} cc={c['cc']:3d} fc={c['fc']:3d} "
-              f"mc={int(c['markceiling'])} mf={int(c['markfloor'])}  {' '.join(which)}")
+        print(
+            f"  x={c['x']:3d} yl={c['yl']:3d} yh={c['yh']:3d} cc={c['cc']:3d} fc={c['fc']:3d} "
+            f"mc={int(c['markceiling'])} mf={int(c['markfloor'])}  {' '.join(which)}"
+        )
 
     print(f"\nfinal table (occupied cols x: top..bottom):")
     if table:

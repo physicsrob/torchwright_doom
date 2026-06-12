@@ -43,14 +43,21 @@ def main(argv: list[str] | None = None) -> int:
         help="compiled cache entry holding model.onnx "
         "(default: the config's own cache key)",
     )
-    p.add_argument("--pos", type=int, default=2450,
-                   help="input stream position whose prediction diverges")
+    p.add_argument(
+        "--pos",
+        type=int,
+        default=2450,
+        help="input stream position whose prediction diverges",
+    )
     p.add_argument("--x", type=float, help="world pose (default: config default pose)")
     p.add_argument("--y", type=float)
     p.add_argument("--angle", type=int)
     p.add_argument("--viewz", type=float)
-    p.add_argument("--phase2", action="store_true",
-                   help="run the per-node oracle compare even if no assert fires")
+    p.add_argument(
+        "--phase2",
+        action="store_true",
+        help="run the per-node oracle compare even if no assert fires",
+    )
     p.add_argument("--atol", type=float, default=1e-2)
     args = p.parse_args(argv)
 
@@ -90,9 +97,12 @@ def main(argv: list[str] | None = None) -> int:
     POS = args.pos
     expected_next = full_rows[POS + 1]
     exp_t, exp_v = TOKEN_VOCAB.row_to_token[expected_next]
-    print(f"[probe] {config_path.name} pose=({sb_pose.x:g}, {sb_pose.y:g}, "
-          f"a{sb_pose.angle}) prefill={len(prefill_rows)} pos={POS} "
-          f"expected next = {exp_t.name} {exp_v} (row {expected_next})", flush=True)
+    print(
+        f"[probe] {config_path.name} pose=({sb_pose.x:g}, {sb_pose.y:g}, "
+        f"a{sb_pose.angle}) prefill={len(prefill_rows)} pos={POS} "
+        f"expected next = {exp_t.name} {exp_v} (row {expected_next})",
+        flush=True,
+    )
 
     # Locate the cached artifact (never compile — that's a Modal-scale job).
     wad_path = resolve_wad_path(config, base_dir=config_path.parent)
@@ -128,10 +138,14 @@ def main(argv: list[str] | None = None) -> int:
     past = session.empty_past()
     _, past = session.step(rows_to_input(full_rows[:POS]), past, past_len=0)
 
-    print("\n[probe] Phase 1: debug=True step at POS (checks all Asserts) ...", flush=True)
+    print(
+        "\n[probe] Phase 1: debug=True step at POS (checks all Asserts) ...", flush=True
+    )
     fired = None
     try:
-        out, _ = session.step(rows_to_input([full_rows[POS]]), past, past_len=POS, debug=True)
+        out, _ = session.step(
+            rows_to_input([full_rows[POS]]), past, past_len=POS, debug=True
+        )
     except AssertionError as e:
         fired = str(e)
         print(f"[probe] ASSERT FIRED at POS {POS}:\n{fired}", flush=True)
@@ -141,20 +155,29 @@ def main(argv: list[str] | None = None) -> int:
     compiled_logits = out[-1].detach().float()
     pred_row = int(torch.argmax(compiled_logits).item())
     pred_t, pred_v = TOKEN_VOCAB.row_to_token[pred_row]
-    print(f"[probe] compiled prediction at POS {POS}: {pred_t.name} {pred_v} (row {pred_row})"
-          f"  {'== expected' if pred_row == expected_next else '!= expected (DIVERGES)'}",
-          flush=True)
+    print(
+        f"[probe] compiled prediction at POS {POS}: {pred_t.name} {pred_v} (row {pred_row})"
+        f"  {'== expected' if pred_row == expected_next else '!= expected (DIVERGES)'}",
+        flush=True,
+    )
 
     if fired is not None and not args.phase2:
-        print("[probe] localized via assert (Phase 1). Pass --phase2 for the node compare.")
+        print(
+            "[probe] localized via assert (Phase 1). Pass --phase2 for the node compare."
+        )
         return 0
 
-    print("\n[probe] Phase 2: per-node compiled-vs-oracle compare at POS ...", flush=True)
+    print(
+        "\n[probe] Phase 2: per-node compiled-vs-oracle compare at POS ...", flush=True
+    )
     import torchwright.graph.misc as _misc
+
     _orig = _misc.Assert._check
     _misc.Assert._check = lambda self, x: None
     try:
-        oracle = reference_eval(next_token, {"token_ids": rows_to_input(full_rows[:POS + 1])}, POS + 1)
+        oracle = reference_eval(
+            next_token, {"token_ids": rows_to_input(full_rows[: POS + 1])}, POS + 1
+        )
     finally:
         _misc.Assert._check = _orig
 
@@ -162,21 +185,30 @@ def main(argv: list[str] | None = None) -> int:
     # Compare the compiled logits row to the exact one at POS (exact side via
     # the oracle's output embedding @ W_EMBED.T), and look at both argmax
     # margins over the two contending rows.
-    exact_logits = (oracle[next_token][POS].detach().float() @ W_EMBED.t().float())
+    exact_logits = oracle[next_token][POS].detach().float() @ W_EMBED.t().float()
     logit_linf = (compiled_logits - exact_logits).abs().max().item()
     print(f"\n[probe] Phase 3: logits compiled-vs-exact  L_inf={logit_linf:.4g}")
     for label, logits in (("compiled", compiled_logits), ("exact   ", exact_logits)):
         top = torch.topk(logits, 3)
         rows = top.indices.tolist()
         vals = top.values.tolist()
-        decoded = [f"{TOKEN_VOCAB.row_to_token[r][0].name}{TOKEN_VOCAB.row_to_token[r][1]}" for r in rows]
-        print(f"  {label} top-3: " + ", ".join(
-            f"{d}(row {r}, logit {v:.6g})" for d, r, v in zip(decoded, rows, vals)))
+        decoded = [
+            f"{TOKEN_VOCAB.row_to_token[r][0].name}{TOKEN_VOCAB.row_to_token[r][1]}"
+            for r in rows
+        ]
+        print(
+            f"  {label} top-3: "
+            + ", ".join(
+                f"{d}(row {r}, logit {v:.6g})" for d, r, v in zip(decoded, rows, vals)
+            )
+        )
     # Margin between the expected and predicted rows, both ways.
     for label, l in (("compiled", compiled_logits), ("exact   ", exact_logits)):
-        print(f"  {label} logit[expected row {expected_next}]={l[expected_next].item():.6g}  "
-              f"logit[predicted row {pred_row}]={l[pred_row].item():.6g}  "
-              f"margin(exp-pred)={(l[expected_next]-l[pred_row]).item():.6g}")
+        print(
+            f"  {label} logit[expected row {expected_next}]={l[expected_next].item():.6g}  "
+            f"logit[predicted row {pred_row}]={l[pred_row].item():.6g}  "
+            f"margin(exp-pred)={(l[expected_next]-l[pred_row]).item():.6g}"
+        )
 
     # Topological order: reference_eval inserts nodes as it computes them, so dict
     # order is a valid topological order (inputs before consumers).
@@ -199,15 +231,21 @@ def main(argv: list[str] | None = None) -> int:
         if err > args.atol:
             diffs.append((node, err, c, o))
 
-    print(f"[probe] nodes diverging > {args.atol} at POS {POS}: {len(diffs)}", flush=True)
+    print(
+        f"[probe] nodes diverging > {args.atol} at POS {POS}: {len(diffs)}", flush=True
+    )
     for node, err, c, o in diffs[:15]:
         name = getattr(node, "name", None) or type(node).__name__
-        print(f"  {type(node).__name__:20s} {str(name)[:40]:40s} err={err:.4g} "
-              f"compiled={_short(c)} oracle={_short(o)}")
+        print(
+            f"  {type(node).__name__:20s} {str(name)[:40]:40s} err={err:.4g} "
+            f"compiled={_short(c)} oracle={_short(o)}"
+        )
     if diffs:
         node, err, c, o = diffs[0]
-        print(f"\n[probe] FIRST divergent node (topo): {type(node).__name__} "
-              f"{getattr(node,'name',None)} err={err:.4g}")
+        print(
+            f"\n[probe] FIRST divergent node (topo): {type(node).__name__} "
+            f"{getattr(node,'name',None)} err={err:.4g}"
+        )
     return 0
 
 

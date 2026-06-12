@@ -251,7 +251,8 @@ class WallColumnRenderScalars:
     ) -> PastHandle:
         zero_value = constant(0.0)
         dc_iscale_at_publish_point = past.attend_to_offset(
-            column_scale_inv_or_zero, delta_pos=-1,
+            column_scale_inv_or_zero,
+            delta_pos=-1,
         )
         wallcol_dc_iscale_value = select(
             inp.screen_y_after_wall_column_scale,
@@ -259,7 +260,8 @@ class WallColumnRenderScalars:
             zero_value,
         )
         scale_diminish_at_publish_point = past.attend_to_offset(
-            column_scale_diminish_or_zero, delta_pos=-1,
+            column_scale_diminish_or_zero,
+            delta_pos=-1,
         )
         colormap_row_index = clamp(
             vec_sum(
@@ -281,7 +283,8 @@ class WallColumnRenderScalars:
             inp.wall_col_u_idx,
         )
         u_idx_at_wall_col_u = past.attend_to_offset(
-            input_wall_col_u_idx_or_zero, delta_pos=-2,
+            input_wall_col_u_idx_or_zero,
+            delta_pos=-2,
         )
         return past.publish(
             "wallcol_render_state",
@@ -534,7 +537,10 @@ class SegProjection:
         # Phase 11 — seg facts + wall-column render scalars. At SEG_KPART rows the
         # lifted seg key comes from the most recent R_STORE_WALL_RANGE row.
         seg_facts = SegLevelFacts.publish(
-            past, inp, scene, seg_key_at_kpart_row=recent_drawseg.store_key,
+            past,
+            inp,
+            scene,
+            seg_key_at_kpart_row=recent_drawseg.store_key,
         )
         wallcol_render_state = WallColumnRenderScalars.publish(
             past,

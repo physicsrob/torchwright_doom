@@ -61,16 +61,17 @@ if TYPE_CHECKING:
 
 def _scale_matrix(width: int, scale: float) -> list[list[float]]:
     return [
-        [scale if row == col else 0.0 for col in range(width)]
-        for row in range(width)
+        [scale if row == col else 0.0 for col in range(width)] for row in range(width)
     ]
 
 
 _INSTANCE_IDX_LINEAR = [[float(N_VP_PER_PLANE_MAX)], [1.0]]
 _OCC_VP_SCALE = _scale_matrix(N_VP_PER_PLANE_MAX, 128.0)
 _USED_VP_ABOVE = [
-    [1.0 if vp > (threshold_idx - 1) else 0.0
-     for threshold_idx in range(N_VP_PER_PLANE_MAX + 1)]
+    [
+        1.0 if vp > (threshold_idx - 1) else 0.0
+        for threshold_idx in range(N_VP_PER_PLANE_MAX + 1)
+    ]
     for vp in range(N_VP_PER_PLANE_MAX + 1)
 ]
 _USED_VP_THRESHOLD_SCALE = _scale_matrix(N_VP_PER_PLANE_MAX + 1, 16.0)
@@ -100,12 +101,10 @@ _INSTANCE_BREAKPOINTS = list(range(N_VISPLANE_MAX))
 #   _LO_GE_TABLE[lo][k]  = I(lo >= k)  — INCLUSIVE lower bound for H1 (c >= x1).
 #   _HI_ABOVE_TABLE[hi][t]= I(hi > t)  — STRICT next-bucket test for H2.
 _LO_GE_TABLE = [
-    [1.0 if lo >= k else 0.0 for k in range(_RADIX_BASE)]
-    for lo in range(_RADIX_BASE)
+    [1.0 if lo >= k else 0.0 for k in range(_RADIX_BASE)] for lo in range(_RADIX_BASE)
 ]
 _HI_ABOVE_TABLE = [
-    [1.0 if hi > t else 0.0 for t in range(_N_BUCKETS)]
-    for hi in range(_N_BUCKETS)
+    [1.0 if hi > t else 0.0 for t in range(_N_BUCKETS)] for hi in range(_N_BUCKETS)
 ]
 
 # --- Plane-id radix (min_x / max_x / next_vp_after / next_plane_after) --------
@@ -474,7 +473,9 @@ class RuntimeVisplaneState:
             snap_bool(same_valid),
             compare(pick_by_one_hot(hi1_bucket_oh, same_bucket_oh), PRESENT_THRESHOLD),
             compare(pick_by_one_hot(lo1_threshold, same_lo_ge), PRESENT_THRESHOLD),
-            compare(pick_by_one_hot(query_instance_oh, same_inst_oh), PRESENT_THRESHOLD),
+            compare(
+                pick_by_one_hot(query_instance_oh, same_inst_oh), PRESENT_THRESHOLD
+            ),
         )
 
         # H2 — next bucket: smallest bucket strictly above hi1 that this instance
@@ -493,7 +494,9 @@ class RuntimeVisplaneState:
         )
         higher_present = bool_and(
             snap_bool(higher_valid),
-            compare(pick_by_one_hot(query_instance_oh, higher_inst_oh), PRESENT_THRESHOLD),
+            compare(
+                pick_by_one_hot(query_instance_oh, higher_inst_oh), PRESENT_THRESHOLD
+            ),
             compare(pick_by_one_hot(hi1_threshold, higher_hi_above), PRESENT_THRESHOLD),
         )
         higher_bucket_oh = one_hot(
@@ -517,8 +520,12 @@ class RuntimeVisplaneState:
         carry_present = bool_and(
             higher_present,
             snap_bool(carry_valid),
-            compare(pick_by_one_hot(higher_bucket_oh, carry_bucket_oh), PRESENT_THRESHOLD),
-            compare(pick_by_one_hot(query_instance_oh, carry_inst_oh), PRESENT_THRESHOLD),
+            compare(
+                pick_by_one_hot(higher_bucket_oh, carry_bucket_oh), PRESENT_THRESHOLD
+            ),
+            compare(
+                pick_by_one_hot(query_instance_oh, carry_inst_oh), PRESENT_THRESHOLD
+            ),
         )
 
         # c* = smallest instance column >= x1: the same-bucket hit if present,
@@ -548,9 +555,7 @@ class RuntimeVisplaneState:
         query_bucket_oh = one_hot(query_hi, _PLANE_N_BUCKETS)
         # Digit threshold shifted +1: slot 0 = "above -1" (find-first), slots
         # 1..B = "above 0..B-1". So threshold == -1 -> query_lo == -1 -> slot 0.
-        query_lo_threshold = one_hot(
-            add_const(query_lo, 1.0), _PLANE_RADIX_BASE + 1
-        )
+        query_lo_threshold = one_hot(add_const(query_lo, 1.0), _PLANE_RADIX_BASE + 1)
 
         same = past.pick_argmin_above_in_bucket(
             up.lo,
@@ -566,8 +571,12 @@ class RuntimeVisplaneState:
         )
         same_present = bool_and(
             snap_bool(same_valid),
-            compare(pick_by_one_hot(query_bucket_oh, same_bucket_oh), PRESENT_THRESHOLD),
-            compare(pick_by_one_hot(query_lo_threshold, same_above_lo), PRESENT_THRESHOLD),
+            compare(
+                pick_by_one_hot(query_bucket_oh, same_bucket_oh), PRESENT_THRESHOLD
+            ),
+            compare(
+                pick_by_one_hot(query_lo_threshold, same_above_lo), PRESENT_THRESHOLD
+            ),
         )
 
         higher_hi = past.pick_argmin_above(
@@ -596,7 +605,9 @@ class RuntimeVisplaneState:
         carry_present = bool_and(
             higher_is_real,
             snap_bool(carry_valid),
-            compare(pick_by_one_hot(higher_bucket_query, carry_bucket_oh), PRESENT_THRESHOLD),
+            compare(
+                pick_by_one_hot(higher_bucket_query, carry_bucket_oh), PRESENT_THRESHOLD
+            ),
         )
 
         return select(
@@ -606,7 +617,9 @@ class RuntimeVisplaneState:
         )
 
     # DOOM: R_DrawPlanes (r_plane.c) — nested iteration over a plane's visplane instances (merge slots)
-    def next_vp_after(self, past: PastHandleScope, plane_id: Node, threshold: Node) -> Node:
+    def next_vp_after(
+        self, past: PastHandleScope, plane_id: Node, threshold: Node
+    ) -> Node:
         one = constant(1.0)
         threshold_idx = add_const(threshold, 1.0)
         query = concat(
@@ -728,9 +741,7 @@ def _publish_used_plane_successor(
     plane_lo = mod_const(used_plane_value_raw, _PLANE_RADIX_BASE, N_PLANES_MAX)
     bucket_onehot = one_hot(plane_hi, _PLANE_N_BUCKETS)
     above_lo = linear(one_hot(plane_lo, _PLANE_RADIX_BASE), _PLANE_LO_ABOVE_TABLE)
-    hi_for_h2 = select(
-        used_plane_active, plane_hi, constant(float(_PLANE_INVALID_HI))
-    )
+    hi_for_h2 = select(used_plane_active, plane_hi, constant(float(_PLANE_INVALID_HI)))
     hi_above_for_h2 = linear(
         one_hot(hi_for_h2, _PLANE_N_BUCKETS + 1),
         _PLANE_HI_FOR_H2_ABOVE_TABLE,

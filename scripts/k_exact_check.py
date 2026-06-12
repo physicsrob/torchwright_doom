@@ -20,10 +20,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--fixture", default="e1m1_subset_textured")
     p.add_argument("--pose", type=int, default=0)
     p.add_argument("--window", type=int, default=2460)
-    p.add_argument("--graph", choices=["iv", "token_ids"], default="iv",
-                   help="iv = pre-embedded input (J2 setup); token_ids = in-graph Embedding")
-    p.add_argument("--float64", action="store_true",
-                   help="run reference_eval at float64 (causal test of float32 near-tie)")
+    p.add_argument(
+        "--graph",
+        choices=["iv", "token_ids"],
+        default="iv",
+        help="iv = pre-embedded input (J2 setup); token_ids = in-graph Embedding",
+    )
+    p.add_argument(
+        "--float64",
+        action="store_true",
+        help="run reference_eval at float64 (causal test of float32 near-tie)",
+    )
     args = p.parse_args(argv)
 
     os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
@@ -48,11 +55,16 @@ def main(argv: list[str] | None = None) -> int:
     from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED, build_doom_embedding
     from torchwright_doom.past import GraphPast
     from torchwright_doom.render_main import forward
-    from torchwright_doom.render.tokens_bridge import rows_to_input, sandbox_token_to_row
+    from torchwright_doom.render.tokens_bridge import (
+        rows_to_input,
+        sandbox_token_to_row,
+    )
 
     scene = fixtures.load_fixture(args.fixture)
     pose = scene.test_poses[args.pose]
-    prefill_rows = [sandbox_token_to_row(t) for t in sb_prefill.get_prefill(scene, pose)]
+    prefill_rows = [
+        sandbox_token_to_row(t) for t in sb_prefill.get_prefill(scene, pose)
+    ]
     ar_rows = [sandbox_token_to_row(t) for t in drafter.expected_ar_tokens(scene, pose)]
     full_rows = prefill_rows + ar_rows
     begin = len(prefill_rows) - 1
@@ -67,8 +79,11 @@ def main(argv: list[str] | None = None) -> int:
         # In-graph token-id Embedding (the compiled K artifact's input path).
         in_node = build_doom_embedding("token_ids")
         inputs = {"token_ids": rows_to_input(full_rows[:n])}
-    next_token = forward(in_node, GraphPast(input_vec=in_node, pos_encoding=create_pos_encoding()),
-                         create_pos_encoding())
+    next_token = forward(
+        in_node,
+        GraphPast(input_vec=in_node, pos_encoding=create_pos_encoding()),
+        create_pos_encoding(),
+    )
 
     _orig = _misc.Assert._check
     _misc.Assert._check = lambda self, x: None
@@ -96,20 +111,28 @@ def main(argv: list[str] | None = None) -> int:
             if first is None:
                 first = (i, exp_type, exp_v, exp_row, pred_type.name, pred_v, pred_row)
             if n_marker_mismatch <= 6:
-                print(f"  marker mismatch pos {i} (rollout {i - begin}): expected "
-                      f"{exp_type}{exp_v} (row {exp_row}) -> exact-math graph "
-                      f"{pred_type.name}{pred_v} (row {pred_row})")
+                print(
+                    f"  marker mismatch pos {i} (rollout {i - begin}): expected "
+                    f"{exp_type}{exp_v} (row {exp_row}) -> exact-math graph "
+                    f"{pred_type.name}{pred_v} (row {pred_row})"
+                )
 
-    print(f"\n[exact-check] {args.fixture} pose={args.pose} window={n} "
-          f"marker mismatches in exact math: {n_marker_mismatch}")
+    print(
+        f"\n[exact-check] {args.fixture} pose={args.pose} window={n} "
+        f"marker mismatches in exact math: {n_marker_mismatch}"
+    )
     if first:
         i, et, ev, er, pt, pv, pr = first
-        print(f"[exact-check] FIRST marker mismatch at pos {i} (rollout {i - begin}): "
-              f"expected {et}{ev} -> exact-math graph {pt}{pv}.  "
-              f"This is a GRAPH-vs-reference divergence in exact math (no compile).")
+        print(
+            f"[exact-check] FIRST marker mismatch at pos {i} (rollout {i - begin}): "
+            f"expected {et}{ev} -> exact-math graph {pt}{pv}.  "
+            f"This is a GRAPH-vs-reference divergence in exact math (no compile)."
+        )
     else:
-        print("[exact-check] no marker mismatches in window — exact-math graph matches "
-              "the reference here.")
+        print(
+            "[exact-check] no marker mismatches in window — exact-math graph matches "
+            "the reference here."
+        )
     return 0
 
 

@@ -29,7 +29,9 @@ class LoadedRenderScene:
         return self.map_data.scene_origin
 
 
-def load_render_scene(config: RenderConfig, *, base_dir: str | Path | None = None) -> LoadedRenderScene:
+def load_render_scene(
+    config: RenderConfig, *, base_dir: str | Path | None = None
+) -> LoadedRenderScene:
     wad_path = resolve_wad_path(config, base_dir=base_dir)
     raw = WADReader(wad_path).get_map(config.map)
     md = subset_by_bbox(raw, *config.region.bbox)
@@ -68,7 +70,9 @@ def pose_from_world(
     angle = default_angle if angle is None else angle
     viewz = default_viewz if viewz is None else viewz
     ox, oy = scene.origin
-    return GameState(x=float(x) - ox, y=float(y) - oy, angle=int(angle), viewz=float(viewz))
+    return GameState(
+        x=float(x) - ox, y=float(y) - oy, angle=int(angle), viewz=float(viewz)
+    )
 
 
 def prefill_rows_for(scene: LoadedRenderScene, pose: GameState) -> list[int]:
@@ -148,7 +152,9 @@ def patch_sandbox_assets(sb_scene, asset_config: AssetConfig) -> None:
     )
     ref.ASSET_BOOK = book
     ref.PLAYPAL = book.palette
-    ref.COLORMAP_ROWS = tuple(tuple(row) for row in book.colormap[: len(ref.COLORMAP_ROWS)])
+    ref.COLORMAP_ROWS = tuple(
+        tuple(row) for row in book.colormap[: len(ref.COLORMAP_ROWS)]
+    )
     ref.WALL_TEXTURE_ID_BY_NAME = asset_config.wall_id_by_name
     ref.FLAT_ID_BY_NAME = asset_config.flat_id_by_name
 

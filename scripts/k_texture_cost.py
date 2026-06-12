@@ -26,16 +26,41 @@ if str(_UMBRELLA) not in sys.path:
     sys.path.insert(0, str(_UMBRELLA))
 
 _TEX_PATS = (
-    "tex", "flat", "pixel", "colormap", "playpal", "uv", "texel", "wall_col",
-    "lookup", "bank", "asset", "light", "span_row", "_u_", "wallcol",
+    "tex",
+    "flat",
+    "pixel",
+    "colormap",
+    "playpal",
+    "uv",
+    "texel",
+    "wall_col",
+    "lookup",
+    "bank",
+    "asset",
+    "light",
+    "span_row",
+    "_u_",
+    "wallcol",
 )
 
 
 def main() -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--keep-wall", type=int, default=None, help="keep this many wall textures (random subset)")
-    p.add_argument("--keep-flat", type=int, default=None, help="keep this many flats (random subset)")
-    p.add_argument("--all-wall", action="store_true", help="use every wall texture name in the WAD")
+    p.add_argument(
+        "--keep-wall",
+        type=int,
+        default=None,
+        help="keep this many wall textures (random subset)",
+    )
+    p.add_argument(
+        "--keep-flat",
+        type=int,
+        default=None,
+        help="keep this many flats (random subset)",
+    )
+    p.add_argument(
+        "--all-wall", action="store_true", help="use every wall texture name in the WAD"
+    )
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--d", type=int, default=4096)
     p.add_argument("--d-head", type=int, default=32, dest="d_head")
@@ -79,8 +104,9 @@ def main() -> int:
     _node_module.global_node_id = 0
     in_node = build_doom_embedding("token_ids")
     pos = create_pos_encoding()
-    nt = forward(in_node, GraphPast(input_vec=in_node, pos_encoding=pos),
-                 create_pos_encoding())
+    nt = forward(
+        in_node, GraphPast(input_vec=in_node, pos_encoding=pos), create_pos_encoding()
+    )
 
     res = schedule_only_capture(nt, pos, d=args.d, d_head=args.d_head)
     n_layers, node_to_layer = res[0], res[1]

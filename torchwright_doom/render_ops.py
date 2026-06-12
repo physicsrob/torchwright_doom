@@ -762,8 +762,14 @@ def mul_u_native(rw_distance: Node, tan_rel: Node) -> Node:
     """rw_distance × per-column tangent → native wall u (sandbox
     ``_MUL_U_NATIVE``, ``((0, 800), (-10.5, 10.5))``, 1024 bp)."""
     return _mul_grid(
-        rw_distance, tan_rel,
-        lo1=0.0, hi1=800.0, lo2=-10.5, hi2=10.5, n=1024, name="mul_u_native",
+        rw_distance,
+        tan_rel,
+        lo1=0.0,
+        hi1=800.0,
+        lo2=-10.5,
+        hi2=10.5,
+        n=1024,
+        name="mul_u_native",
     )
 
 
@@ -773,8 +779,14 @@ def mul_pixel_dc_iscale(pixel_index: Node, dc_iscale: Node) -> Node:
     pixel_index axis because that operand is always an integer (lands on a grid
     line, step 1.0), so the dc_iscale axis cell precision does not matter."""
     return _mul_grid(
-        pixel_index, dc_iscale,
-        lo1=-32.0, hi1=64.0, lo2=-64.0, hi2=64.0, n=97, name="mul_pixel_dc_iscale",
+        pixel_index,
+        dc_iscale,
+        lo1=-32.0,
+        hi1=64.0,
+        lo2=-64.0,
+        hi2=64.0,
+        n=97,
+        name="mul_pixel_dc_iscale",
     )
 
 
@@ -782,8 +794,14 @@ def mul_k_step(pixel_index: Node, step: Node) -> Node:
     """flat pixel index × affine cursor step → texture-coordinate delta (sandbox
     ``_MUL_K_STEP``, ``((-2, 320), (-16, 16))``, 512 bp)."""
     return _mul_grid(
-        pixel_index, step,
-        lo1=-2.0, hi1=320.0, lo2=-16.0, hi2=16.0, n=512, name="mul_k_step",
+        pixel_index,
+        step,
+        lo1=-2.0,
+        hi1=320.0,
+        lo2=-16.0,
+        hi2=16.0,
+        n=512,
+        name="mul_k_step",
     )
 
 
@@ -791,8 +809,14 @@ def mul_ph_yslope(planeheight: Node, yslope: Node) -> Node:
     """planeheight × per-scanline yslope → ray distance (sandbox
     ``_MUL_PH_YSLOPE``, ``((-2, 128), (0, 64))``, 512 bp)."""
     return _mul_grid(
-        planeheight, yslope,
-        lo1=-2.0, hi1=128.0, lo2=0.0, hi2=64.0, n=512, name="mul_ph_yslope",
+        planeheight,
+        yslope,
+        lo1=-2.0,
+        hi1=128.0,
+        lo2=0.0,
+        hi2=64.0,
+        n=512,
+        name="mul_ph_yslope",
     )
 
 
@@ -800,8 +824,14 @@ def mul_dist_distscale(distance: Node, distscale: Node) -> Node:
     """ray distance × column distscale → ray length (sandbox
     ``_MUL_DIST_DISTSCALE``, ``((0, 1024), (0.5, 5))``, 512 bp)."""
     return _mul_grid(
-        distance, distscale,
-        lo1=0.0, hi1=1024.0, lo2=0.5, hi2=5.0, n=512, name="mul_dist_distscale",
+        distance,
+        distscale,
+        lo1=0.0,
+        hi1=1024.0,
+        lo2=0.5,
+        hi2=5.0,
+        n=512,
+        name="mul_dist_distscale",
     )
 
 
@@ -809,8 +839,14 @@ def mul_len_trig(length: Node, trig: Node) -> Node:
     """ray length × view-ray cos/sin → world-space frac offset (sandbox
     ``_MUL_LEN_TRIG``, ``((-4096, 4096), (-1.5, 1.5))``, 512 bp)."""
     return _mul_grid(
-        length, trig,
-        lo1=-4096.0, hi1=4096.0, lo2=-1.5, hi2=1.5, n=512, name="mul_len_trig",
+        length,
+        trig,
+        lo1=-4096.0,
+        hi1=4096.0,
+        lo2=-1.5,
+        hi2=1.5,
+        n=512,
+        name="mul_len_trig",
     )
 
 
@@ -818,6 +854,12 @@ def mul_dist_base(distance: Node, basescale: Node) -> Node:
     """ray distance × base x/y scale → per-screen-x texture step (sandbox
     ``_MUL_DIST_BASE``, ``((0, 1024), (-0.05, 0.05))``, 512 bp)."""
     return _mul_grid(
-        distance, basescale,
-        lo1=0.0, hi1=1024.0, lo2=-0.05, hi2=0.05, n=512, name="mul_dist_base",
+        distance,
+        basescale,
+        lo1=0.0,
+        hi1=1024.0,
+        lo2=-0.05,
+        hi2=0.05,
+        n=512,
+        name="mul_dist_base",
     )

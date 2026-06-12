@@ -229,25 +229,28 @@ def _scan(flat_pixel_eval) -> dict:
 
 def test_flat_markers_exact(flat_pixel_eval) -> None:
     scan = _scan(flat_pixel_eval)
-    assert not scan["marker_mismatches"], (
-        "flat-pass MARKER next-token mismatches:\n"
-        + "\n".join(scan["marker_mismatches"][:30])
+    assert not scan[
+        "marker_mismatches"
+    ], "flat-pass MARKER next-token mismatches:\n" + "\n".join(
+        scan["marker_mismatches"][:30]
     )
 
 
 def test_flat_carriers_within_tolerance(flat_pixel_eval) -> None:
     scan = _scan(flat_pixel_eval)
-    assert not scan["carrier_mismatches"], (
-        "flat-pass CARRIER value mismatches:\n"
-        + "\n".join(scan["carrier_mismatches"][:25])
+    assert not scan[
+        "carrier_mismatches"
+    ], "flat-pass CARRIER value mismatches:\n" + "\n".join(
+        scan["carrier_mismatches"][:25]
     )
 
 
 def test_flat_pixel_colors_in_option_set(flat_pixel_eval) -> None:
     scan = _scan(flat_pixel_eval)
-    assert not scan["pixel_mismatches"], (
-        "flat-pass PIXEL color option-set mismatches:\n"
-        + "\n".join(scan["pixel_mismatches"][:30])
+    assert not scan[
+        "pixel_mismatches"
+    ], "flat-pass PIXEL color option-set mismatches:\n" + "\n".join(
+        scan["pixel_mismatches"][:30]
     )
 
 

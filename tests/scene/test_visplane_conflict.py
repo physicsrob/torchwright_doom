@@ -102,9 +102,7 @@ def _build_graph(plane_id, candidate_vp, x1, x2, occ_cols):
 
 def _build(plane_id, candidate_vp, x1, x2, occ_cols):
     """Exact-math ``check_conflict`` value at the query row (±1)."""
-    conflict, inputs, n_pos = _build_graph(
-        plane_id, candidate_vp, x1, x2, occ_cols
-    )
+    conflict, inputs, n_pos = _build_graph(plane_id, candidate_vp, x1, x2, occ_cols)
     cache = reference_eval(conflict, inputs, n_pos)
     return cache[conflict][n_pos - 1].item()
 
@@ -176,9 +174,7 @@ _COMPILED_CASES = [
 ]
 
 
-@pytest.mark.parametrize(
-    "case", _COMPILED_CASES, ids=[c[0] for c in _COMPILED_CASES]
-)
+@pytest.mark.parametrize("case", _COMPILED_CASES, ids=[c[0] for c in _COMPILED_CASES])
 def test_check_conflict_high_instance_compiled(case):
     """Compiled fp32 at d_head=32 (the post-reduction floor) matches the exact
     oracle at instance id 248 — proving the q^2-cancelled gain-1 lifted key

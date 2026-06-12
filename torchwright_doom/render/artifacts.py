@@ -30,7 +30,13 @@ def _row_entry(pos: int, row: int, phase: str) -> dict[str, Any]:
         text = f"{rtype.name}({','.join(parts)})"
     else:
         text = rtype.name
-    return {"pos": pos, "type": rtype.name, "values": vals, "text": text, "phase": phase}
+    return {
+        "pos": pos,
+        "type": rtype.name,
+        "values": vals,
+        "text": text,
+        "phase": phase,
+    }
 
 
 def build_token_dump(

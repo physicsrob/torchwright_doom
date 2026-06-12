@@ -102,15 +102,14 @@ def test_forward_compiles_to_onnx(tmp_path) -> None:
     past_k0 = next(i for i in model.graph.input if i.name == "past_K_0")
     first_dim = past_k0.type.tensor_type.shape.dim[0]
     assert first_dim.HasField("dim_param") and first_dim.dim_param == "cache_slots", (
-        "past_K_0 first dim must be the symbolic cache_slots, got "
-        f"{first_dim}"
+        "past_K_0 first dim must be the symbolic cache_slots, got " f"{first_dim}"
     )
     meta_path = onnx_path.replace(".onnx", ".meta.json")
     with open(meta_path) as f:
         sidecar = json.load(f)
-    assert isinstance(sidecar.get("cache_stride"), int) and sidecar["cache_stride"] >= 1, (
-        f"sidecar must carry the full cache_stride, got {sidecar.get('cache_stride')!r}"
-    )
+    assert (
+        isinstance(sidecar.get("cache_stride"), int) and sidecar["cache_stride"] >= 1
+    ), f"sidecar must carry the full cache_stride, got {sidecar.get('cache_stride')!r}"
 
     # Layer count: Phase J's flat pass lands the forward at 85 layers at d=4096
     # (H was ~45). The jump is the per-position flat-pass compute that was no_op

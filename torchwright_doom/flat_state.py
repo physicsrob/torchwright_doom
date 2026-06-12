@@ -94,8 +94,7 @@ _FLAT_DIST_DIV16_LINEAR = [[1.0 / 16.0]]
 # DOOM: planezlight distance light terms (r_plane.c). Raw data; wrapped in
 # constant() inside publish() for the pick_by_index table.
 _FLAT_DIST_TERM_DATA = [
-    float(-((SCREEN_WIDTH // 2) // (i + 1)) // 2)
-    for i in range(MAXLIGHTZ)
+    float(-((SCREEN_WIDTH // 2) // (i + 1)) // 2) for i in range(MAXLIGHTZ)
 ]
 
 # --- flat_span_x1 row-membership chunking ------------------------------------
@@ -227,10 +226,14 @@ class FlatPassState:
             inp.is_flat_visplane_begin,
         )
         flat_minx_value = runtime_visplanes.min_x(
-            past, inp.flat_visplane_p, inp.flat_visplane_vp,
+            past,
+            inp.flat_visplane_p,
+            inp.flat_visplane_vp,
         )
         flat_maxx_value = runtime_visplanes.max_x(
-            past, inp.flat_visplane_p, inp.flat_visplane_vp,
+            past,
+            inp.flat_visplane_p,
+            inp.flat_visplane_vp,
         )
         flat_visplane_state_pub = past.publish(
             "flat_visplane_state",
@@ -408,9 +411,7 @@ class FlatPassState:
                 closure_values_at_span.x_close,
             ),
         )
-        flat_span_seen = MARKER_PRESENT(
-            flat_span_row.pick(past, flat_span_row.marker)
-        )
+        flat_span_seen = MARKER_PRESENT(flat_span_row.pick(past, flat_span_row.marker))
         flat_cursor_x_active = and_(inp.is_set_cursor_x, flat_span_seen)
         flat_cursor_x_row = RecentMarkerHandle.publish(
             past,
@@ -430,14 +431,17 @@ class FlatPassState:
         # DOOM: distance = FixedMul(planeheight, yslope[y]) (r_plane.c:144).
         distance_value = mul_ph_yslope(planeheight_value, yslope_picked)
         length_value = mul_dist_distscale(
-            distance_value, inp.cursor_x_distscale,
+            distance_value,
+            inp.cursor_x_distscale,
         )
         cursor_x_oh = one_hot(inp.cursor_x, SCREEN_WIDTH)
         cos_angle_value = pick_by_one_hot(
-            cursor_x_oh, scene.view.ray_x_by_screen,
+            cursor_x_oh,
+            scene.view.ray_x_by_screen,
         )
         sin_angle_value = pick_by_one_hot(
-            cursor_x_oh, scene.view.ray_y_by_screen,
+            cursor_x_oh,
+            scene.view.ray_y_by_screen,
         )
         # DOOM: ds_xfrac = viewx + FixedMul(distance, finecosine[angle]) (r_plane.c:157-158).
         xfrac0_length_cos = mul_len_trig(length_value, cos_angle_value)
@@ -446,22 +450,27 @@ class FlatPassState:
         neg_view_y = linear(scene.view.y, _NEG1_LINEAR)
         yfrac0_native_value = sub(neg_view_y, yfrac0_length_sin)
         basexscale_value = linear(
-            scene.view.angle_sin, _FLAT_HALF_SCREEN_INV_X,
+            scene.view.angle_sin,
+            _FLAT_HALF_SCREEN_INV_X,
         )
         baseyscale_value = linear(
-            scene.view.angle_cos, _FLAT_HALF_SCREEN_INV_X,
+            scene.view.angle_cos,
+            _FLAT_HALF_SCREEN_INV_X,
         )
         # DOOM: ds_xstep/ds_ystep = FixedMul(distance, base{x,y}scale) (r_plane.c:145-146).
         xstep_native_value = mul_dist_base(distance_value, basexscale_value)
         ystep_native_value = mul_dist_base(distance_value, baseyscale_value)
         plane_light_static_value = scene.planes.light_static(active_plane_id)
         flat_distance_div16 = linear(
-            distance_value, _FLAT_DIST_DIV16_LINEAR,
+            distance_value,
+            _FLAT_DIST_DIV16_LINEAR,
         )
         # DOOM: index = distance >> LIGHTZSHIFT; planezlight[index] (r_plane.c:164-169).
         flat_distance_index = FLAT_DIST_INDEX_FLOOR(flat_distance_div16)
         flat_distance_term = pick_by_index(
-            flat_distance_index, constant(_FLAT_DIST_TERM_DATA), MAXLIGHTZ,
+            flat_distance_index,
+            constant(_FLAT_DIST_TERM_DATA),
+            MAXLIGHTZ,
         )
         flat_colormap_row_value = clamp(
             vec_sum(plane_light_static_value, flat_distance_term),

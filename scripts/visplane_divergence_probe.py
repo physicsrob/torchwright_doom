@@ -38,7 +38,10 @@ def main() -> int:
 
     from doom_sandbox.api.tokens import Token
     from doom_sandbox.implementation.reference_drafter import ARDrafter
-    from torchwright_doom.render.tokens_bridge import _sandbox_types, sandbox_token_to_row
+    from torchwright_doom.render.tokens_bridge import (
+        _sandbox_types,
+        sandbox_token_to_row,
+    )
 
     sb_types = _sandbox_types()
     drafter = ARDrafter(sb_scene, sb_pose)
@@ -85,7 +88,9 @@ def main() -> int:
         return 1
     a, b = long_runs[0]
     print(f"FIRST long mispredict run: stream idx [{a}, {b}) length={b - a}")
-    print(f"  model token at idx {a-1}: {stream[a-1]['type']} {stream[a-1].get('values')}")
+    print(
+        f"  model token at idx {a-1}: {stream[a-1]['type']} {stream[a-1].get('values')}"
+    )
     print(f"  model token at idx {a}:   {stream[a]['type']} {stream[a].get('values')}")
 
     # ---- find the visplaneBegin that this run lives inside (walk back) ----
@@ -98,18 +103,24 @@ def main() -> int:
         print("no visplaneBegin before the run")
     else:
         vpv = stream[vp_begin_idx]["values"]
-        print(f"  enclosing visplaneBegin at idx {vp_begin_idx}: p={vpv.get('p')} vp={vpv.get('vp')}")
+        print(
+            f"  enclosing visplaneBegin at idx {vp_begin_idx}: p={vpv.get('p')} vp={vpv.get('vp')}"
+        )
 
     # ---- find the next visplaneBegin / nextVp boundary after the run start ----
     vp_end_idx = None
     for k in range(a, n):
-        if stream[k]["type"] in ("visplaneBegin", "R_DrawPlanes.nextVp", "R_DrawPlanes.nextPlane"):
+        if stream[k]["type"] in (
+            "visplaneBegin",
+            "R_DrawPlanes.nextVp",
+            "R_DrawPlanes.nextPlane",
+        ):
             if k > (vp_begin_idx or -1):
                 vp_end_idx = k
                 break
 
     # ---- the MODEL's emitted col run for this visplane ----
-    lo = (vp_begin_idx if vp_begin_idx is not None else a)
+    lo = vp_begin_idx if vp_begin_idx is not None else a
     hi = vp_end_idx if vp_end_idx is not None else min(a + (b - a) + 5, n)
     print("\n--- MODEL emitted tokens for this visplane (idx, type, values) ---")
     model_cols = []
@@ -118,8 +129,15 @@ def main() -> int:
             break
         t = stream[k]["type"]
         v = stream[k].get("values")
-        if t in ("R_MakeSpans.col", "R_MakeSpans.closeSlot", "R_MapPlane.row",
-                 "setCursorX", "setCursorY", "visplaneBegin", "R_DrawPlanes.nextVp"):
+        if t in (
+            "R_MakeSpans.col",
+            "R_MakeSpans.closeSlot",
+            "R_MapPlane.row",
+            "setCursorX",
+            "setCursorY",
+            "visplaneBegin",
+            "R_DrawPlanes.nextVp",
+        ):
             print(f"   [{k}] {t} {v}")
             if t == "R_MakeSpans.col":
                 model_cols.append(int(v["x"]))
@@ -144,9 +162,18 @@ def main() -> int:
     for tok in canon:
         ty = tok.type.name
         if ty == "visplaneBegin":
-            inside = (int(tok.values["p"]) == int(pid) and int(tok.values["vp"]) == int(vpn))
-        if inside and ty in ("visplaneBegin", "R_MakeSpans.col", "R_MakeSpans.closeSlot",
-                              "R_MapPlane.row", "setCursorX", "setCursorY", "R_DrawPlanes.nextVp"):
+            inside = int(tok.values["p"]) == int(pid) and int(tok.values["vp"]) == int(
+                vpn
+            )
+        if inside and ty in (
+            "visplaneBegin",
+            "R_MakeSpans.col",
+            "R_MakeSpans.closeSlot",
+            "R_MapPlane.row",
+            "setCursorX",
+            "setCursorY",
+            "R_DrawPlanes.nextVp",
+        ):
             print(f"   {ty} {tok.values}")
             if ty == "R_MakeSpans.col":
                 canon_cols.append(int(tok.values["x"]))
@@ -157,11 +184,15 @@ def main() -> int:
     # ---- the canonical (top, bottom) coverage table for this visplane ----
     table = columns.get((int(pid), int(vpn)))
     if table is None:
-        print(f"\nNo canonical table for (p={pid}, vp={vpn})!  keys near: "
-              f"{[k for k in columns if k[0] == int(pid)]}")
+        print(
+            f"\nNo canonical table for (p={pid}, vp={vpn})!  keys near: "
+            f"{[k for k in columns if k[0] == int(pid)]}"
+        )
         return 0
     used = [(x, t, btm) for x, (t, btm) in enumerate(table) if t <= btm]
-    print(f"\n--- CANONICAL coverage table (p={pid}, vp={vpn}); occupied columns (x: top..bottom) ---")
+    print(
+        f"\n--- CANONICAL coverage table (p={pid}, vp={vpn}); occupied columns (x: top..bottom) ---"
+    )
     for x, t, btm in used:
         print(f"   x={x:3d}  top={t:3d}  bottom={btm:3d}")
 

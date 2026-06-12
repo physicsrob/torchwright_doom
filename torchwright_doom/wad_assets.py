@@ -137,7 +137,9 @@ class WADReader:
         if len(colormap) < 33 * PALETTE_SIZE:
             raise ValueError("COLORMAP is too short for 33 rows")
         return tuple(
-            tuple(int(v) for v in colormap[row * PALETTE_SIZE : (row + 1) * PALETTE_SIZE])
+            tuple(
+                int(v) for v in colormap[row * PALETTE_SIZE : (row + 1) * PALETTE_SIZE]
+            )
             for row in range(33)
         )
 

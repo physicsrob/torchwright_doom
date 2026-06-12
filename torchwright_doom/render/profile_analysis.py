@@ -206,8 +206,10 @@ def summarize_profile(
                 f"{per_pass(us):.4f} ms/pass"
             )
     else:
-        lines.append("  (none found in trace — see the session-creation log for "
-                     "the 'N Memcpy nodes added' message)")
+        lines.append(
+            "  (none found in trace — see the session-creation log for "
+            "the 'N Memcpy nodes added' message)"
+        )
     lines.append("")
     lines.append(f"--- top {max_top_ops} op types by kernel time (per pass) ---")
     for op, (cnt, us) in sorted(by_op.items(), key=lambda kv: -kv[1][1])[:max_top_ops]:
@@ -223,8 +225,10 @@ def main(argv: list[str] | None = None) -> int:
 
     args = list(sys.argv[1:] if argv is None else argv)
     if not args:
-        print("usage: python -m torchwright_doom.render.profile_analysis "
-              "<ort_profile.json>")
+        print(
+            "usage: python -m torchwright_doom.render.profile_analysis "
+            "<ort_profile.json>"
+        )
         return 2
     print(summarize_profile(args[0]))
     return 0

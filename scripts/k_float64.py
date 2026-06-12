@@ -16,13 +16,17 @@ from __future__ import annotations
 
 import os
 
-
 POS = 2451
 ROW_NODE3 = 80317
 ROW_NODE1 = 80285
 _WEIGHT_ATTRS = (
-    "output_matrix", "output_bias", "value", "table",
-    "query_matrix", "key_matrix", "value_matrix",
+    "output_matrix",
+    "output_bias",
+    "value",
+    "table",
+    "query_matrix",
+    "key_matrix",
+    "value_matrix",
 )
 
 
@@ -47,11 +51,16 @@ def main() -> int:
     from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED, build_doom_embedding
     from torchwright_doom.past import GraphPast
     from torchwright_doom.render_main import forward
-    from torchwright_doom.render.tokens_bridge import rows_to_input, sandbox_token_to_row
+    from torchwright_doom.render.tokens_bridge import (
+        rows_to_input,
+        sandbox_token_to_row,
+    )
 
     scene = fixtures.load_fixture("e1m1_subset_textured")
     pose = scene.test_poses[0]
-    prefill_rows = [sandbox_token_to_row(t) for t in sb_prefill.get_prefill(scene, pose)]
+    prefill_rows = [
+        sandbox_token_to_row(t) for t in sb_prefill.get_prefill(scene, pose)
+    ]
     ar_rows = [sandbox_token_to_row(t) for t in drafter.expected_ar_tokens(scene, pose)]
     full_rows = prefill_rows + ar_rows
     n = POS + 1
@@ -70,10 +79,12 @@ def main() -> int:
         logits = emb @ W_EMBED.t().to(torch.float64)
         am = int(logits.argmax().item())
         rt, rv = TOKEN_VOCAB.row_to_token[am]
-        print(f"[float64] {label}: argmax row {am} ({rt.name}{rv})  "
-              f"logit[node3 r{ROW_NODE3}]={logits[ROW_NODE3].item():.6f}  "
-              f"logit[node1 r{ROW_NODE1}]={logits[ROW_NODE1].item():.6f}  "
-              f"margin(3-1)={(logits[ROW_NODE3]-logits[ROW_NODE1]).item():.6f}")
+        print(
+            f"[float64] {label}: argmax row {am} ({rt.name}{rv})  "
+            f"logit[node3 r{ROW_NODE3}]={logits[ROW_NODE3].item():.6f}  "
+            f"logit[node1 r{ROW_NODE1}]={logits[ROW_NODE1].item():.6f}  "
+            f"margin(3-1)={(logits[ROW_NODE3]-logits[ROW_NODE1]).item():.6f}"
+        )
         return am
 
     inputs = {"token_ids": rows_to_input(full_rows[:n])}
@@ -100,11 +111,15 @@ def main() -> int:
     finally:
         _misc.Assert._check = _orig
 
-    print(f"\n[float64] float32 -> row {am32} ({'node3' if am32==ROW_NODE3 else 'node1' if am32==ROW_NODE1 else '?'}); "
-          f"float64 -> row {am64} ({'node3' if am64==ROW_NODE3 else 'node1' if am64==ROW_NODE1 else '?'})")
+    print(
+        f"\n[float64] float32 -> row {am32} ({'node3' if am32==ROW_NODE3 else 'node1' if am32==ROW_NODE1 else '?'}); "
+        f"float64 -> row {am64} ({'node3' if am64==ROW_NODE3 else 'node1' if am64==ROW_NODE1 else '?'})"
+    )
     if am32 == ROW_NODE1 and am64 == ROW_NODE3:
-        print("[float64] CONFIRMED: token_ids logic is correct (node3); float32 precision "
-              "alone flips it to node1.")
+        print(
+            "[float64] CONFIRMED: token_ids logic is correct (node3); float32 precision "
+            "alone flips it to node1."
+        )
     return 0
 
 

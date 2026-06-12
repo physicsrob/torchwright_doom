@@ -105,11 +105,13 @@ class WallColumnRenderer:
         projection = self.projection
         plane_kind_floor = constant(PLANE_KIND_FLOOR)
         prev_kind = projection.core.past.attend_to_offset(
-            projection.planes.plane_mark_kind_or_zero, delta_pos=-1,
+            projection.planes.plane_mark_kind_or_zero,
+            delta_pos=-1,
         )
         was_ceiling = one_minus(same_int(prev_kind, plane_kind_floor))
         floor_emit = projection.wall.wall_column.pick(
-            projection.core.past, projection.wall.wall_column.floor_emit,
+            projection.core.past,
+            projection.wall.wall_column.floor_emit,
         )
         return select(
             and_(was_ceiling, floor_emit),
@@ -134,13 +136,22 @@ class WallColumnRenderer:
         k_part_1 = projection.wall.seg_facts.K_part_1(seg_i)
         k_part_2 = projection.wall.seg_facts.K_part_2(seg_i)
         k0_visible = self.part_idx_visible(
-            k_part_0, mid_visible, upper_visible, lower_visible,
+            k_part_0,
+            mid_visible,
+            upper_visible,
+            lower_visible,
         )
         k1_visible = self.part_idx_visible(
-            k_part_1, mid_visible, upper_visible, lower_visible,
+            k_part_1,
+            mid_visible,
+            upper_visible,
+            lower_visible,
         )
         k2_visible = self.part_idx_visible(
-            k_part_2, mid_visible, upper_visible, lower_visible,
+            k_part_2,
+            mid_visible,
+            upper_visible,
+            lower_visible,
         )
         k0_y1, k1_y1, k2_y1 = projection.wall.wall_span_runtime.wallcol_k_y1_values(
             projection.core.past,
@@ -200,7 +211,8 @@ class WallColumnRenderer:
         return make_token_head(
             PLANE_MARK,
             p=projection.wall.wall_column.pick(
-                projection.core.past, projection.wall.wall_column.floor_plane_id,
+                projection.core.past,
+                projection.wall.wall_column.floor_plane_id,
             ),
             kind=plane_kind_floor,
             vp=projection.planes.assigned_vp_for_kind(
@@ -236,7 +248,8 @@ class WallColumnRenderer:
     def make_clip_update_or_advance(self):
         projection = self.projection
         changed = projection.wall.wall_column.pick(
-            projection.core.past, projection.wall.wall_column.clip_changed,
+            projection.core.past,
+            projection.wall.wall_column.clip_changed,
         )
         return select(changed, self.make_clip_update(), self.advance_after_column())
 

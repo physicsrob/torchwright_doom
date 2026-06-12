@@ -18,7 +18,6 @@ from __future__ import annotations
 import argparse
 import os
 
-
 POS = 2451
 ROW_NODE3 = 80317  # reference: bspCheckBack(node=3, depth=8)
 ROW_NODE1 = 80285  # float32 wrong pick: bspCheckBack(node=1, depth=8)
@@ -87,7 +86,9 @@ def main(argv=None) -> int:
 
     scene = fixtures.load_fixture(args.fixture)
     pose = scene.test_poses[args.pose]
-    prefill_rows = [sandbox_token_to_row(t) for t in sb_prefill.get_prefill(scene, pose)]
+    prefill_rows = [
+        sandbox_token_to_row(t) for t in sb_prefill.get_prefill(scene, pose)
+    ]
     ar_rows = [sandbox_token_to_row(t) for t in drafter.expected_ar_tokens(scene, pose)]
     full_rows = prefill_rows + ar_rows
     n = min(args.window, len(full_rows))
@@ -100,9 +101,11 @@ def main(argv=None) -> int:
 
     ids_iv = set(snap_iv)
     ids_tid = set(snap_tid)
-    print(f"\n[graph-diff] node count: iv={len(ids_iv)} token_ids={len(ids_tid)} "
-          f"shared={len(ids_iv & ids_tid)} only_iv={len(ids_iv - ids_tid)} "
-          f"only_tid={len(ids_tid - ids_iv)}")
+    print(
+        f"\n[graph-diff] node count: iv={len(ids_iv)} token_ids={len(ids_tid)} "
+        f"shared={len(ids_iv & ids_tid)} only_iv={len(ids_iv - ids_tid)} "
+        f"only_tid={len(ids_tid - ids_iv)}"
+    )
     print(f"[graph-diff] output node id: iv={out_iv} token_ids={out_tid}")
 
     # Per-node divergence over all positions, ANY non-zero diff (find the seed).
@@ -111,7 +114,9 @@ def main(argv=None) -> int:
         _t2, _nm2, v_tid = snap_tid[nid]
         if v_iv.shape != v_tid.shape:
             return float("inf")
-        return float((v_iv.to(torch.float64) - v_tid.to(torch.float64)).abs().max().item())
+        return float(
+            (v_iv.to(torch.float64) - v_tid.to(torch.float64)).abs().max().item()
+        )
 
     diffs = []  # (node_id, typename, name, max_all, max_at_pos)
     for nid in sorted(ids_iv & ids_tid):
@@ -127,19 +132,25 @@ def main(argv=None) -> int:
 
     for THRESH in (1e-3, 1e-6, 1e-9, 0.0):
         nd = [d for d in diffs if d[3] > THRESH]
-        print(f"[graph-diff] {len(nd):5d}/{len(diffs)} shared nodes diverge "
-              f"(max-abs-diff over all positions > {THRESH:g})")
+        print(
+            f"[graph-diff] {len(nd):5d}/{len(diffs)} shared nodes diverge "
+            f"(max-abs-diff over all positions > {THRESH:g})"
+        )
 
     diverging = [d for d in diffs if d[3] > 0.0]
-    print("\n[graph-diff] FIRST 20 diverging nodes by node_id "
-          "(node_id  type  name  max_all  max_at_pos2451):")
+    print(
+        "\n[graph-diff] FIRST 20 diverging nodes by node_id "
+        "(node_id  type  name  max_all  max_at_pos2451):"
+    )
     for nid, tn, nm, ma, mp in diverging[:20]:
         print(f"  id={nid:5d}  {tn:18s}  {nm[:28]:28s}  all={ma:12.4g}  pos={mp:12.4g}")
 
     # Trace the input chain of the TRUE first diverging node back to its seed.
     if diverging:
         first_id = diverging[0][0]
-        print(f"\n[graph-diff] INPUT-CHAIN TRACE from first diverging node id={first_id}:")
+        print(
+            f"\n[graph-diff] INPUT-CHAIN TRACE from first diverging node id={first_id}:"
+        )
         seen = set()
         frontier = [first_id]
         while frontier:
@@ -152,17 +163,28 @@ def main(argv=None) -> int:
             nm = getattr(node, "name", "")
             d = node_diff(nid)
             ins = [getattr(i, "node_id", -1) for i in getattr(node, "inputs", [])]
-            in_diffs = [(i, round(node_diff(i), 9) if i in snap_iv else "n/a") for i in ins]
-            print(f"  id={nid:5d} {tn:16s} {nm[:24]:24s} diff={d:.6g}  inputs={in_diffs}")
+            in_diffs = [
+                (i, round(node_diff(i), 9) if i in snap_iv else "n/a") for i in ins
+            ]
+            print(
+                f"  id={nid:5d} {tn:16s} {nm[:24]:24s} diff={d:.6g}  inputs={in_diffs}"
+            )
             # Recurse only into inputs that themselves diverge (find the seed root).
             for i in ins:
                 if i in snap_iv and node_diff(i) > 0.0:
                     frontier.append(i)
-        if not any(node_diff(i) > 0.0 for i in
-                   [getattr(x, "node_id", -1) for x in getattr(nodes_iv[first_id], "inputs", [])]):
+        if not any(
+            node_diff(i) > 0.0
+            for i in [
+                getattr(x, "node_id", -1)
+                for x in getattr(nodes_iv[first_id], "inputs", [])
+            ]
+        ):
             n0 = nodes_iv[first_id]
-            print(f"  -> id={first_id} ({type(n0).__name__}) diverges but ALL its inputs are "
-                  f"bit-identical: this is a pure float32 rounding difference (op-internal).")
+            print(
+                f"  -> id={first_id} ({type(n0).__name__}) diverges but ALL its inputs are "
+                f"bit-identical: this is a pure float32 rounding difference (op-internal)."
+            )
 
     # The input node (id 0) and PE, explicitly, incl. dtype/contiguity.
     print("\n[graph-diff] leaf nodes:")
@@ -171,18 +193,22 @@ def main(argv=None) -> int:
             tn, nm, v = snap_iv[nid]
             _, _, v2 = snap_tid[nid]
             same = bool(torch.equal(v, v2)) if v.shape == v2.shape else False
-            print(f"  id={nid} {tn} '{nm}' shape={tuple(v.shape)} torch.equal={same} "
-                  f"iv[dtype={v.dtype},contig={v.is_contiguous()}] "
-                  f"tid[dtype={v2.dtype},contig={v2.is_contiguous()}]")
+            print(
+                f"  id={nid} {tn} '{nm}' shape={tuple(v.shape)} torch.equal={same} "
+                f"iv[dtype={v.dtype},contig={v.is_contiguous()}] "
+                f"tid[dtype={v2.dtype},contig={v2.is_contiguous()}]"
+            )
 
     # Output-embedding column diff at POS, decoded against the layout.
     w_iv = snap_iv[out_iv][2][POS].to(torch.float64)
     w_tid = snap_tid[out_tid][2][POS].to(torch.float64)
     col_d = (w_iv - w_tid).abs()
     layout = TOKEN_VOCAB.layout
-    print(f"\n[graph-diff] output-embedding diff at pos {POS}: "
-          f"max={col_d.max().item():.6g}  L2={float((col_d**2).sum().item())**0.5:.6g}  "
-          f"n_cols_diff(>1e-4)={int((col_d > 1e-4).sum().item())}/{len(col_d)}")
+    print(
+        f"\n[graph-diff] output-embedding diff at pos {POS}: "
+        f"max={col_d.max().item():.6g}  L2={float((col_d**2).sum().item())**0.5:.6g}  "
+        f"n_cols_diff(>1e-4)={int((col_d > 1e-4).sum().item())}/{len(col_d)}"
+    )
     # Decode region for the most-divergent columns.
     region = _column_region_map(layout)
     top = torch.topk(col_d, min(12, len(col_d)))
@@ -190,8 +216,10 @@ def main(argv=None) -> int:
     for v, c in zip(top.values.tolist(), top.indices.tolist()):
         if v < 1e-6:
             continue
-        print(f"    col {c:4d}  d={v:11.5g}  iv={w_iv[c].item():11.5g}  "
-              f"tid={w_tid[c].item():11.5g}  {region.get(c, '?')}")
+        print(
+            f"    col {c:4d}  d={v:11.5g}  iv={w_iv[c].item():11.5g}  "
+            f"tid={w_tid[c].item():11.5g}  {region.get(c, '?')}"
+        )
 
     # Logits at the two candidate rows.
     w_embed_t = W_EMBED.t().to(torch.float64)
@@ -199,10 +227,12 @@ def main(argv=None) -> int:
         logits = w @ w_embed_t
         am = int(logits.argmax().item())
         rt, rv = TOKEN_VOCAB.row_to_token[am]
-        print(f"\n[graph-diff] {label}: argmax row {am} ({rt.name}{rv})  "
-              f"logit[node3 r{ROW_NODE3}]={logits[ROW_NODE3].item():.6f}  "
-              f"logit[node1 r{ROW_NODE1}]={logits[ROW_NODE1].item():.6f}  "
-              f"margin(3-1)={(logits[ROW_NODE3]-logits[ROW_NODE1]).item():.6f}")
+        print(
+            f"\n[graph-diff] {label}: argmax row {am} ({rt.name}{rv})  "
+            f"logit[node3 r{ROW_NODE3}]={logits[ROW_NODE3].item():.6f}  "
+            f"logit[node1 r{ROW_NODE1}]={logits[ROW_NODE1].item():.6f}  "
+            f"margin(3-1)={(logits[ROW_NODE3]-logits[ROW_NODE1]).item():.6f}"
+        )
 
     return 0
 
@@ -219,7 +249,7 @@ def _column_region_map(layout) -> dict:
         for k in range(w):
             region[c + k] = f"digitquad_pos{j}[{k}]"
     for name, entries in getattr(layout, "derived_columns_by_name", {}).items():
-        for (_t, _s, start, width) in entries:
+        for _t, _s, start, width in entries:
             for k in range(width):
                 region[start + k] = f"derived:{name}[{k}]"
     return region

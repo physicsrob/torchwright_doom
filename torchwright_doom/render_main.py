@@ -209,7 +209,9 @@ def _distinct_head_pairs(
 
 
 # DOOM: R_RenderPlayerView (r_main.c) — top-level per-frame render dispatch
-def forward(input_vec: Node, past: GraphPast, pos: PosEncoding, asset_index=None) -> Node:
+def forward(
+    input_vec: Node, past: GraphPast, pos: PosEncoding, asset_index=None
+) -> Node:
     # `SceneIndex.build` publishes scene channels through the bare `GraphPast`;
     # the `PastHandleScope` wrap below is intentional and must follow it. It is a
     # distinct local (`scope`) rather than a rebind of `past` so the two types

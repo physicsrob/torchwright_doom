@@ -22,7 +22,9 @@ TP, TVP = 1, 1
 def main() -> int:
     from torchwright_doom.render.config import apply_screen_env, load_render_config
     from torchwright_doom.render.wad_scene import (
-        load_render_scene, pose_from_world, sandbox_scene_for,
+        load_render_scene,
+        pose_from_world,
+        sandbox_scene_for,
     )
 
     cfg = load_render_config(CONFIG)
@@ -50,17 +52,37 @@ def main() -> int:
         cur["meta"] = kw["meta"]
         return orig_render(*args, **kw)
 
-    def patched_marks(*, plane_marks, x, yl, yh, ceilingclip, floorclip,
-                      markceiling, markfloor, ceiling_plane_id, ceiling_vp,
-                      floor_plane_id, floor_vp, runtime_visplanes):
+    def patched_marks(
+        *,
+        plane_marks,
+        x,
+        yl,
+        yh,
+        ceilingclip,
+        floorclip,
+        markceiling,
+        markfloor,
+        ceiling_plane_id,
+        ceiling_vp,
+        floor_plane_id,
+        floor_vp,
+        runtime_visplanes,
+    ):
         if floor_plane_id == TP and floor_vp == TVP and markfloor:
             seg_hits.add(cur["seg_idx"])
         return orig_marks(
-            plane_marks=plane_marks, x=x, yl=yl, yh=yh,
-            ceilingclip=ceilingclip, floorclip=floorclip,
-            markceiling=markceiling, markfloor=markfloor,
-            ceiling_plane_id=ceiling_plane_id, ceiling_vp=ceiling_vp,
-            floor_plane_id=floor_plane_id, floor_vp=floor_vp,
+            plane_marks=plane_marks,
+            x=x,
+            yl=yl,
+            yh=yh,
+            ceilingclip=ceilingclip,
+            floorclip=floorclip,
+            markceiling=markceiling,
+            markfloor=markfloor,
+            ceiling_plane_id=ceiling_plane_id,
+            ceiling_vp=ceiling_vp,
+            floor_plane_id=floor_plane_id,
+            floor_vp=floor_vp,
             runtime_visplanes=runtime_visplanes,
         )
 
@@ -88,8 +110,12 @@ def main() -> int:
         meta = ref._drawseg_meta(seg, md.segs[sidx], record, state, viewz)
         worldbottom = seg.front_floor - viewz
         worldtop = seg.front_ceiling - viewz
-        print(f"\nseg_idx={sidx} x1={record.x1} x2={record.x2} wall_kind={meta.wall_kind}")
-        print(f"  front_floor={seg.front_floor} front_ceiling={seg.front_ceiling} viewz={viewz}")
+        print(
+            f"\nseg_idx={sidx} x1={record.x1} x2={record.x2} wall_kind={meta.wall_kind}"
+        )
+        print(
+            f"  front_floor={seg.front_floor} front_ceiling={seg.front_ceiling} viewz={viewz}"
+        )
         print(f"  worldbottom={worldbottom!r} worldtop={worldtop!r}")
         print(f"  scale1={meta.scale1!r} scalestep={meta.scalestep!r}")
         print(f"  CENTER_Y={ref.CENTER_Y}")
@@ -104,8 +130,10 @@ def main() -> int:
             d32 = bot_y_raw - 32.0
             dint = bot_y_raw - nearest
             flag = "  <== boundary col" if x in (23, 24) else ""
-            print(f"  {x:3d} | {scale_x:.9f} | {bot_y_raw:.10f} | {fl:3d} | "
-                  f"{d32:+.3e} | {dint:+.3e}{flag}")
+            print(
+                f"  {x:3d} | {scale_x:.9f} | {bot_y_raw:.10f} | {fl:3d} | "
+                f"{d32:+.3e} | {dint:+.3e}{flag}"
+            )
 
     return 0
 

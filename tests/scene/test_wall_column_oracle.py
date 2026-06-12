@@ -38,12 +38,30 @@ from ..prefill_fixture import row_index, tokens_to_input
 
 # Phase-F protocol markers (still teacher-forced + compared inside the H span).
 _F_MARKERS = {
-    "R_Subsector", "R_AddLine", "angle1", "theta1", "angle2", "theta2",
-    "nextSeg", "clipScan", "drawseg.x2", "R_StoreWallRange", "segKpart",
-    "segDcTmidMid", "segDcTmidUpper", "segDcTmidLower", "drawseg.meta",
-    "drawseg.scale1.den", "drawseg.scale1", "drawseg.scale2.den",
-    "drawseg.scale2", "drawseg.scalestep.den", "drawseg.scalestep",
-    "drawseg.bsilheight", "drawseg.tsilheight", "drawseg.uPhase",
+    "R_Subsector",
+    "R_AddLine",
+    "angle1",
+    "theta1",
+    "angle2",
+    "theta2",
+    "nextSeg",
+    "clipScan",
+    "drawseg.x2",
+    "R_StoreWallRange",
+    "segKpart",
+    "segDcTmidMid",
+    "segDcTmidUpper",
+    "segDcTmidLower",
+    "drawseg.meta",
+    "drawseg.scale1.den",
+    "drawseg.scale1",
+    "drawseg.scale2.den",
+    "drawseg.scale2",
+    "drawseg.scalestep.den",
+    "drawseg.scalestep",
+    "drawseg.bsilheight",
+    "drawseg.tsilheight",
+    "drawseg.uPhase",
 }
 # Phase-H markers — the INPUT token types whose emitted successor the gate
 # verifies. The two *texel* transitions are excluded because their producer is a
@@ -71,11 +89,21 @@ _CARRIERS = {"value", "angleValue"}
 # ``setCursorY`` is NOT here: its successor span-v0 VALUE is emitted by the
 # NO_OP-stubbed Phase-J ``set_cursor_y`` branch.
 _CARRIER_MARKERS = {
-    "angle1", "theta1", "angle2", "theta2",
-    "segDcTmidMid", "segDcTmidUpper", "segDcTmidLower",
-    "drawseg.scale1.den", "drawseg.scale1", "drawseg.scale2.den",
-    "drawseg.scale2", "drawseg.scalestep.den", "drawseg.scalestep",
-    "drawseg.bsilheight", "drawseg.tsilheight",
+    "angle1",
+    "theta1",
+    "angle2",
+    "theta2",
+    "segDcTmidMid",
+    "segDcTmidUpper",
+    "segDcTmidLower",
+    "drawseg.scale1.den",
+    "drawseg.scale1",
+    "drawseg.scale2.den",
+    "drawseg.scale2",
+    "drawseg.scalestep.den",
+    "drawseg.scalestep",
+    "drawseg.bsilheight",
+    "drawseg.tsilheight",
     "wallColU",
 }
 
@@ -219,9 +247,10 @@ def test_wall_column_carriers_within_tolerance(wall_column_eval) -> None:
     """Numeric VALUE carriers within tolerance — including the per-column wall
     scale VALUE (R5) emitted by ``after_wall_col_u``."""
     scan = _scan_next_tokens(wall_column_eval)
-    assert not scan["carrier_mismatches"], (
-        "wall-column CARRIER value mismatches:\n"
-        + "\n".join(scan["carrier_mismatches"][:25])
+    assert not scan[
+        "carrier_mismatches"
+    ], "wall-column CARRIER value mismatches:\n" + "\n".join(
+        scan["carrier_mismatches"][:25]
     )
 
 
@@ -230,10 +259,9 @@ def test_wall_column_markers_exact(wall_column_eval) -> None:
     marker_mismatches = scan["marker_mismatches"]
     coverage = scan["coverage"]
 
-    assert not marker_mismatches, (
-        "wall-column MARKER next-token mismatches:\n"
-        + "\n".join(marker_mismatches[:25])
-    )
+    assert (
+        not marker_mismatches
+    ), "wall-column MARKER next-token mismatches:\n" + "\n".join(marker_mismatches[:25])
 
     # Coverage floors — the capped span must actually exercise the rasterizer.
     # (e1m1_subset has no visplane overlap/merge on any pose — the conflict

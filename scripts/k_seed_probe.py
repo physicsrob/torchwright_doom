@@ -54,8 +54,10 @@ def main() -> int:
     col_max = W_EMBED.abs().max(dim=0).values
     top = torch.topk(col_max, 6)
     layout = TOKEN_VOCAB.layout
-    print(f"[seed] W_EMBED widest columns (|value| max): "
-          f"{[(int(c), round(float(v),1)) for v, c in zip(top.values, top.indices)]}")
+    print(
+        f"[seed] W_EMBED widest columns (|value| max): "
+        f"{[(int(c), round(float(v),1)) for v, c in zip(top.values, top.indices)]}"
+    )
     print(f"[seed] d_embed={layout.d_embed}  n_derived_cols={layout.n_derived_columns}")
 
     def build(kind):
@@ -75,12 +77,17 @@ def main() -> int:
         """node_id -> (M, input_scalar_range, width) for every cond_gate/select output Linear."""
         out = {}
         for nd in get_ancestor_nodes({nt}):
-            if isinstance(nd, Linear) and ("cond_gate" in getattr(nd, "name", "")
-                                            or "select" in getattr(nd, "name", "")):
+            if isinstance(nd, Linear) and (
+                "cond_gate" in getattr(nd, "name", "")
+                or "select" in getattr(nd, "name", "")
+            ):
                 b = getattr(nd, "output_bias", None)
                 if b is not None and b.numel() > 0:
-                    out[nd.node_id] = (float(-b[0].item()),
-                                       _rng(nd.inputs[0]) if nd.inputs else "?", len(nd))
+                    out[nd.node_id] = (
+                        float(-b[0].item()),
+                        _rng(nd.inputs[0]) if nd.inputs else "?",
+                        len(nd),
+                    )
         return out
 
     if compare:
@@ -89,15 +96,30 @@ def main() -> int:
         _, nt_tid = build("token_ids")
         m_tid = gate_M_map(nt_tid)
         shared = sorted(set(m_iv) & set(m_tid))
-        diffs = [(nid, m_iv[nid][0], m_tid[nid][0], m_iv[nid][1], m_tid[nid][1], m_iv[nid][2])
-                 for nid in shared
-                 if abs(m_iv[nid][0] - m_tid[nid][0]) > 1e-6]
-        print(f"\n[seed] gates with DIFFERENT M between iv and token_ids: "
-              f"{len(diffs)}/{len(shared)} (first 25 by node_id):")
-        print(f"  {'id':>5} {'M_iv':>12} {'M_tid':>12} {'ratio':>7}  range_iv -> range_tid  d")
+        diffs = [
+            (
+                nid,
+                m_iv[nid][0],
+                m_tid[nid][0],
+                m_iv[nid][1],
+                m_tid[nid][1],
+                m_iv[nid][2],
+            )
+            for nid in shared
+            if abs(m_iv[nid][0] - m_tid[nid][0]) > 1e-6
+        ]
+        print(
+            f"\n[seed] gates with DIFFERENT M between iv and token_ids: "
+            f"{len(diffs)}/{len(shared)} (first 25 by node_id):"
+        )
+        print(
+            f"  {'id':>5} {'M_iv':>12} {'M_tid':>12} {'ratio':>7}  range_iv -> range_tid  d"
+        )
         for nid, miv, mtid, riv, rtid, w in diffs[:25]:
-            ratio = mtid / miv if miv else float('inf')
-            print(f"  {nid:5d} {miv:12.5g} {mtid:12.5g} {ratio:7.3f}  {riv} -> {rtid}  d={w}")
+            ratio = mtid / miv if miv else float("inf")
+            print(
+                f"  {nid:5d} {miv:12.5g} {mtid:12.5g} {ratio:7.3f}  {riv} -> {rtid}  d={w}"
+            )
         return 0
 
     _node_module.global_node_id = 0
@@ -122,8 +144,10 @@ def main() -> int:
                 break
     assert edge is not None, "edge-pick Attn not found"
     key_node = edge.inputs[1].inputs[0]  # key_in = Concatenate([key_vector, pos_enc])
-    print(f"[seed] edge Attn id={edge.node_id}; key_vector node id={key_node.node_id} "
-          f"({type(key_node).__name__}) value_range={_rng(key_node)} width={len(key_node)}")
+    print(
+        f"[seed] edge Attn id={edge.node_id}; key_vector node id={key_node.node_id} "
+        f"({type(key_node).__name__}) value_range={_rng(key_node)} width={len(key_node)}"
+    )
 
     # Walk the key chain; report cond_gate M and the widest-range inputs.
     def cond_gate_M(node):
@@ -142,15 +166,21 @@ def main() -> int:
             inp_rng = _rng(nd.inputs[0]) if nd.inputs else "?"
             gates.append((nd.node_id, m, inp_rng, len(nd)))
     gates.sort()
-    print(f"\n[seed] cond_gate offsets M on the edge-KEY ancestor chain "
-          f"({len(gates)} gates):")
+    print(
+        f"\n[seed] cond_gate offsets M on the edge-KEY ancestor chain "
+        f"({len(gates)} gates):"
+    )
     for nid, m, inp_rng, w in gates[:40]:
         flag = "  <-- WIDE" if m > 1e5 else ""
-        print(f"  cond_gate id={nid:5d}  M={m:12.4g}  input_range={inp_rng:24s} d={w}{flag}")
+        print(
+            f"  cond_gate id={nid:5d}  M={m:12.4g}  input_range={inp_rng:24s} d={w}{flag}"
+        )
 
     # Per-column intervals of the WIDE gates' inputs (V-A feasibility check).
-    print("\n[seed] PER-COLUMN affine intervals of the WIDE (M>1e5) gate inputs "
-          "(d=3 lift = [child, -child^2, present]):")
+    print(
+        "\n[seed] PER-COLUMN affine intervals of the WIDE (M>1e5) gate inputs "
+        "(d=3 lift = [child, -child^2, present]):"
+    )
     seen_inp = set()
     for nd in key_anc:
         m = cond_gate_M(nd)
@@ -162,10 +192,14 @@ def main() -> int:
             try:
                 ivs = inp.affine_bound.to_interval()
                 cols = ", ".join(f"[{r.lo:.4g},{r.hi:.4g}]" for r in ivs)
-                print(f"  gate id={nd.node_id} input id={inp.node_id} ({type(inp).__name__}) "
-                      f"per-col: {cols}")
+                print(
+                    f"  gate id={nd.node_id} input id={inp.node_id} ({type(inp).__name__}) "
+                    f"per-col: {cols}"
+                )
             except Exception as e:
-                print(f"  gate id={nd.node_id} input id={inp.node_id}: to_interval failed: {e}")
+                print(
+                    f"  gate id={nd.node_id} input id={inp.node_id}: to_interval failed: {e}"
+                )
             if len(seen_inp) >= 4:
                 break
 
@@ -173,19 +207,25 @@ def main() -> int:
     print(f"\n[seed] nodes on key chain with widest value_range (top 12):")
     ranked = sorted(
         key_anc,
-        key=lambda n: -(abs(n.value_type.value_range.lo) + abs(n.value_type.value_range.hi))
-        if _has_range(n) else 0,
+        key=lambda n: (
+            -(abs(n.value_type.value_range.lo) + abs(n.value_type.value_range.hi))
+            if _has_range(n)
+            else 0
+        ),
     )
     for nd in ranked[:12]:
         if _has_range(nd):
-            print(f"  id={nd.node_id:5d} {type(nd).__name__:14s} "
-                  f"{getattr(nd,'name','')[:26]:26s} range={_rng(nd)} d={len(nd)}")
+            print(
+                f"  id={nd.node_id:5d} {type(nd).__name__:14s} "
+                f"{getattr(nd,'name','')[:26]:26s} range={_rng(nd)} d={len(nd)}"
+            )
     return 0
 
 
 def _has_range(n):
     try:
         import math
+
         r = n.value_type.value_range
         return math.isfinite(r.lo) and math.isfinite(r.hi)
     except Exception:

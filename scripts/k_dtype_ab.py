@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import os
 
-
 POS = 2451
 
 
@@ -38,8 +37,11 @@ def _decode_at(graph_kind: str, dtype, full_rows, expected_row, pred_row):
     else:
         in_node = build_doom_embedding("token_ids")
         inputs = {"token_ids": rows_to_input(full_rows[:n])}
-    next_token = forward(in_node, GraphPast(input_vec=in_node, pos_encoding=create_pos_encoding()),
-                         create_pos_encoding())
+    next_token = forward(
+        in_node,
+        GraphPast(input_vec=in_node, pos_encoding=create_pos_encoding()),
+        create_pos_encoding(),
+    )
     _orig = _misc.Assert._check
     _misc.Assert._check = lambda self, x: None
     try:
@@ -51,11 +53,13 @@ def _decode_at(graph_kind: str, dtype, full_rows, expected_row, pred_row):
     logits = emb @ wt
     top = torch.topk(logits, 3)
     decoded = [TOKEN_VOCAB.row_to_token[r] for r in top.indices.tolist()]
-    print(f"  [{graph_kind:9s} {str(dtype).split('.')[-1]:8s}] argmax={top.indices[0].item()} "
-          f"({decoded[0][0].name}{decoded[0][1]})  "
-          f"logit[node3 row {expected_row}]={logits[expected_row].item():.6g}  "
-          f"logit[node1 row {pred_row}]={logits[pred_row].item():.6g}  "
-          f"margin(3-1)={(logits[expected_row]-logits[pred_row]).item():.4g}")
+    print(
+        f"  [{graph_kind:9s} {str(dtype).split('.')[-1]:8s}] argmax={top.indices[0].item()} "
+        f"({decoded[0][0].name}{decoded[0][1]})  "
+        f"logit[node3 row {expected_row}]={logits[expected_row].item():.6g}  "
+        f"logit[node1 row {pred_row}]={logits[pred_row].item():.6g}  "
+        f"margin(3-1)={(logits[expected_row]-logits[pred_row]).item():.4g}"
+    )
     return top.indices[0].item()
 
 
@@ -73,11 +77,13 @@ def main() -> int:
 
     scene = fixtures.load_fixture("e1m1_subset_textured")
     pose = scene.test_poses[0]
-    prefill_rows = [sandbox_token_to_row(t) for t in sb_prefill.get_prefill(scene, pose)]
+    prefill_rows = [
+        sandbox_token_to_row(t) for t in sb_prefill.get_prefill(scene, pose)
+    ]
     ar_rows = [sandbox_token_to_row(t) for t in drafter.expected_ar_tokens(scene, pose)]
     full_rows = prefill_rows + ar_rows
-    expected_row = full_rows[POS + 1]            # bspCheckBack node=3 (reference)
-    pred_row = 80285                             # bspCheckBack node=1 (the float32 wrong pick)
+    expected_row = full_rows[POS + 1]  # bspCheckBack node=3 (reference)
+    pred_row = 80285  # bspCheckBack node=1 (the float32 wrong pick)
 
     print(f"divergence at pos {POS}: reference next = row {expected_row} (node=3)")
     f32 = torch.float32
@@ -85,10 +91,14 @@ def main() -> int:
     r_iv = _decode_at("iv", f32, full_rows, expected_row, pred_row)
     r_tid32 = _decode_at("token_ids", f32, full_rows, expected_row, pred_row)
     r_tid64 = _decode_at("token_ids", f64, full_rows, expected_row, pred_row)
-    print(f"\niv@f32 argmax row {r_iv}; token_ids@f32 row {r_tid32}; token_ids@f64 row {r_tid64}")
+    print(
+        f"\niv@f32 argmax row {r_iv}; token_ids@f32 row {r_tid32}; token_ids@f64 row {r_tid64}"
+    )
     print(f"expected (reference) row {expected_row}")
     if r_tid32 == pred_row and r_tid64 == expected_row:
-        print("PROVEN: float32 near-tie. token_ids resolves wrong at f32, correct at f64.")
+        print(
+            "PROVEN: float32 near-tie. token_ids resolves wrong at f32, correct at f64."
+        )
     return 0
 
 

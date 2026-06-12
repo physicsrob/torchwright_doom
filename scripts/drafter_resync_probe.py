@@ -63,19 +63,26 @@ def main() -> int:
     cfg = load_render_config(args.config)
     apply_screen_env(cfg)
     scene = load_render_scene(cfg, base_dir=str(Path(args.config).parent))
-    pose = pose_from_world(scene, x=args.x, y=args.y, angle=args.angle, viewz=args.viewz)
+    pose = pose_from_world(
+        scene, x=args.x, y=args.y, angle=args.angle, viewz=args.viewz
+    )
     sb_scene = sandbox_scene_for(scene, pose)
     sb_pose = sb_scene.test_poses[0]
 
     from doom_sandbox.api.tokens import Token
     from doom_sandbox.implementation.reference_drafter import ARDrafter
 
-    from torchwright_doom.render.tokens_bridge import _sandbox_types, sandbox_token_to_row
+    from torchwright_doom.render.tokens_bridge import (
+        _sandbox_types,
+        sandbox_token_to_row,
+    )
 
     sb_types = _sandbox_types()
     drafter = ARDrafter(sb_scene, sb_pose)
 
-    stream = json.loads(Path(args.dump).read_text())["cases"][0]["predicted_next_tokens"]
+    stream = json.loads(Path(args.dump).read_text())["cases"][0][
+        "predicted_next_tokens"
+    ]
 
     def to_tok(rec: dict) -> Token:
         return Token(sb_types[rec["type"]], dict(rec["values"]))
@@ -122,12 +129,16 @@ def main() -> int:
     n = len(mispredict)
     runs = _run_lengths(mispredict)
     total_mis = sum(mispredict)
-    print(f"positions={n}  mispredicts={total_mis} ({total_mis/n:.1%})  "
-          f"accept={1 - total_mis/n:.1%}  drafter_returned_None={drafter_none}")
+    print(
+        f"positions={n}  mispredicts={total_mis} ({total_mis/n:.1%})  "
+        f"accept={1 - total_mis/n:.1%}  drafter_returned_None={drafter_none}"
+    )
     if runs:
-        print(f"mispredict runs: count={len(runs)}  max_run={max(run := runs)}  "
-              f"median={st.median(runs)}  isolated(len==1)={sum(1 for r in runs if r == 1)}  "
-              f">=10={sum(1 for r in runs if r >= 10)}  >=50={sum(1 for r in runs if r >= 50)}")
+        print(
+            f"mispredict runs: count={len(runs)}  max_run={max(run := runs)}  "
+            f"median={st.median(runs)}  isolated(len==1)={sum(1 for r in runs if r == 1)}  "
+            f">=10={sum(1 for r in runs if r >= 10)}  >=50={sum(1 for r in runs if r >= 50)}"
+        )
     # Per-quarter accept rate to locate where (if anywhere) it collapses.
     q = max(1, n // 4)
     for i in range(0, n, q):

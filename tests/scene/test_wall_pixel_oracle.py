@@ -242,26 +242,29 @@ def _scan(wall_pixel_eval) -> dict:
 
 def test_wall_pixel_markers_exact(wall_pixel_eval) -> None:
     scan = _scan(wall_pixel_eval)
-    assert not scan["marker_mismatches"], (
-        "wall-pixel MARKER next-token mismatches:\n"
-        + "\n".join(scan["marker_mismatches"][:25])
+    assert not scan[
+        "marker_mismatches"
+    ], "wall-pixel MARKER next-token mismatches:\n" + "\n".join(
+        scan["marker_mismatches"][:25]
     )
 
 
 def test_wall_pixel_carriers_within_tolerance(wall_pixel_eval) -> None:
     scan = _scan(wall_pixel_eval)
-    assert not scan["carrier_mismatches"], (
-        "wall-pixel CARRIER value mismatches:\n"
-        + "\n".join(scan["carrier_mismatches"][:25])
+    assert not scan[
+        "carrier_mismatches"
+    ], "wall-pixel CARRIER value mismatches:\n" + "\n".join(
+        scan["carrier_mismatches"][:25]
     )
 
 
 def test_wall_pixel_colors_in_option_set(wall_pixel_eval) -> None:
     scan = _scan(wall_pixel_eval)
     coverage = scan["coverage"]
-    assert not scan["pixel_mismatches"], (
-        "wall-pixel COLOR option-set mismatches:\n"
-        + "\n".join(scan["pixel_mismatches"][:25])
+    assert not scan[
+        "pixel_mismatches"
+    ], "wall-pixel COLOR option-set mismatches:\n" + "\n".join(
+        scan["pixel_mismatches"][:25]
     )
     # Coverage floors — the window must actually rasterize textured wall columns.
     assert coverage[_PIXEL_NAME] >= 10, f"too few wall pixels: {coverage}"

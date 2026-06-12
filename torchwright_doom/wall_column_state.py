@@ -407,9 +407,7 @@ class WallColumnState:
         ceiling_top_raw = add_const(clip.ceiling, 1.0)
         ceiling_bottom_raw = add_const(yl, -1.0)
         floorclip_minus_one = add_const(clip.floor, -1.0)
-        ceiling_bottom_ge_floor = gt_y_ceil_boundary(
-            ceiling_bottom_raw, clip.floor
-        )
+        ceiling_bottom_ge_floor = gt_y_ceil_boundary(ceiling_bottom_raw, clip.floor)
         ceiling_bottom_clamped = select(
             ceiling_bottom_ge_floor,
             floorclip_minus_one,
@@ -449,9 +447,7 @@ class WallColumnState:
         floor_top_le_99 = one_minus(
             gt_y_floor_boundary(floor_top_clamped, screen_height_m1)
         )
-        floor_bottom_ge_0 = gt_y_floor_boundary(
-            floor_bottom_raw, clip_ceiling_initial
-        )
+        floor_bottom_ge_0 = gt_y_floor_boundary(floor_bottom_raw, clip_ceiling_initial)
         floor_top_le_bottom = one_minus(
             gt_screen(floor_y1_published, floor_y2_published)
         )
@@ -607,9 +603,7 @@ class WallSpanRuntimeState:
         past: PastHandleScope,
         wall_column: WallColumnState,
     ) -> tuple[Node, Node, Node]:
-        return tuple(
-            split(wall_column.pick(past, self.wallcol_k_y1_pub), [1, 1, 1])
-        )
+        return tuple(split(wall_column.pick(past, self.wallcol_k_y1_pub), [1, 1, 1]))
 
 
 @dataclass(frozen=True)

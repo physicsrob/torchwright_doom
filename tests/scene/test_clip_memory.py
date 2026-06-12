@@ -115,9 +115,9 @@ def test_clip_memory_lifted(case):
     # updated at adjacent positions leaks ~1e-2 of the prior update — the same
     # softness the one-hot ClipMemory had. Far-apart updates (the real renderer)
     # are far harder. 0.05 admits the worst-case adjacent-update softness.
-    assert got == pytest.approx(exp, abs=0.05), (
-        f"{name}: updates={updates} query={query_col} expected {exp} got {got}"
-    )
+    assert got == pytest.approx(
+        exp, abs=0.05
+    ), f"{name}: updates={updates} query={query_col} expected {exp} got {got}"
 
 
 # The recency tiebreak among repeated updates to ONE column must survive compiled
@@ -130,9 +130,7 @@ _COMPILED_CASES = [
 ]
 
 
-@pytest.mark.parametrize(
-    "case", _COMPILED_CASES, ids=[c[0] for c in _COMPILED_CASES]
-)
+@pytest.mark.parametrize("case", _COMPILED_CASES, ids=[c[0] for c in _COMPILED_CASES])
 def test_clip_memory_compiled(case):
     name, updates, query_col = case
     assert _eval(updates, query_col) == pytest.approx(
