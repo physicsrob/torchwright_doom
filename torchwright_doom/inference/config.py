@@ -58,8 +58,9 @@ class ModelConfig:
     # smaller condition than the old per-channel span condition.
     # Enters the compile-cache key via asdict like every model field
     # (and like cache_stride, adding it busts every key once).
-    # The expiring-type set itself is a RUNTIME knob
-    # (TWDOOM_EXPIRING_TYPES), not a compile parameter.
+    # The expiring-type set itself is a RUNTIME knob (the top-level
+    # config field RenderConfig.expiring_types, overridable via
+    # TWDOOM_EXPIRING_TYPES), not a compile parameter.
     cache_window: int | None = None
 
 
@@ -95,6 +96,12 @@ class RenderConfig:
     model: ModelConfig = ModelConfig()
     region: RegionConfig = RegionConfig()
     textures: TextureConfig = TextureConfig()
+    # Windowed-cache expiry policy: token type names whose rows may be
+    # recycled once the window fills (see ModelConfig.cache_window).  A
+    # RUNTIME knob — deliberately NOT part of canonical_compile_payload,
+    # so changing it never recompiles.  TWDOOM_EXPIRING_TYPES (comma-
+    # separated) still overrides at load time for ad-hoc experiments.
+    expiring_types: tuple[str, ...] = ("pixel",)
 
     @property
     def screen(self) -> tuple[int, int]:
@@ -154,6 +161,7 @@ def load_render_config(path: str | Path) -> RenderConfig:
             wall=tuple(str(v) for v in textures.get("wall", WALL_TEXTURE_NAMES)),
             flat=tuple(str(v) for v in textures.get("flat", FLAT_NAMES)),
         ),
+        expiring_types=tuple(str(v) for v in data.get("expiring_types", ["pixel"])),
     )
     _validate_config(cfg)
     return cfg

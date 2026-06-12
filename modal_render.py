@@ -70,7 +70,8 @@ _RENDER_GPU = _os.environ.get("RENDER_GPU", "a100-80gb")
     },
 )
 def compile_remote(
-    config_path: str,
+    config_name: str,
+    config_text: str,
     cache_subdir: str,
     compile_payload: dict,
     verbose_compile: bool,
@@ -80,6 +81,8 @@ def compile_remote(
 
     if "/root" not in sys.path:
         sys.path.insert(0, "/root")
+
+    config_path = _write_shipped_config(config_name, config_text)
 
     # CP-SAT reads this at solve time (torchwright cpsat_scheduler); point it
     # at the container's full CPU allocation instead of the 16-worker default.
@@ -106,6 +109,24 @@ def compile_remote(
     return result
 
 
+def _write_shipped_config(config_name: str, config_text: str) -> str:
+    """Materialize the LOCAL config file inside the container.
+
+    The config is shipped by VALUE (its text), not by path: /tmp variant
+    configs (the one-config discipline's A/B mechanism) don't exist in
+    the baked image, and shipping the committed configs the same way
+    removes the path-translation special case.  WAD resolution is
+    unaffected: resolve_wad_path falls back to the repo root
+    (/root/doom1.wad) when the config's own directory has no WAD.
+    """
+    from pathlib import Path as _P
+
+    dest = _P("/tmp/shipped_configs") / _P(config_name).name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(config_text)
+    return str(dest)
+
+
 def _volume_has_compiled(cache_subdir: str) -> bool:
     """Local cache-hit probe so a hit skips the compile container entirely."""
     try:
@@ -128,13 +149,17 @@ def _volume_has_compiled(cache_subdir: str) -> bool:
         "/root/.cache/torchwright_doom/compiled": CACHE_VOLUME,
     },
 )
-def render_remote(run_id: str, kwargs: dict, cache_subdir: str) -> dict:
+def render_remote(
+    run_id: str, kwargs: dict, cache_subdir: str, config_name: str, config_text: str
+) -> dict:
     import sys
 
     if "/root" not in sys.path:
         sys.path.insert(0, "/root")  # make /root/doom_sandbox importable
 
     from torchwright_doom.inference.cli import run_config
+
+    kwargs = {**kwargs, "config_path": _write_shipped_config(config_name, config_text)}
 
     # Compilation happens in ``compile_remote`` (a separate 64-CPU container),
     # which writes the ONNX into CACHE_VOLUME under ``cache_subdir``. Reload so
@@ -152,18 +177,6 @@ def render_remote(run_id: str, kwargs: dict, cache_subdir: str) -> dict:
         p.name: p.read_bytes() for p in sorted(Path(out_dir).glob("*")) if p.is_file()
     }
     return {"summary": summary, "files": files}
-
-
-def _remote_config_path(config: str) -> Path:
-    path = Path(config)
-    if path.is_absolute():
-        return path
-    parts = path.parts
-    if parts[:2] == ("torchwright_doom", "configs"):
-        return Path("/root/configs", *parts[2:])
-    if parts and parts[0] == "configs":
-        return Path("/root", *parts)
-    return Path("/root/configs") / path
 
 
 @app.local_entrypoint()
@@ -188,7 +201,9 @@ def main(
     attention_buckets: str = "",
 ):
     config_path = Path(config)
-    remote_config = _remote_config_path(config)
+    # Shipped by VALUE (see _write_shipped_config): /tmp variant configs
+    # work on Modal, and the legs of an A/B differ only in the file text.
+    config_text = config_path.read_text()
 
     # --- Compile on Modal (64-CPU container), key computed LOCALLY -------
     # The cache key embeds the submodule git SHAs, and Modal containers have
@@ -224,7 +239,11 @@ def main(
             flush=True,
         )
         compile_remote.remote(
-            str(remote_config), cache_subdir, compile_payload, verbose_compile
+            config_path.name,
+            config_text,
+            cache_subdir,
+            compile_payload,
+            verbose_compile,
         )
 
     run_id = (
@@ -232,7 +251,6 @@ def main(
         or f"{config_path.stem}__x{x:g}_y{y:g}_a{angle}__{mode}__{int(time.time())}"
     )
     kwargs = dict(
-        config_path=str(remote_config),
         x=x,
         y=y,
         angle=angle,
@@ -252,7 +270,9 @@ def main(
         attention_buckets=attention_buckets or None,
     )
     print(f"[local] launching render_remote run_id={run_id} kwargs={kwargs}")
-    result = render_remote.remote(run_id, kwargs, cache_subdir)
+    result = render_remote.remote(
+        run_id, kwargs, cache_subdir, config_path.name, config_text
+    )
 
     local_dir = _HERE / out_dir
     local_dir.mkdir(parents=True, exist_ok=True)

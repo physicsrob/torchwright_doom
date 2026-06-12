@@ -122,6 +122,7 @@ def run_config(
         enable_profiling=profile,
         profile_dir=out_dir if profile else None,
         attention_buckets=attention_buckets,
+        expiring_types=config.expiring_types,
     )
     print("[run] ONNX runtime ready", flush=True)
 
