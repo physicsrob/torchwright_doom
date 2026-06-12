@@ -85,43 +85,106 @@ def test_alloc_sequential_fill_then_recycle_skips_permanent():
     _, ws = _windowed_cache(window=6)
     # Fill: slots 0..5, alternating permanent/expiring tags.
     flags = [False, True, False, True, True, False]  # permanent at 0, 2, 5
-    assert [alloc_slot(ws, f) for f in flags] == [0, 1, 2, 3, 4, 5]
+    assert [alloc_slot(ws, f, pos) for pos, f in enumerate(flags)] == [0, 1, 2, 3, 4, 5]
     assert ws.n_permanent == 3
     # Recycling visits only the expired slots, in cursor order.
-    assert alloc_slot(ws, True) == 1
-    assert alloc_slot(ws, True) == 3
-    assert alloc_slot(ws, True) == 4
+    assert alloc_slot(ws, True, 6) == 1
+    assert alloc_slot(ws, True, 7) == 3
+    assert alloc_slot(ws, True, 8) == 4
     # Second revolution wraps back to slot 1.
-    assert alloc_slot(ws, True) == 1
+    assert alloc_slot(ws, True, 9) == 1
 
 
 def test_alloc_recycled_slot_can_become_permanent():
     _, ws = _windowed_cache(window=4)
-    for f in (False, True, True, False):
-        alloc_slot(ws, f)
+    for pos, f in enumerate((False, True, True, False)):
+        alloc_slot(ws, f, pos)
     # A permanent row recycles an expired slot — the pool shrinks.
-    assert alloc_slot(ws, False) == 1
+    assert alloc_slot(ws, False, 4) == 1
     assert ws.n_permanent == 3
     # Only slot 2 is left expiring.
-    assert alloc_slot(ws, True) == 2
-    assert alloc_slot(ws, True) == 2  # sole expired slot, every time
+    assert alloc_slot(ws, True, 5) == 2
+    assert alloc_slot(ws, True, 6) == 2  # sole expired slot, every time
 
 
 def test_alloc_saturation_raises():
     _, ws = _windowed_cache(window=3)
-    for _ in range(3):
-        alloc_slot(ws, False)
+    for pos in range(3):
+        alloc_slot(ws, False, pos)
     with pytest.raises(RuntimeError, match="saturated"):
-        alloc_slot(ws, True)
+        alloc_slot(ws, True, 3)
 
 
 def test_alloc_runs_compress_contiguous_assignments():
     _, ws = _windowed_cache(window=8)
     # Pure fill: one run.
-    assert alloc_runs(ws, [True] * 5) == [[0, 0, 5]]
-    assert alloc_runs(ws, [False] * 3) == [[5, 0, 3]]
+    assert alloc_runs(ws, [True] * 5, 0) == [[0, 0, 5]]
+    assert alloc_runs(ws, [False] * 3, 5) == [[5, 0, 3]]
     # Recycling: slots 0..4 are expired and contiguous -> one run again.
-    assert alloc_runs(ws, [True] * 3) == [[0, 0, 3]]
+    assert alloc_runs(ws, [True] * 3, 8) == [[0, 0, 3]]
+
+
+# ---------------------------------------------------------------------------
+# Read-distance recycle guard (the resident-read invariant tripwire)
+# ---------------------------------------------------------------------------
+
+
+def test_recycle_guard_rejects_eviction_inside_read_scope():
+    _, ws = _windowed_cache(window=4)
+    ws.min_recycle_distance = 10
+    for pos, f in enumerate((False, True, True, False)):
+        alloc_slot(ws, f, pos)
+    # Slot 1 holds position 1; evicting it at position 4 (age 3 <= 10)
+    # would leave a read inside the certified scope targeting a recycled
+    # slot — must fail loud.
+    with pytest.raises(RuntimeError, match="certified read scope"):
+        alloc_slot(ws, True, 4)
+
+
+def test_recycle_guard_allows_eviction_past_read_scope():
+    _, ws = _windowed_cache(window=4)
+    ws.min_recycle_distance = 10
+    for pos, f in enumerate((False, True, True, False)):
+        alloc_slot(ws, f, pos)
+    # Position 12: slot 1's occupant (position 1) is age 11 > 10 — fine.
+    assert alloc_slot(ws, True, 12) == 1
+    assert ws.slot_write_pos[1] == 12
+
+
+def test_recycle_guard_disabled_at_zero_distance():
+    _, ws = _windowed_cache(window=2)
+    for pos, f in enumerate((True, True)):
+        alloc_slot(ws, f, pos)
+    # Default min_recycle_distance=0: immediate recycling stays legal
+    # (positions strictly increase, so age <= 0 never holds).
+    assert alloc_slot(ws, True, 2) == 0
+
+
+def test_min_recycle_distance_for_certified_sets():
+    from torchwright_doom.inference.kv_cache import min_recycle_distance_for
+
+    assert min_recycle_distance_for(["pixel"]) == 3
+    # The production tier-1 set is dominated by wallSpanMeta's 619.
+    assert (
+        min_recycle_distance_for(
+            [
+                "pixel",
+                "setCursorX",
+                "setCursorY",
+                "setCursorDirectionX",
+                "setCursorDirectionY",
+                "wallColU",
+                "screenY",
+                "wallSpanMeta",
+                "clipUpdate",
+                "R_MapPlane.row",
+            ]
+        )
+        == 619
+    )
+    # Uncertified types fall back to the conservative certified max.
+    assert min_recycle_distance_for(["pixel", "someNewType"]) == 619
+    assert min_recycle_distance_for([]) == 0
 
 
 # ---------------------------------------------------------------------------

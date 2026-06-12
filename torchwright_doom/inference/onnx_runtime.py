@@ -18,8 +18,21 @@ from typing import Any
 
 import torch
 
-from .generation import DEFAULT_PREFILL_CHUNK_SIZE, TokenRuntime
-from .kv_cache import KVCache, WindowedState, persist_rows
+from .generation import TokenRuntime
+from .kv_cache import (
+    KVCache,
+    WindowedState,
+    min_recycle_distance_for,
+    persist_rows,
+)
+
+# Widest prefill chunk the windowed runtime will ever stage: an upper BOUND
+# on per-pass width that sizes the staging-tail allocation, NOT a run
+# default (runs default to the config's run.prefill_chunk_size; the two
+# roles used to share generation.DEFAULT_PREFILL_CHUNK_SIZE, coupling a
+# memory-shape budget to a CLI default).  A prefill chunk wider than this
+# would scatter past the allocated tail.
+PREFILL_STAGING_BUDGET = 1024
 
 
 def env_flag(name: str) -> bool:
@@ -260,6 +273,11 @@ class OnnxTokenRuntime(TokenRuntime):
         # the cache just has to fit everything.
         self._expiring_rows: list[bool] = []
         self._expiring_types = tuple(expiring_types or ())
+        # Recycle guard distance = worst certified read scope of the active
+        # expiring set (see kv_cache.CERTIFIED_READ_SCOPE) — alloc_slot
+        # fails loud if a recycle would evict a row some read could still
+        # target, instead of corrupting the stream silently.
+        self._min_recycle_distance = min_recycle_distance_for(self._expiring_types)
         if self._cache_window is not None:
             row_to_token = self.metadata.get("row_to_token")
             if row_to_token:
@@ -293,7 +311,7 @@ class OnnxTokenRuntime(TokenRuntime):
         # widest passes) plus the spec-verify bucket.  Sizes the windowed
         # allocation; unused on the unbounded protocol.
         self._batch_bucket_width = 9
-        self._staging_max = max(self._batch_bucket_width, DEFAULT_PREFILL_CHUNK_SIZE)
+        self._staging_max = max(self._batch_bucket_width, PREFILL_STAGING_BUDGET)
         # Attention-window buckets (sorted, last == cache_stride): each pass
         # binds the smallest bucket covering committed length + pass width,
         # so early-frame steps pay small-S_eff attention while the cache
@@ -522,6 +540,7 @@ class OnnxTokenRuntime(TokenRuntime):
                     window=window,
                     staging=self._staging_max,
                     slot_expiring=[False] * window,
+                    min_recycle_distance=self._min_recycle_distance,
                 )
             return cache
         device = self._device
@@ -550,6 +569,7 @@ class OnnxTokenRuntime(TokenRuntime):
                     window=window,
                     staging=self._staging_max,
                     slot_expiring=[False] * window,
+                    min_recycle_distance=self._min_recycle_distance,
                 )
                 if window is not None
                 else None
