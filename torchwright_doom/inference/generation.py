@@ -29,6 +29,10 @@ from .kv_cache import KVCache, commit
 # transient under the static-S cache (unchunked prefill at n=3613, S=12288
 # peaks ~45 GB on the widest d=4096 layer).  Chunking is semantically
 # identical to a single pass; this is a memory knob, not an algorithm change.
+# Direct-API default only: render jobs resolve their chunk size from the
+# config's ``run.prefill_chunk_size``, and the windowed staging-tail
+# allocation has its own bound (``onnx_runtime.PREFILL_STAGING_BUDGET`` —
+# the two roles used to share this constant).
 DEFAULT_PREFILL_CHUNK_SIZE = 1024
 
 

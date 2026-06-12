@@ -10,6 +10,27 @@ below (`#N`) index that file.
 `3bf2162`: doc truth, dependency closure, the `ruff check --select F`
 lint gate, and fail-loud error paths. This file tracks what remains.
 
+**Progress (2026-06-12, this cleanup session):**
+
+- **Loose end CLOSED.** Batch 1 certified at production scale: fresh-
+  process pure-AR full frame on B200, `compare_token_dumps` vs the
+  tier-1 certified baseline (`out/tier1_prod_b`) — TOKEN-IDENTICAL
+  (prefill 3,613 / predictions 25,350 / rollout 25,350, zero diffs).
+  NB an in-process `mode=both` run at this config trips the
+  propagated-tie budget (27 pixel flips) — that is the documented
+  leg-2 contamination (plan_tier1_expiry.md "Gate findings"), not a
+  divergence; production certification is fresh-process pure-vs-
+  baseline via `scripts/compare_token_dumps.py`.
+- **Batch 3 + 4a LANDED** (`52c20a7`): all 23 oracle/bridge gates run
+  under `make test` (262 passed, 0 skipped). Re-enabling schema-sync
+  exposed real contract drift (4ca305c's id_lifted_key on
+  node.child0/child1 never mirrored) — fixed sandbox-side
+  (doom_sandbox `5e7196c`), baseline regenerated. #62 and #64 also
+  done.
+- **Batch 2 LANDED** (see commit). Suite 270 passed, 0 skipped.
+- **Batch 4b LANDED** (see commit).
+- **Batch 4c / 4d:** remaining.
+
 ---
 
 ## Working discipline (applies to every batch)

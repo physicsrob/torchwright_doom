@@ -22,3 +22,20 @@ textures:
   wall: [BROWN1, BROWN144, COMPUTE2, DOOR3, DOORSTOP, LITE3, STARTAN3, STEP6, SUPPORT2]
   flat: [CEIL3_5, FLAT14, FLAT5_5, FLOOR4_8, FLOOR7_1, F_SKY1]
 expiring_types: [pixel, setCursorX, setCursorY, setCursorDirectionX, setCursorDirectionY, wallColU, screenY, wallSpanMeta, clipUpdate, R_MapPlane.row]
+# Render-job runtime defaults — THE single source (CLI flags override
+# field-by-field; the Makefiles hold no copies).  Runtime knobs only:
+# none of these enter the compile-cache key.
+run:
+  mode: spec_decode
+  # Covers the full 160x100 frame (25,350 tokens measured) with ample
+  # headroom; the windowed cache bounds SLOTS, not positions, so the cap
+  # is the pos-encoding table (max_seq_len 65536), and an oversized
+  # demand makes empty_past() reject before prefill.
+  max_positions: 61440
+  draft_window: 8
+  # 128-row chunks keep the per-layer (n_heads, chunk, S) prefill logits
+  # transient small on an 80 GB A100 even at 64k stride; a few extra
+  # seconds of prefill, semantically identical to a single pass.
+  prefill_chunk_size: 128
+  # E1M1 start room, world coordinates (map data, like region:).
+  pose: {x: 1056.0, y: -3616.0, angle: 64, viewz: 41.0}

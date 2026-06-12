@@ -1,33 +1,19 @@
 # THE config — the single committed configuration (see CLAUDE.md, "One
 # configuration").  Experiments copy it to /tmp and override CONFIG=.
+#
+# Render-job defaults (pose, mode, max positions, draft window, prefill
+# chunk) live in the config's `run:` section — NOT here.  The Makefile
+# passes a flag only when the variable is set explicitly
+# (e.g. `make run RENDER_MODE=pure_ar`), so it can never hold a stale
+# copy of a default.
 CONFIG ?= configs/e1m1.yaml
 OUT_DIR ?= out/render
-RENDER_X ?= 1056.0
-RENDER_Y ?= -3616.0
-RENDER_ANGLE ?= 64
-RENDER_VIEWZ ?= 41.0
-RENDER_MODE ?= spec_decode
-# 61440 covers a full 160x100 frame (25,350 tokens measured) with ample
-# headroom; the windowed cache bounds SLOTS, not positions, so the cap
-# is the pos-encoding table (max_seq_len 65536), and an oversized demand
-# makes empty_past() reject before prefill.
-RENDER_MAX_POSITIONS ?= 61440
-# Modal GPU for render_remote (read at modal_render.py import).
-# b200 | a100-80gb — B200 is the default: the captured decode is
+# Modal GPU for render_remote (read at modal_render.py import as an env
+# var).  b200 | a100-80gb — B200 is the default: the captured decode is
 # bandwidth-bound (B200's ~4x HBM bandwidth maps ~directly to step time,
 # measured 14.3 ms + 0.522 us/slot x S_eff per width-1 step).  With the
 # windowed cache (~11.4 GB KV + ~17 GB weights) the A100 also has slack.
 RENDER_GPU ?= b200
-RENDER_DRAFT_WINDOW ?= 8
-# 1024-row chunks bound the static-S prefill logits transient
-# ((n_heads, chunk, S) per layer; unchunked at n=3613, S=12288 the widest
-# layer is ~45 GB on the A100 and OOMs the L4 gate).  Chunking is
-# semantically identical — see plan_cuda_graph_decode.md "Memory budget".
-# 128-row chunks keep the per-layer (n_heads, chunk, S) prefill logits
-# transient small for the 64k-stride config on an 80 GB A100 (~8.6 GB at
-# nh=128/S=65536; the int32 clamp alone allows 255 rows = ~17 GB, leaving
-# only ~4 GB headroom there).  Cost: a few extra seconds of prefill.
-PREFILL_CHUNK_SIZE ?= 128
 RENDER_PROGRESS_EVERY ?= 250
 PNG_ZOOM ?= 8
 # Attention-window bucket table (stride bucketing): comma-separated S_eff
@@ -46,15 +32,15 @@ _RENDER_COMPILE_ARGS = $(strip \
 )
 _RENDER_RUN_ARGS = $(strip \
 	--config $(CONFIG) \
-	--x $(RENDER_X) \
-	--y $(RENDER_Y) \
-	--angle $(RENDER_ANGLE) \
-	--viewz $(RENDER_VIEWZ) \
-	--mode $(RENDER_MODE) \
+	$(if $(RENDER_X),--x $(RENDER_X)) \
+	$(if $(RENDER_Y),--y $(RENDER_Y)) \
+	$(if $(RENDER_ANGLE),--angle $(RENDER_ANGLE)) \
+	$(if $(RENDER_VIEWZ),--viewz $(RENDER_VIEWZ)) \
+	$(if $(RENDER_MODE),--mode $(RENDER_MODE)) \
 	--out-dir $(OUT_DIR) \
-	--max-positions $(RENDER_MAX_POSITIONS) \
-	--draft-window $(RENDER_DRAFT_WINDOW) \
-	--prefill-chunk-size $(PREFILL_CHUNK_SIZE) \
+	$(if $(RENDER_MAX_POSITIONS),--max-positions $(RENDER_MAX_POSITIONS)) \
+	$(if $(RENDER_DRAFT_WINDOW),--draft-window $(RENDER_DRAFT_WINDOW)) \
+	$(if $(PREFILL_CHUNK_SIZE),--prefill-chunk-size $(PREFILL_CHUNK_SIZE)) \
 	--progress-every $(RENDER_PROGRESS_EVERY) \
 	--png-zoom $(PNG_ZOOM) \
 	$(_RENDER_PNG) \

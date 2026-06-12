@@ -47,14 +47,17 @@ SCHEDULE_VOLUME = modal.Volume.from_name(
 # at 8 CPUs). TW_CPSAT_WORKERS below must match this number.
 _COMPILE_CPUS = 64
 
-# Render GPU, read at (local) import time — pass as an env var, not a make
-# variable: RENDER_GPU=b200 make run.  The captured decode step is
+# Render GPU — an env var (NOT a config field) because it parameterizes the
+# ``@app.function(gpu=...)`` decorator at module-import time, before --config
+# is parsed.  The Makefile exports it (``RENDER_GPU ?= b200``); the fallback
+# here must match.  B200 is the default: the captured decode step is
 # KV-bandwidth-bound, so GPU HBM bandwidth maps ~directly to step time
 # (A100-80GB ~2 TB/s; B200 ~8 TB/s and 192 GB fits the 64k cache + 1024-row
-# prefill chunks comfortably).
+# prefill chunks comfortably).  The A100 also has slack for the windowed
+# production config (~11.4 GB KV + ~17 GB weights): RENDER_GPU=a100-80gb.
 import os as _os
 
-_RENDER_GPU = _os.environ.get("RENDER_GPU", "a100-80gb")
+_RENDER_GPU = _os.environ.get("RENDER_GPU", "b200")
 
 
 @app.function(
@@ -190,17 +193,19 @@ def render_remote(
 
 @app.local_entrypoint()
 def main(
+    # Run-knob defaults live in the config's ``run:`` section — run_config
+    # resolves None there, so this entrypoint must NOT restate them.
     config: str = "configs/e1m1.yaml",
-    x: float = 1056.0,
-    y: float = -3616.0,
-    angle: int = 64,
-    viewz: float = 41.0,
-    mode: str = "spec_decode",
+    x: float | None = None,
+    y: float | None = None,
+    angle: int | None = None,
+    viewz: float | None = None,
+    mode: str | None = None,
     out_dir: str = "out/render",
     run_name: str = "",
-    max_positions: int = 8000,
-    draft_window: int = 0,
-    prefill_chunk_size: int = 128,
+    max_positions: int | None = None,
+    draft_window: int | None = None,
+    prefill_chunk_size: int | None = None,
     progress_every: int = 250,
     png: bool = False,
     compare: bool = False,
@@ -255,9 +260,17 @@ def main(
             verbose_compile,
         )
 
+    # Display-only resolution for the run id (run_config re-resolves the
+    # real values remotely from the same flag > config.run order).
+    run = render_config.run
+    rid_x = run.pose.x if x is None else x
+    rid_y = run.pose.y if y is None else y
+    rid_angle = run.pose.angle if angle is None else angle
+    rid_mode = run.mode if mode is None else mode
     run_id = (
         run_name
-        or f"{config_path.stem}__x{x:g}_y{y:g}_a{angle}__{mode}__{int(time.time())}"
+        or f"{config_path.stem}__x{rid_x:g}_y{rid_y:g}_a{rid_angle}__{rid_mode}"
+        f"__{int(time.time())}"
     )
     kwargs = dict(
         x=x,

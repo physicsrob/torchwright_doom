@@ -51,9 +51,9 @@ def load_render_scene(
 
 
 def default_pose_world(config: RenderConfig) -> tuple[float, float, int, float]:
-    # The plan's default scene is the E1M1 start room. Keeping this local avoids
-    # importing prompt.scenes in CLI setup paths that only need config parsing.
-    return (1056.0, -3616.0, 64, 41.0)
+    """The config's default pose (``run.pose``), in world coordinates."""
+    pose = config.run.pose
+    return (pose.x, pose.y, pose.angle, pose.viewz)
 
 
 def pose_from_world(

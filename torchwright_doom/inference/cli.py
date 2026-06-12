@@ -14,7 +14,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from .config import apply_screen_env, load_render_config
+from .config import apply_screen_env, load_render_config, resolve_run_args
 
 
 def compile_config(
@@ -46,11 +46,11 @@ def run_config(
     y: float | None = None,
     angle: int | None = None,
     viewz: float | None = None,
-    mode: str = "spec_decode",
+    mode: str | None = None,
     out_dir: str | Path = "out/render",
-    max_positions: int = 10240,
-    draft_window: int = 0,
-    prefill_chunk_size: int = 128,
+    max_positions: int | None = None,
+    draft_window: int | None = None,
+    prefill_chunk_size: int | None = None,
     progress_every: int = 250,
     png: bool = False,
     compare_images: bool = False,
@@ -63,6 +63,22 @@ def run_config(
     config_path = Path(config_path)
     config = load_render_config(config_path)
     apply_screen_env(config)
+    # Render-job knobs resolve CLI flag > config ``run:`` section (whose
+    # dataclass defaults cover configs without one) — see resolve_run_args.
+    args = resolve_run_args(
+        config,
+        x=x,
+        y=y,
+        angle=angle,
+        viewz=viewz,
+        mode=mode,
+        max_positions=max_positions,
+        draft_window=draft_window,
+        prefill_chunk_size=prefill_chunk_size,
+    )
+    x, y, angle, viewz = args.x, args.y, args.angle, args.viewz
+    mode, max_positions = args.mode, args.max_positions
+    draft_window, prefill_chunk_size = args.draft_window, args.prefill_chunk_size
     # Attention-window bucket table (stride bucketing) — a RUNTIME knob:
     # the symbolic-dim graph serves any table without recompiling, so this
     # deliberately does NOT enter the compile-cache key.  None = quarters
@@ -242,14 +258,7 @@ def run_config(
                 gen, ref, out_dir, options=options, scale=png_zoom
             )
 
-    world_x = float(x if x is not None else 1056.0)
-    world_y = float(y if y is not None else -3616.0)
-    pose_payload = {
-        "x": world_x,
-        "y": world_y,
-        "angle": int(angle if angle is not None else 64),
-        "viewz": float(viewz if viewz is not None else 41.0),
-    }
+    pose_payload = {"x": x, "y": y, "angle": angle, "viewz": viewz}
     dump = artifacts.build_token_dump(
         fixture=f"{render_scene.wad_path.name}:{config.map}",
         pose_index=0,
@@ -374,14 +383,14 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--y", type=float)
     pr.add_argument("--angle", type=int)
     pr.add_argument("--viewz", type=float)
-    pr.add_argument(
-        "--mode", default="spec_decode", choices=["spec_decode", "pure_ar", "both"]
-    )
+    # Run-knob defaults live in the config's ``run:`` section (run_config
+    # resolves None there) — argparse must NOT restate them.
+    pr.add_argument("--mode", default=None, choices=["spec_decode", "pure_ar", "both"])
     pr.add_argument("--out-dir", default="out/render", dest="out_dir")
-    pr.add_argument("--max-positions", type=int, default=10240, dest="max_positions")
-    pr.add_argument("--draft-window", type=int, default=0, dest="draft_window")
+    pr.add_argument("--max-positions", type=int, default=None, dest="max_positions")
+    pr.add_argument("--draft-window", type=int, default=None, dest="draft_window")
     pr.add_argument(
-        "--prefill-chunk-size", type=int, default=128, dest="prefill_chunk_size"
+        "--prefill-chunk-size", type=int, default=None, dest="prefill_chunk_size"
     )
     pr.add_argument("--progress-every", type=int, default=250, dest="progress_every")
     pr.add_argument("--png", action="store_true")

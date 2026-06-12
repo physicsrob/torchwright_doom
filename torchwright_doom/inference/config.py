@@ -77,6 +77,49 @@ class RegionConfig:
 
 
 @dataclass(frozen=True)
+class PoseConfig:
+    """Default render pose, in world coordinates — map data, the same kind
+    of fact as ``region:`` (the E1M1 start room for THE config)."""
+
+    x: float = 1056.0
+    y: float = -3616.0
+    angle: int = 64
+    viewz: float = 41.0
+
+
+@dataclass(frozen=True)
+class RunConfig:
+    """Render-job runtime defaults (the optional ``run:`` YAML section).
+
+    These are RUNTIME knobs — deliberately NOT part of
+    ``canonical_compile_payload``, so changing them never recompiles
+    (pinned by ``tests/inference/test_config.py``).  CLI flags override
+    field-by-field; the dataclass defaults apply when a config omits the
+    section.  Single-sourcing these here is what removed the Makefile /
+    cli.py / modal_render.py three-way default drift (a bare direct
+    invocation used to truncate the frame and silently disable
+    speculative decoding).
+    """
+
+    mode: str = "spec_decode"
+    # 61440 covers a full 160x100 frame (25,350 tokens measured) with
+    # ample headroom; the windowed cache bounds SLOTS, not positions, so
+    # the cap is the pos-encoding table (max_seq_len 65536), and an
+    # oversized demand makes empty_past() reject before prefill.
+    max_positions: int = 61440
+    # Speculative-decode draft window; the spec/pure contract keeps the
+    # emitted stream equivalent, so speculation is on by default.
+    draft_window: int = 8
+    # 128-row chunks keep the per-layer (n_heads, chunk, S) prefill
+    # logits transient small for the 64k-stride config on an 80 GB A100
+    # (~8.6 GB at nh=128/S=65536; the int32 clamp alone allows 255 rows
+    # = ~17 GB, leaving only ~4 GB headroom there).  Cost: a few extra
+    # seconds of prefill.  Semantically identical to a single pass.
+    prefill_chunk_size: int = 128
+    pose: PoseConfig = PoseConfig()
+
+
+@dataclass(frozen=True)
 class TextureConfig:
     wall: tuple[str, ...] = WALL_TEXTURE_NAMES
     flat: tuple[str, ...] = FLAT_NAMES
@@ -102,6 +145,9 @@ class RenderConfig:
     # so changing it never recompiles.  TWDOOM_EXPIRING_TYPES (comma-
     # separated) still overrides at load time for ad-hoc experiments.
     expiring_types: tuple[str, ...] = ("pixel",)
+    # Render-job runtime defaults (optional ``run:`` section) — also a
+    # RUNTIME knob set, never part of the compile payload.
+    run: RunConfig = RunConfig()
 
     @property
     def screen(self) -> tuple[int, int]:
@@ -109,6 +155,56 @@ class RenderConfig:
 
     def asset_config(self) -> AssetConfig:
         return self.textures.asset_config()
+
+
+@dataclass(frozen=True)
+class ResolvedRunArgs:
+    x: float
+    y: float
+    angle: int
+    viewz: float
+    mode: str
+    max_positions: int
+    draft_window: int
+    prefill_chunk_size: int
+
+
+def resolve_run_args(
+    config: RenderConfig,
+    *,
+    x: float | None = None,
+    y: float | None = None,
+    angle: int | None = None,
+    viewz: float | None = None,
+    mode: str | None = None,
+    max_positions: int | None = None,
+    draft_window: int | None = None,
+    prefill_chunk_size: int | None = None,
+) -> ResolvedRunArgs:
+    """Resolve render-job knobs: explicit caller value > config ``run:``.
+
+    ``None`` means "the caller didn't say" — every entry point (Makefile,
+    modal_render, argparse) passes ``None`` unless the user set the flag,
+    so the config stays the single default source.  An explicit zero (e.g.
+    ``--draft-window 0``) is a real value and overrides the config.
+    """
+    run = config.run
+    return ResolvedRunArgs(
+        x=run.pose.x if x is None else float(x),
+        y=run.pose.y if y is None else float(y),
+        angle=run.pose.angle if angle is None else int(angle),
+        viewz=run.pose.viewz if viewz is None else float(viewz),
+        mode=run.mode if mode is None else str(mode),
+        max_positions=(
+            run.max_positions if max_positions is None else int(max_positions)
+        ),
+        draft_window=run.draft_window if draft_window is None else int(draft_window),
+        prefill_chunk_size=(
+            run.prefill_chunk_size
+            if prefill_chunk_size is None
+            else int(prefill_chunk_size)
+        ),
+    )
 
 
 def screen_dims_for_scale(scale: int) -> tuple[int, int]:
@@ -135,6 +231,10 @@ def load_render_config(path: str | Path) -> RenderConfig:
     model = _mapping(data.get("model") or {}, "model")
     region = _mapping(data.get("region") or {}, "region")
     textures = _mapping(data.get("textures") or {}, "textures")
+    run = _mapping(data.get("run") or {}, "run")
+    pose = _mapping(run.get("pose") or {}, "run.pose")
+    run_defaults = RunConfig()
+    pose_defaults = PoseConfig()
     cfg = RenderConfig(
         wad=str(data.get("wad", "doom1.wad")),
         map=str(data.get("map", "E1M1")),
@@ -162,6 +262,20 @@ def load_render_config(path: str | Path) -> RenderConfig:
             flat=tuple(str(v) for v in textures.get("flat", FLAT_NAMES)),
         ),
         expiring_types=tuple(str(v) for v in data.get("expiring_types", ["pixel"])),
+        run=RunConfig(
+            mode=str(run.get("mode", run_defaults.mode)),
+            max_positions=int(run.get("max_positions", run_defaults.max_positions)),
+            draft_window=int(run.get("draft_window", run_defaults.draft_window)),
+            prefill_chunk_size=int(
+                run.get("prefill_chunk_size", run_defaults.prefill_chunk_size)
+            ),
+            pose=PoseConfig(
+                x=float(pose.get("x", pose_defaults.x)),
+                y=float(pose.get("y", pose_defaults.y)),
+                angle=int(pose.get("angle", pose_defaults.angle)),
+                viewz=float(pose.get("viewz", pose_defaults.viewz)),
+            ),
+        ),
     )
     _validate_config(cfg)
     return cfg
@@ -245,6 +359,18 @@ def canonical_compile_payload(
 
 def _validate_config(config: RenderConfig) -> None:
     screen_dims_for_scale(config.model.scale)
+    if config.run.mode not in ("spec_decode", "pure_ar", "both"):
+        raise ValueError(
+            f"run.mode {config.run.mode!r} must be spec_decode | pure_ar | both"
+        )
+    if config.run.max_positions < 1:
+        raise ValueError(f"run.max_positions {config.run.max_positions} must be >= 1")
+    if config.run.draft_window < 0:
+        raise ValueError(f"run.draft_window {config.run.draft_window} must be >= 0")
+    if config.run.prefill_chunk_size < 1:
+        raise ValueError(
+            f"run.prefill_chunk_size {config.run.prefill_chunk_size} must be >= 1"
+        )
     if not (1 <= config.model.cache_stride <= config.model.max_seq_len):
         raise ValueError(
             f"model.cache_stride {config.model.cache_stride} must be in "
@@ -281,6 +407,12 @@ def _mapping(value: Any, name: str) -> dict[str, Any]:
 
 
 def _load_yaml_subset(path: Path) -> dict[str, Any]:
+    # Hand-rolled ON PURPOSE: pyyaml is not in the workspace lockfile and
+    # one render config does not justify the dependency.  The accepted
+    # grammar is the subset the committed config uses — nested mappings by
+    # two-space indentation, inline [list] / {mapping} literals, scalars
+    # (int / float / bool / null / quoted or bare strings), '#' comments.
+    # Block lists ("- item") are NOT accepted and fail loud below.
     root: dict[str, Any] = {}
     stack: list[tuple[int, dict[str, Any]]] = [(-1, root)]
     for lineno, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
