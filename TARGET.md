@@ -1,13 +1,17 @@
 # Port target (Plan A: vocab alignment)
 
-**Screen scale: 60×50** — the sandbox fixture default. The spec09 port
-runs the whole way at 60×50, which gives exact token-by-token prompt
-parity with the sandbox fixtures. The retarget to the real **160×100**
-is **deferred to a project-level step once the port is in good shape**:
-a one-line change to `SCREEN_WIDTH` / `SCREEN_HEIGHT` in
-`torchwright_doom/constants.py`. It is kept a constant swap (not a
-re-port) by the `test_screen_scale_guard` no-bare-literal test, and it
-is **not** a per-plan completion gate.
+**Screen scale: 160×100 (shipped).** The spec09 port ran the whole way
+at the sandbox fixture default of 60×50 (exact token-by-token prompt
+parity with the sandbox fixtures); the retarget to the real **160×100**
+has since shipped. The mechanism is config-driven, not a constants
+edit: `configs/e1m1.yaml` sets `model.scale: 2` and
+`apply_screen_env` (`inference/config.py`) exports the screen dims
+before graph modules import. `torchwright_doom/constants.py` keeps
+60×50 only as its bare-import default (what tests that import the graph
+without a config see). Every screen-derived width references the
+constants module, never a literal — guarded by
+`test_screen_scale_guard` — so the scale stays a config swap, not a
+re-port.
 
 **Vocab contract reference: `doom_sandbox` main.** The real
 `torchwright_doom.embedding.TOKEN_VOCAB` mirrors the sandbox

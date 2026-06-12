@@ -4,7 +4,7 @@
 compilation and for artifact debugging (asset banks -> ``AssetIndex`` ->
 ``build_doom_embedding("token_ids")`` -> ``forward``).  ``compile_to_onnx_path``
 compiles that graph to the production ONNX artifact; ``OnnxDebugSession`` over
-the cached artifact (see ``cache.load_debug_session``) reuses the same
+the cached artifact (see ``compile_cache.load_debug_session``) reuses the same
 construction, which is what its graph-fingerprint check requires.  Graph nodes
 are built **inside** ``build_graph`` — never at import (the
 import-time-node-free rule, twdoom CLAUDE.md).
@@ -78,10 +78,11 @@ def compile_to_onnx_path(
 ) -> dict[str, Any]:
     """Compile the token-id forward to ONNX and return basic build metadata.
 
-    ``cache_window`` selects the windowed-cache export (attention sink +
-    sliding window; see ModelConfig.cache_window).  The exporter rejects
-    cache_stride + cache_window together, so the window replaces the
-    stride in the kwargs rather than riding alongside it.
+    ``cache_window`` selects the windowed-cache export (the host-managed
+    permanent/expiring slot policy with an in-graph writtenness mask; see
+    ModelConfig.cache_window).  The exporter rejects cache_stride +
+    cache_window together, so the window replaces the stride in the
+    kwargs rather than riding alongside it.
     """
     from torchwright.compiler.export import compile_to_onnx
 

@@ -32,8 +32,6 @@ import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
-import torch
-
 _UMBRELLA = Path(__file__).resolve().parents[2]
 os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
 for p in (_UMBRELLA, _UMBRELLA / "torchwright_doom"):

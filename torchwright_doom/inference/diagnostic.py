@@ -173,7 +173,3 @@ def teacher_forced_scan(
                     )
                 )
     return divergences
-
-
-def first_divergence(divergences: list[Divergence]) -> Divergence | None:
-    return divergences[0] if divergences else None

@@ -214,7 +214,6 @@ class FlatPassState:
         runtime_visplanes: "RuntimeVisplaneState",
         pos: Node,
     ) -> "FlatPassState":
-        zero_value = constant(0.0)
         neg_one_value = constant(-1.0)
         span_close_slot_1 = constant(1.0)
         screen_height_value = constant(float(SCREEN_HEIGHT))

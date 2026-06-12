@@ -13,7 +13,6 @@ subject of ``test_emit_compiled_round_trip.py``.
 
 from __future__ import annotations
 
-import math
 
 import torch
 

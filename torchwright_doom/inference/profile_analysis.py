@@ -198,7 +198,7 @@ def summarize_profile(
         f"ms/pass, {100 * kv_scaling_us / kernel:.1f}% of kernel)"
     )
     lines.append("")
-    lines.append(f"--- Memcpy nodes (the CUDA-graph blockers) ---")
+    lines.append("--- Memcpy nodes (the CUDA-graph blockers) ---")
     if memcpy:
         for (name, op), (cnt, us) in sorted(memcpy.items(), key=lambda kv: -kv[1][1]):
             lines.append(

@@ -23,7 +23,7 @@ from torchwright.graph.spherical_codes import index_to_vector
 
 from torchwright_doom import extract
 from torchwright_doom.embedding import TOKEN_VOCAB
-from torchwright_doom.vocab import NODE, VALUE
+from torchwright_doom.vocab import NODE
 
 # ---------------------------------------------------------------------------
 # is_type threshold margin — the load-bearing E8 sanity check.

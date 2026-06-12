@@ -31,7 +31,6 @@ from torchwright_doom.vocab import (
     ANGLE_BAM,
     ANGLE_VALUE,
     NODE,
-    SCREEN_WIDTH,
     SEG_TWO_SIDED,
     VALUE,
 )
@@ -49,7 +48,13 @@ def _value_slot() -> FloatSlot:
 
 def _row_index(token_type, slot_values: dict[str, int | float]) -> int:
     """Compute the row index in W_EMBED for ``token_type`` with
-    ``slot_values``."""
+    ``slot_values``.
+
+    Deliberately an independent recomputation, NOT an import of
+    ``inference.tokens_bridge.row_index``: this test cross-checks the row
+    enumeration, so sharing the implementation under test would make the
+    check tautological.
+    """
     start, _ = TOKEN_VOCAB.type_to_row_range[token_type]
     if not token_type.slots:
         return start

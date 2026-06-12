@@ -36,7 +36,7 @@ from torchwright.ops.linear_relu_linear import linear_relu_linear
 from torchwright.ops.logic_ops import bool_all_true, bool_any_true, bool_not
 
 from .constants import SCREEN_HEIGHT, SCREEN_WIDTH
-from .std import concat, constant, linear, reduce_sum, select
+from .std import concat, constant, linear, select
 from .vocab import N_NODES_MAX
 
 

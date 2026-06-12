@@ -72,6 +72,7 @@ _RENDER_MODAL_ARGS = $(strip \
 lint:
 	uv run black --check .
 	uv run mypy .
+	uv run ruff check --select F .
 
 .PHONY: render-compile compile
 render-compile compile:

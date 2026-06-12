@@ -34,4 +34,6 @@ def test_different_name_not_equal() -> None:
 
 def test_not_equal_to_non_tokentype() -> None:
     assert TokenType("value") != "value"
-    assert TokenType("value") is not None
+    # != None (not `is not None`) on purpose: this routes through __eq__/
+    # __ne__ with a None operand, which `is not` would bypass.
+    assert TokenType("value") != None  # noqa: E711

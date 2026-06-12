@@ -22,6 +22,25 @@ from .generation import DEFAULT_PREFILL_CHUNK_SIZE, TokenRuntime
 from .kv_cache import KVCache, WindowedState, persist_rows
 
 
+def env_flag(name: str) -> bool:
+    """Boolean TWDOOM_* env knob.
+
+    Unset, empty, "0", "false", "no", and "off" are OFF; anything else is
+    ON — so ``TWDOOM_FORCE_CPU=0`` means *off* rather than presence-truthy
+    (which would silently force a CPU run AND disarm the CPU-degradation
+    guard, the exact failure the guard exists to catch).
+    """
+    import os
+
+    return os.environ.get(name, "").strip().lower() not in (
+        "",
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
 def _resolve_buckets(
     attention_buckets: list[int] | None, cache_stride: int
 ) -> list[int]:
@@ -63,7 +82,6 @@ class OnnxTokenRuntime(TokenRuntime):
         attention_buckets: list[int] | None = None,
         expiring_types: tuple[str, ...] = ("pixel",),
     ) -> None:
-        import os
 
         import onnxruntime as ort
 
@@ -88,7 +106,7 @@ class OnnxTokenRuntime(TokenRuntime):
                 "optimization disabled (capture must not allocate)",
                 flush=True,
             )
-        if os.environ.get("TWDOOM_NO_OPT"):  # DIAGNOSTIC: disable ORT graph opt
+        if env_flag("TWDOOM_NO_OPT"):  # DIAGNOSTIC: disable ORT graph opt
             so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
             print("[onnxruntime] DIAGNOSTIC: graph optimization DISABLED", flush=True)
         self._profiling = bool(enable_profiling)
@@ -107,8 +125,15 @@ class OnnxTokenRuntime(TokenRuntime):
             so.log_severity_level = 1
             try:
                 ort.set_default_logger_severity(1)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Non-fatal, but the profiling path reads the INFO-level
+                # Memcpy/placement log lines — say why they may be missing.
+                print(
+                    f"[onnxruntime] WARNING: set_default_logger_severity "
+                    f"failed ({exc!r}) — Memcpy/placement INFO lines may be "
+                    f"absent from the profile",
+                    flush=True,
+                )
             print(
                 "[onnxruntime] PROFILING enabled (log_severity_level=1); "
                 "profile JSON written at end_profiling()",
@@ -140,7 +165,7 @@ class OnnxTokenRuntime(TokenRuntime):
                 for p in session_providers
             )
             and "CUDAExecutionProvider" not in self._session.get_providers()
-            and not os.environ.get("TWDOOM_FORCE_CPU")
+            and not env_flag("TWDOOM_FORCE_CPU")
         ):
             raise RuntimeError(
                 "CUDAExecutionProvider was requested but the session is "
@@ -239,6 +264,21 @@ class OnnxTokenRuntime(TokenRuntime):
             row_to_token = self.metadata.get("row_to_token")
             if row_to_token:
                 expiring_set = {t.lower() for t in self._expiring_types}
+                # Fail at startup on a name that matches no vocab type: a
+                # typo'd entry would otherwise silently stay permanent and
+                # only surface much later as a mid-rollout cache-saturation
+                # error (misattributed to cache_window sizing).
+                vocab_types = {
+                    str(entry.get("type", "")).lower() for entry in row_to_token
+                }
+                unknown = sorted(expiring_set - vocab_types)
+                if unknown:
+                    raise ValueError(
+                        f"expiring_types entries match no vocab token type: "
+                        f"{unknown}; check RenderConfig.expiring_types / "
+                        f"TWDOOM_EXPIRING_TYPES against the vocab type names "
+                        f"in model.meta.json row_to_token"
+                    )
                 self._expiring_rows = [
                     str(entry.get("type", "")).lower() in expiring_set
                     for entry in row_to_token
@@ -896,7 +936,6 @@ class OnnxTokenRuntime(TokenRuntime):
 
 
 def _default_ort_providers(ort) -> list:
-    import os
 
     available = set(ort.get_available_providers())
     if "CUDAExecutionProvider" in available:
@@ -906,7 +945,7 @@ def _default_ort_providers(ort) -> list:
         # The whole graph is designed around "TF32 off" (see torchwright
         # attention_ops.py); disable it on the CUDA EP.
         cuda_opts = {"use_tf32": "0"}
-        if not os.environ.get("TWDOOM_NO_CUDA_GRAPH"):
+        if not env_flag("TWDOOM_NO_CUDA_GRAPH"):
             # CUDA-graph capture for the n_new=1 decode step: each decode
             # replays one captured graph instead of ~1,750 kernel launches
             # (the measured ~55%-of-wall dispatch overhead).  enable_cuda_graph

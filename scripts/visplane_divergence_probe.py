@@ -147,7 +147,6 @@ def main() -> int:
     import doom_sandbox.implementation.reference as ref
     from doom_sandbox.implementation.reference_drafter import _flat_pass_tokens
 
-    md = sb_scene.map_data
     state = sb_pose
     wall_pass = ref.expected_wall_plane_mark_pass(sb_scene, state)
     columns = ref._runtime_visplane_columns(wall_pass.plane_marks)
@@ -201,7 +200,7 @@ def main() -> int:
     canon_set = set(canon_cols)
     extra = sorted(model_set - canon_set)
     missing = sorted(canon_set - model_set)
-    print(f"\n--- COL-RUN DIFF (model vs canonical) ---")
+    print("\n--- COL-RUN DIFF (model vs canonical) ---")
     print(f"   extra in MODEL  (model emitted, canonical didn't): {extra}")
     print(f"   missing in MODEL (canonical had, model didn't):    {missing}")
 

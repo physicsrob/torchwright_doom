@@ -1,12 +1,14 @@
-"""Plan A: anti-toy-scale guard for the deferred 160x100 retarget.
+"""Anti-toy-scale guard: no bare screen-dimension literals.
 
-The port runs at the sandbox fixture scale 60x50; the retarget to the
-real 160x100 is a deferred one-line change in ``constants.py``. That
-stays a constant swap only if every screen-derived width/range
-references ``SCREEN_WIDTH`` / ``SCREEN_HEIGHT`` symbolically and never a
-bare ``60`` / ``50`` literal. This test fails if a bare ``60`` or ``50``
-NUMBER literal appears in ``vocab.py`` or ``value_ranges.py``
-(``constants.py`` is where the dimensions are legitimately *defined*).
+The production config renders at 160x100 (``configs/e1m1.yaml``
+``model.scale: 2`` via ``apply_screen_env``); the 60x50 sandbox fixture
+scale remains the bare-import default in ``constants.py``. The scale
+stays a config swap (not a re-port) only if every screen-derived
+width/range references ``SCREEN_WIDTH`` / ``SCREEN_HEIGHT`` symbolically
+and never a bare ``60`` / ``50`` literal. This test fails if a bare
+``60`` or ``50`` NUMBER literal appears in ``vocab.py`` or
+``value_ranges.py`` (``constants.py`` is where the dimensions are
+legitimately *defined*).
 """
 
 from __future__ import annotations

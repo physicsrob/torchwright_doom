@@ -278,10 +278,8 @@ def test_projection_carriers_within_tolerance(projection_eval) -> None:
 
 
 def test_projection_markers_exact(projection_eval) -> None:
-    emitted = projection_eval["emitted"]
     full = projection_eval["full"]
     n_pos = projection_eval["n_pos"]
-    begin = projection_eval["begin"]
     scan = _scan_next_tokens(projection_eval)
     marker_mismatches = scan["marker_mismatches"]
     coverage = scan["coverage"]

@@ -66,7 +66,7 @@ def _argmax_rows(outputs: torch.Tensor) -> list[int]:
     """Unembed-argmax for the in-process gate: ``compile_headless`` outputs
     are embedding-width rows, decoded against ``W_EMBED.T`` host-side.
     (Production runtimes return logits and argmax directly —
-    ``render.generation.argmax_rows``.)"""
+    ``inference.generation.argmax_rows``.)"""
     wt = W_EMBED.t().to(outputs.device, outputs.dtype)
     return (outputs.detach() @ wt).argmax(dim=-1).cpu().tolist()
 
@@ -101,7 +101,7 @@ def _build_compiled(device, *, d: int, d_head: int, max_layers: int = 200):
     This test is the one place a compiled doom forward still runs in-process:
     production inference is the cached ONNX artifact, so the in-process compile
     lives here (the graph construction is shared via
-    ``render.compiled_model.build_graph``; torchwright's ``compile_headless``
+    ``inference.compiled_model.build_graph``; torchwright's ``compile_headless``
     is its in-process debug/test reference compiler).
     """
     from torchwright.compiler.export import compile_headless
@@ -123,7 +123,7 @@ def _compiled_rollout(prefill_ids: list[int], device) -> list[int]:
     """Free-run the compiled transformer: ids in, argmax out, id fed back.
 
     The gate owns its own AR loop: the shipped rollout harness
-    (``render.generation``) speaks only the production owned-``KVCache``
+    (``inference.generation``) speaks only the production owned-``KVCache``
     protocol (and is covered there by ``tests/inference/test_spec_decode_logic.py``
     + ``test_windowed_cache.py``), while ``compile_headless`` threads
     grow-per-step KV tuples.  This test's job is the compiled-vs-exact-math

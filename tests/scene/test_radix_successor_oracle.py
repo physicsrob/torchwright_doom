@@ -32,7 +32,7 @@ from __future__ import annotations
 import math
 import random
 
-# The two project scales: fixture (W=60) and deferred real scale (W=160).
+# The two project scales: fixture (W=60) and production real scale (W=160).
 SCALES = (60, 160)
 # Expected radix constants per scale, for an independent formula cross-check.
 _EXPECTED = {60: (8, 8), 160: (13, 13)}  # W -> (B, N_BUCKETS)

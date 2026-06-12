@@ -264,7 +264,6 @@ class TokenRuntime(ABC):
         """Generate the rollout with speculative decoding. Returns (result, stats)."""
         from .tokens_bridge import (
             row_to_sandbox_token,
-            rows_to_input,
             sandbox_token_to_row,
         )
 

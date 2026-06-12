@@ -9,20 +9,31 @@ requires-python = ">=3.10"
 # runtime deps + our own so the venv has everything torchwright_doom
 # code transitively imports. Sync with torchwright/pyproject.toml
 # when its runtime deps change.
+#
+# onnxruntime-gpu is PINNED in lockstep with torchwright's gpu extra
+# and modal_image.py: the CUDA-graph capture mechanics the render
+# runtime relies on are version-specific (verified against the 1.26.0
+# source; see torchwright/pyproject.toml for the marker-split rationale).
 dependencies = [
     "torch",
     "onnx",
+    "onnxruntime-gpu==1.26.0; python_version >= '3.11'",
+    "onnxruntime-gpu; python_version < '3.11'",
     "ortools>=9.10",
     "pydantic>=2.0",
     "numpy",
-    "pygame>=2.6.1",
-    "pillow",
 ]
 
+# black + mypy + ruff back the `make lint` gate (which gates `make
+# test`) — declared here so a clean `uv sync` provides the toolchain
+# this repo's Makefile invokes.
 [dependency-groups]
 dev = [
     "pytest",
     "modal",
+    "black",
+    "mypy",
+    "ruff",
 ]
 
 [[tool.uv.index]]
@@ -34,6 +45,11 @@ explicit = true
 torch = [
     { index = "pytorch-cu128", marker = "sys_platform == 'linux'" },
 ]
+
+# Explicit: flat-layout auto-discovery refuses to build once non-package
+# top-level dirs exist (out/, configs/ are data, not code).
+[tool.setuptools.packages.find]
+include = ["torchwright_doom*"]
 
 [tool.pytest.ini_options]
 

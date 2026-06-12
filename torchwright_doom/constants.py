@@ -7,12 +7,15 @@ cycle that would otherwise form once ``vocab.py`` imports
 needs ``SCREEN_WIDTH`` for its resolution-scaled ranges (R5 wall scale, R7
 drawseg width). Keep this module dependency-free.
 
-Porting scale: the renderer runs the whole way at the sandbox fixture
-scale of 60×50, which gives exact token-by-token prompt parity with the
-sandbox fixtures. The retarget to the real 160×100 is a deferred,
-project-level one-line change *here* — every screen-derived width must
-reference these names, never a literal 60/50 (guarded by a test), so the
-bump stays a constant swap.
+Porting scale: the production config renders at 160×100
+(``configs/e1m1.yaml`` ``model.scale: 2``); ``apply_screen_env``
+(``inference/config.py``) exports the screen dims via the env vars read
+below before graph modules import. The 60×50 defaults here are the
+bare-import fallback — the sandbox fixture scale, which is what tests
+that import the graph without a config see (it gives exact
+token-by-token prompt parity with the sandbox fixtures). Every
+screen-derived width must reference these names, never a literal 60/50
+(guarded by a test), so the scale stays a config swap.
 """
 
 from __future__ import annotations

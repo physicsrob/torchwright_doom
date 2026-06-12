@@ -134,7 +134,16 @@ def _volume_has_compiled(cache_subdir: str) -> bool:
             entry.path.rsplit("/", 1)[-1]
             for entry in CACHE_VOLUME.listdir(f"/{cache_subdir}")
         }
-    except Exception:
+    except (FileNotFoundError, modal.exception.NotFoundError):
+        return False  # genuinely no entry under that key
+    except Exception as exc:
+        # A volume/auth failure is NOT a cache miss — treating it as one
+        # spins up a 64-CPU compile container that immediately rediscovers
+        # the hit.  Degrade, but say what happened.
+        print(
+            f"[local] volume cache probe failed ({exc!r}) — treating as miss",
+            flush=True,
+        )
         return False
     return {"model.onnx", "model.meta.json"} <= names
 
@@ -214,10 +223,10 @@ def main(
     # straight into CACHE_VOLUME under that key with CP-SAT fanned out
     # across the container's 64 CPUs.
     #
-    # Importing ``render.config`` here is safe: it has no dependency on the
-    # screen-sized token vocab (the import-order trap that forces
+    # Importing ``inference.config`` here is safe: it has no dependency on
+    # the screen-sized token vocab (the import-order trap that forces
     # ``compile_config`` to call ``apply_screen_env`` before touching
-    # ``render.cache``).
+    # ``inference.compile_cache``).
     from torchwright_doom.inference.config import (
         cache_key_from_payload,
         canonical_compile_payload,

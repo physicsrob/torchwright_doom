@@ -97,10 +97,6 @@ CENTER: float = (BASE - 1) / 2
 are stored as ``byte - CENTER`` so the quadratic-difference math is
 balanced around zero."""
 
-MAX_INT_K_PER_DIGIT: int = BASE - 1
-"""Maximum integer per digit, kept here for callers that want to
-assert their precomputed indices fit."""
-
 MAX_CARDINALITY_PER_BLOCK: int = BASE * BASE
 """Largest slot cardinality supported by a 2-digit block. Slots beyond
 this would need a 3-digit recursion (not implemented; would only kick

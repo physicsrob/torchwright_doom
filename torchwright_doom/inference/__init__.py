@@ -21,6 +21,9 @@ Submodules (the import graph runs one direction, top to bottom):
 - ``compare`` — fetch the reference render + report image-level agreement stats.
 - ``artifacts`` — write ``token_dump.json`` + the PNGs.
 - ``diagnostic`` — chunked teacher-forced divergence localizer.
+- ``profile_analysis`` — summarize ORT profiling traces (the ``--profile`` path).
+- ``cli`` — argparse entrypoint over all of the above
+  (``python -m torchwright_doom.inference``).
 
 This package deliberately re-exports nothing: ``embedding`` builds the
 screen-sized vocab AT IMPORT, so callers must ``apply_screen_env(config)``

@@ -12,11 +12,11 @@ def reset_node_id_counter():
     Node.__hash__ returns node_id, so the counter's value at test time
     determines set/dict iteration order in the compiler.  Earlier tests
     that allocate nodes shift the counter, which shifts column assignments
-    in the residual-stream scheduler, which drifts compiled pixel values
-    by a few percent (Mode-B flakiness in test_game_graph.py) and also
-    perturbs fuse_consecutive_linears candidate ordering (Mode-A bug in
-    test_optimize.py).  Resetting here makes every test see node_id=0 for
-    its first node, independent of test-suite execution order.
+    in the residual-stream scheduler — compiled values then depend on
+    test-suite execution order (torchwright saw both flaky pixel drift
+    and optimizer-ordering bugs from exactly this).  Resetting here makes
+    every test see node_id=0 for its first node, independent of execution
+    order.
     """
     _node_module.global_node_id = 0
     yield

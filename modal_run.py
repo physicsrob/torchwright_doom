@@ -1,13 +1,13 @@
 """Run an arbitrary Python module or script on Modal.
 
 Usage (via Makefile):
-    make modal-run MODULE=scripts.investigate_phase_e
+    make modal-run MODULE=scripts.compile_report
     make modal-run MODULE=scripts.foo ARGS="--flag x"
     make modal-run SCRIPT=path/to/one_shot.py ARGS="..."
     make modal-run MODULE=scripts.cpu_only_thing CPU_ONLY=1
 
 Direct:
-    uv run modal run modal_run.py --module scripts.investigate_phase_e
+    uv run modal run modal_run.py --module scripts.compile_report
 
 The GPU container mounts the compile cache volume (read-mostly) plus the
 ``doom_sandbox`` checkout and ``configs/``, so the artifact-debugging scripts

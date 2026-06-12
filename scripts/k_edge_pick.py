@@ -32,8 +32,6 @@ def main() -> int:
 
     ensure_doom_sandbox()
 
-    import torch
-
     import torchwright.graph.misc as _misc
     import torchwright.graph.node as _node_module
     from torchwright.graph import Attn
@@ -269,7 +267,6 @@ def _inspect(attn, cache, n, MATCH_GAIN_LONG) -> None:
 
 def _s1_query(qv32, match_gain, q):
     """qv with col-2 lifted constant 1 -> (1 - q^2) (the S1 q^2-cancel)."""
-    import torch
 
     new = qv32.clone()
     new[2] = match_gain * (1.0 - q * q)

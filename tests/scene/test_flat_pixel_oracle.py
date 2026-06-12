@@ -184,7 +184,6 @@ def _scan(flat_pixel_eval) -> dict:
     marker_mismatches = []
     carrier_mismatches = []
     pixel_mismatches = []
-    flat_pixel_count = 0
     for i in range(begin, n_pos - 1):
         next_name = full[i + 1].type.name
         coverage[next_name] += 1

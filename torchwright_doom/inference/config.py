@@ -210,6 +210,26 @@ def canonical_compile_payload(
     config: RenderConfig, wad_path: str | Path
 ) -> dict[str, Any]:
     wad_path = Path(wad_path)
+    git_shas = {
+        "torchwright_doom": _git_sha(Path(__file__).resolve().parents[2]),
+        "torchwright": _git_sha(Path(__file__).resolve().parents[3] / "torchwright"),
+    }
+    # Enforce "the container must never derive its own key" (see
+    # compile_cached): a git-less caller would mint a fixed
+    # "unknown"-keyed payload that never changes on a code edit, so the
+    # cache would silently serve artifacts compiled from other code
+    # states.  endswith also catches "<head>-dirty.unknown" (rev-parse
+    # worked but diff/status failed) — that key would be blind to
+    # working-tree edits, the same stale-artifact hazard.  Compute the
+    # payload where .git is available and hand it over explicitly
+    # (compile_payload=...).
+    unresolved = {k: v for k, v in git_shas.items() if v.endswith("unknown")}
+    if unresolved:
+        raise RuntimeError(
+            f"cannot derive a compile-cache key here: git sha unresolvable "
+            f"for {sorted(unresolved)} — compute canonical_compile_payload "
+            f"where .git is available and pass it through compile_payload=."
+        )
     return {
         "wad": str(wad_path.resolve()),
         "wad_sha256": _file_sha256(wad_path),
@@ -219,12 +239,7 @@ def canonical_compile_payload(
         "flat_names": list(config.textures.flat),
         "model": asdict(config.model),
         "screen": {"width": config.screen[0], "height": config.screen[1]},
-        "git": {
-            "torchwright_doom": _git_sha(Path(__file__).resolve().parents[2]),
-            "torchwright": _git_sha(
-                Path(__file__).resolve().parents[3] / "torchwright"
-            ),
-        },
+        "git": git_shas,
     }
 
 

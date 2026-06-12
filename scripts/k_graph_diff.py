@@ -24,7 +24,6 @@ ROW_NODE1 = 80285  # float32 wrong pick: bspCheckBack(node=1, depth=8)
 
 
 def _build_and_eval(graph_kind, full_rows, n):
-    import torch
 
     import torchwright.graph.misc as _misc
     import torchwright.graph.node as _node_module

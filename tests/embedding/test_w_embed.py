@@ -25,8 +25,6 @@ import pytest
 import torch
 
 from torchwright_doom.embedding import (
-    BASE,
-    CENTER,
     D_CATEGORY,
     DEFAULT_MAX_CARDINALITY,
     TOKEN_VOCAB,
@@ -40,7 +38,6 @@ from torchwright_doom.vocab import (
     ANGLE_BAM,
     ANGLE_VALUE,
     EMIT_X2,
-    NODE,
     SCREEN_WIDTH,
     SEG,
     VALUE,
@@ -136,7 +133,6 @@ def test_digit_quad_payload_value_slot() -> None:
     """VALUE.v is a 65,536-level FloatSlot — every row's digit-quad
     block is the 4-wide ``digit_quad_row(slot, slot_value)`` payload
     for that row's quantized value."""
-    layout = TOKEN_VOCAB.layout
     value_start, _ = TOKEN_VOCAB.type_to_row_range[VALUE]
     slot = _float_slot(VALUE, "v")
     span = slot.hi - slot.lo
@@ -154,7 +150,6 @@ def test_digit_quad_payload_value_slot() -> None:
 def test_digit_quad_payload_angle_value_slot() -> None:
     """ANGLE_VALUE.angle is a 8,192-level IntSlot — 4-wide digit-quad
     block on every row."""
-    layout = TOKEN_VOCAB.layout
     av_start, _ = TOKEN_VOCAB.type_to_row_range[ANGLE_VALUE]
     slot = _int_slot(ANGLE_VALUE, "angle")
     levels = slot.hi - slot.lo

@@ -135,7 +135,7 @@ def main() -> int:
     )
     if runs:
         print(
-            f"mispredict runs: count={len(runs)}  max_run={max(run := runs)}  "
+            f"mispredict runs: count={len(runs)}  max_run={max(runs)}  "
             f"median={st.median(runs)}  isolated(len==1)={sum(1 for r in runs if r == 1)}  "
             f">=10={sum(1 for r in runs if r >= 10)}  >=50={sum(1 for r in runs if r >= 50)}"
         )

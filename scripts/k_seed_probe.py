@@ -204,7 +204,7 @@ def main() -> int:
                 break
 
     # The child/entity nodes feeding the lift: find Linears named for child extraction.
-    print(f"\n[seed] nodes on key chain with widest value_range (top 12):")
+    print("\n[seed] nodes on key chain with widest value_range (top 12):")
     ranked = sorted(
         key_anc,
         key=lambda n: (

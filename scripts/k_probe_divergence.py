@@ -1,6 +1,6 @@
 """Measure where the compiled artifact departs exact math at the K divergence.
 
-Rebuilds the graph ONCE via ``render.compiled_model.build_graph`` (so the
+Rebuilds the graph ONCE via ``inference.compiled_model.build_graph`` (so the
 exact-math oracle and the artifact's debug session share node identity — the
 session's fingerprint check guarantees the rebuild matches the compiled graph),
 opens an :class:`OnnxDebugSession` over the cached production ONNX,

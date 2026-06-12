@@ -27,8 +27,6 @@ from torchwright_doom.embedding import (
     W_EMBED,
     _slot_index_table,
     _normalized_slot_column,
-    _digit_count_for_cardinality,
-    _slot_levels,
 )
 from torchwright.graph.spherical_codes import index_to_vector
 

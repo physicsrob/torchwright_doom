@@ -5,7 +5,6 @@ _append_plane_marks. Then reconstruct the raw projection for the boundary col.
 
 from __future__ import annotations
 
-import math
 from pathlib import Path
 
 CONFIG = "configs/e1m1.yaml"
@@ -115,7 +114,7 @@ def main() -> int:
             f"mc={int(c['markceiling'])} mf={int(c['markfloor'])}  {' '.join(which)}"
         )
 
-    print(f"\nfinal table (occupied cols x: top..bottom):")
+    print("\nfinal table (occupied cols x: top..bottom):")
     if table:
         for x, (t, b) in enumerate(table):
             if t <= b:

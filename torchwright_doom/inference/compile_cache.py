@@ -159,7 +159,9 @@ def load_cached_runtime(
 ) -> OnnxTokenRuntime:
     import os
 
-    providers = ["CPUExecutionProvider"] if os.environ.get("TWDOOM_FORCE_CPU") else None
+    from .onnx_runtime import env_flag
+
+    providers = ["CPUExecutionProvider"] if env_flag("TWDOOM_FORCE_CPU") else None
     # Windowed-cache expiry policy (runtime knob, no recompile): token
     # type names whose rows may be recycled once the window fills.
     # Resolution order: TWDOOM_EXPIRING_TYPES (comma-separated, ad-hoc
@@ -243,5 +245,9 @@ def _read_n_layers_from_onnx_inputs(onnx_path: Path) -> int | None:
 
         model = onnx.load(str(onnx_path), load_external_data=False)
         return sum(1 for inp in model.graph.input if inp.name.startswith("past_K_"))
-    except Exception:
+    except Exception as exc:
+        # Degraded, not fatal — but say why, or meta records n_layers: null
+        # and the "[compile] N layers" headline (the head-to-head depth
+        # metric) silently prints None.
+        print(f"[compile] n_layers probe failed ({exc!r})", flush=True)
         return None

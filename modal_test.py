@@ -1,11 +1,13 @@
 """Run pytest on Modal with GPU access.
 
-In sharded mode (default for full suite), tests are distributed across
-independent Modal containers, each with its own A100 GPU.
+The full suite currently runs as a single catch-all shard (one A100
+container).  The shard tables below exist so heavy compiled-test files
+can be split into their own containers when the suite needs it — both
+lists are empty today, so listing a file there is how you opt in.
 
 Usage (via Makefile):
-    make test                    # sharded across GPUs
-    make test FILE=tests/foo.py  # single container, no sharding
+    make test                    # full suite (one container today)
+    make test FILE=tests/foo.py  # single container, single file
     make test ARGS="-k test_foo" # filter applied to all shards
 """
 
@@ -25,10 +27,11 @@ app = modal.App("torchwright-doom-test", image=IMAGE)
 # own container; everything else is batched together.
 # New test files are caught by the catch-all shard automatically.
 #
-# Empty until the spec09 port lands tests.  When you add a heavy
-# compiled-test file, list it in _HEAVY_FILES; medium-weight groups
-# go in _MEDIUM_FILE_GROUPS.  Anything not listed is picked up by the
-# catch-all shard at the bottom of SHARDS.
+# Both lists are empty: the whole suite fits one container today.
+# When a heavy compiled-test file needs its own container, list it in
+# _HEAVY_FILES; medium-weight groups go in _MEDIUM_FILE_GROUPS.
+# Anything not listed is picked up by the catch-all shard at the
+# bottom of SHARDS.
 
 _HEAVY_FILES: list[str] = []
 

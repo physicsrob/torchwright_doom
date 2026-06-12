@@ -4,7 +4,7 @@ THE manual faithfulness gate for a cached artifact (it replaced
 ``tests/inference/test_compiled_divergence.py``): feeds the *reference* token
 stream — the config scene's prefill plus the sandbox reference renderer's
 expected rollout — through the cached production ONNX (via
-``render.cache.load_debug_session``, the same bits production renders with) as
+``inference.compile_cache.load_debug_session``, the same bits production renders with) as
 a KV-cached chunked teacher-forced pass (no AR rollout), and reports every
 position whose compiled argmax hard-diverges from the reference under the J2
 bars.  Exits nonzero on any hard divergence.  Distinguishes a per-position

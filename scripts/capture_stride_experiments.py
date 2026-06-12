@@ -1,6 +1,9 @@
-"""Stride-bucketing de-risk: can ONE ORT session capture MULTIPLE CUDA graphs
-over prefix windows (S_eff) of a single static KV cache, with the attention
-width per bucket coming from a SYMBOLIC first dim on past_K_i?
+"""Stride-bucketing de-risk (HISTORICAL — the answer was yes and it shipped,
+commit fa5e0ac): can ONE ORT session capture MULTIPLE CUDA graphs over prefix
+windows (S_eff) of a single static KV cache, with the attention width per
+bucket coming from a SYMBOLIC first dim on past_K_i?  The "dyn" variant below
+is now the production exporter contract; "static" describes the pre-bucketing
+contract it replaced.
 
 Structurally-faithful toy of the production cached graph (the exact node
 pattern of torchwright/compiler/export.py::_emit_cached_preamble +
@@ -11,9 +14,9 @@ L4 in seconds.
 
 Three graph variants:
 
-  static   — the CURRENT production contract (control): past_K_i first dim =
-             literal S, mask from the baked full arange_S.
-  dyn      — the candidate: past_K_i first dim = symbolic "cache_slots";
+  static   — the pre-bucketing production contract (control): past_K_i first
+             dim = literal S, mask from the baked full arange_S.
+  dyn      — the candidate that SHIPPED: past_K_i first dim = symbolic "cache_slots";
              mask = Greater(Slice(arange_S, 0, Shape(past_K_0)[0:1]),
              cache_position).  Introduces the graph's first Shape op — the
              load-bearing question is whether ORT places the shape chain on

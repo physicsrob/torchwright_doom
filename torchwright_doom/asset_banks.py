@@ -266,6 +266,9 @@ def build_asset_banks(
 
 DEFAULT_ASSET_BANKS = build_asset_banks()
 
+# Module-level aliases exist only for the fields callers actually import;
+# everything else is read off DEFAULT_ASSET_BANKS (or a config-specific
+# build_asset_banks() result) directly.
 ASSET_BOOK = DEFAULT_ASSET_BANKS.asset_book
 PLAYPAL = DEFAULT_ASSET_BANKS.playpal
 # COLORMAP has NUMCOLORMAPS light maps (rows 0..NUMCOLORMAPS-1) followed by the
@@ -273,15 +276,4 @@ PLAYPAL = DEFAULT_ASSET_BANKS.playpal
 COLORMAP_ROWS = DEFAULT_ASSET_BANKS.colormap_rows
 WALL_BANKS = DEFAULT_ASSET_BANKS.wall_banks
 WALL_HEIGHT_BANK = DEFAULT_ASSET_BANKS.wall_height_bank
-WALL_WIDTH_BANK = DEFAULT_ASSET_BANKS.wall_width_bank
-WALL_MAX_WIDTH = DEFAULT_ASSET_BANKS.wall_max_width
-WALL_MAX_HEIGHT = DEFAULT_ASSET_BANKS.wall_max_height
-N_WALL_TEXTURES = DEFAULT_ASSET_BANKS.n_wall_textures
-WALL_TEX_BANK_ID = DEFAULT_ASSET_BANKS.wall_tex_bank_id
-WALL_TEX_LOCAL_ID = DEFAULT_ASSET_BANKS.wall_tex_local_id
-WALL_TEX_WIDTH = DEFAULT_ASSET_BANKS.wall_tex_width
-WALL_TEX_HEIGHT = DEFAULT_ASSET_BANKS.wall_tex_height
-WALL_TEX_H_IDX_OH = DEFAULT_ASSET_BANKS.wall_tex_h_idx_oh
-FLAT_TABLE = DEFAULT_ASSET_BANKS.flat_table
-FLAT_IS_SKY = DEFAULT_ASSET_BANKS.flat_is_sky
 N_FLATS = DEFAULT_ASSET_BANKS.n_flats

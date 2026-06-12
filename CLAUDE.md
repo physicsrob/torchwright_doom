@@ -89,6 +89,10 @@ Rough layout of `torchwright_doom/`:
   `pwl_banks` (light levels and colormaps).
 - **Graph infrastructure** — `past` / `attention_handles` (reading
   previously-emitted tokens) and `std` (the helper-op shim).
+- **Runtime** — `inference/` (the production runtime: ONNX session +
+  CUDA-graph capture in `onnx_runtime`, windowed KV cache in
+  `kv_cache`, generation loops in `generation`, compile cache, config,
+  CLI) and `prompt/` (prefill prompt construction from the WAD scene).
 
 Each renderer module is ported from a `doom_sandbox` counterpart; many
 docstrings note that provenance and the sandbox path.
@@ -211,7 +215,7 @@ Rules for running them:
 
 Every approximate op in torchwright is measured against its exact-math
 reference. Per-op noise budgets live in torchwright's
-torchwright's `docs/op_noise_data.json` (canonical) with commentary in
+`docs/op_noise_data.json` (canonical) with commentary in
 `docs/numerical_noise_findings.md`. The `doom_*` distributions are
 calibrated against DOOM call sites — they're the inputs the framework
 measured each op against to produce the per-op bound that doom code
@@ -561,7 +565,7 @@ tomorrow's debugging starts from.
 **First tool**: `torchwright.debug.probe.probe_compiled` runs the
 compiled module side-by-side with the graph oracle and reports the
 first divergent node. Per-op noise bounds live in torchwright's
-torchwright's `docs/op_noise_data.json`.
+`docs/op_noise_data.json`.
 
 ## D3 — Foundation rule
 
