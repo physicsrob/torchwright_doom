@@ -1,12 +1,23 @@
 """Run pytest on Modal with GPU access.
 
-The full suite currently runs as a single catch-all shard (one A100
-container).  The shard tables below exist so heavy compiled-test files
-can be split into their own containers when the suite needs it — both
-lists are empty today, so listing a file there is how you opt in.
+The full suite is split across parallel containers (one A100, cpu=8
+each); wall-clock is the slowest shard. Heavy files get their own
+container via ``_HEAVY_FILES``; mid-weight files are batched in
+``_MEDIUM_FILE_GROUPS``; anything unlisted falls into the catch-all
+shard automatically.
+
+The wall-clock floor is the full-frame flat-pass oracle
+(``test_flat_pixel_oracle.py``): its ``reference_eval`` is a CPU-bound,
+O(n_pos^2) attention oracle that runs ~190-260s and is dominated by
+Modal host-to-host variance (NOT by the cpu reservation — uncapped
+torch already bursts onto many host cores, so reserving 16/32 cores
+does not help; capping OMP/MKL threads to 8, however, slows it to
+~370s, so leave threads uncapped). Pushing below that floor reliably
+needs ``reference_eval`` itself to run on the GPU — a torchwright-side
+change, since op weights/literals are constructed on CPU.
 
 Usage (via Makefile):
-    make test                    # full suite (one container today)
+    make test                    # full suite, all shards in parallel
     make test FILE=tests/foo.py  # single container, single file
     make test ARGS="-k test_foo" # filter applied to all shards
 """
@@ -34,9 +45,34 @@ app = modal.App("torchwright-doom-test", image=TEST_IMAGE)
 # Anything not listed is picked up by the catch-all shard at the
 # bottom of SHARDS.
 
-_HEAVY_FILES: list[str] = []
+_HEAVY_FILES: list[str] = [
+    # The full-frame flat-pass oracle: the single heaviest gate (a whole-frame
+    # reference_eval through DONE, ~190-260s). The suite's wall-clock floor.
+    "tests/scene/test_flat_pixel_oracle.py",
+    # Free-running compiled AR rollout — in-process compile_headless, ~90s.
+    "tests/scene/test_forward_ar_rollout.py",
+]
 
-_MEDIUM_FILE_GROUPS: list[list[str]] = []
+_MEDIUM_FILE_GROUPS: list[list[str]] = [
+    # Whole-forward ONNX compile + a couple of light oracle/layout gates.
+    [
+        "tests/scene/test_forward_compiles.py",
+        "tests/scene/test_radix_successor_oracle.py",
+        "tests/embedding/test_shared_slot_layout.py",
+    ],
+    # Wall rasterization oracles (reference_eval, mid-size windows).
+    [
+        "tests/scene/test_wall_pixel_oracle.py",
+        "tests/scene/test_wall_column_oracle.py",
+        "tests/scene/test_bbox_oracle.py",
+    ],
+    # Projection / traversal oracles + the emit-graph correctness gate.
+    [
+        "tests/scene/test_projection_oracle.py",
+        "tests/scene/test_traversal_oracle.py",
+        "tests/embedding/test_emit_graph_correctness.py",
+    ],
+]
 
 _ALL_NAMED_FILES = _HEAVY_FILES + [f for g in _MEDIUM_FILE_GROUPS for f in g]
 
@@ -52,8 +88,12 @@ SHARDS = [
 
 
 # timeout: the cross-submodule oracle gates (reference_eval over the full
-# forward graph, O(n_pos^2)) push the catch-all shard well past the old
-# 30-minute budget.
+# forward graph, O(n_pos^2)) push a shard well past the old 30-minute budget.
+#
+# Leave torch's thread pool UNCAPPED: in a Modal container torch bursts onto the
+# host's cores, and capping OMP/MKL threads to the reservation measurably slows
+# the reference_eval GEMMs (~190s -> ~370s on the flat gate). Raising the cpu
+# reservation past 8 does NOT help — bursting already uses what the host has.
 @app.function(gpu="a100-80gb", cpu=8, memory=32768, timeout=3600)
 def run_pytest(pytest_args: str, shard_id: int = 0, extra_args: str = "") -> int:
     tag = f"[shard {shard_id}]"

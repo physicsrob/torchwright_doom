@@ -59,6 +59,22 @@ _WALLCOL_U_TOL = 1
 _PIXEL_NAME = PIXEL.name
 
 
+def _predicted_rows(emitted_slice: torch.Tensor) -> list[int]:
+    """Decode each emitted residual to its ``W_EMBED`` row via
+    ``argmax(emitted @ W_EMBEDᵀ)``. This is the full-frame hot spot: a
+    ``(count, vocab)`` GEMM. ``reference_eval`` runs on CPU, where that GEMM is
+    memory-bound and slow, so run the decode on the GPU when one is present
+    (argmax is exact — identical integer rows either way). Chunked to bound the
+    intermediate's footprint."""
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    w_embed_t = W_EMBED.t().to(device)
+    rows: list[int] = []
+    for start in range(0, emitted_slice.shape[0], 8192):
+        block = emitted_slice[start : start + 8192].to(device)
+        rows.extend(torch.argmax(block @ w_embed_t, dim=1).tolist())
+    return rows
+
+
 def _decode_pixel_xy(full) -> dict[int, tuple[int, int]]:
     """Host pixel decode (mirrors sandbox ``extract.extract_pixel_pass``): walk the
     token stream tracking cursor + direction, recording each PIXEL's ``(x, y)``.
@@ -139,7 +155,12 @@ def flat_pixel_eval():
     }
 
 
-def _scan(flat_pixel_eval) -> dict:
+@pytest.fixture(scope="module")
+def flat_pixel_scan(flat_pixel_eval) -> dict:
+    """Compare every teacher-forced transition once, shared by all the assertion
+    tests below. The per-position ``argmax(emitted[i] @ W_EMBEDᵀ)`` is the hot
+    cost over the full frame, so it runs as a single batched matmul here instead
+    of once per test."""
     emitted = flat_pixel_eval["emitted"]
     full = flat_pixel_eval["full"]
     real_pairs = flat_pixel_eval["real_pairs"]
@@ -149,7 +170,10 @@ def _scan(flat_pixel_eval) -> dict:
     options = flat_pixel_eval["options"]
     playpal = flat_pixel_eval["playpal"]
     pixel_start = flat_pixel_eval["pixel_start"]
-    w_embed_t = W_EMBED.t()
+
+    # One batched argmax over all teacher-forced rows (GPU when available),
+    # rather than a per-position matvec inside the Python loop below.
+    predicted_rows = _predicted_rows(emitted[begin : n_pos - 1])
 
     coverage: Counter[str] = Counter()
     marker_mismatches = []
@@ -158,7 +182,7 @@ def _scan(flat_pixel_eval) -> dict:
     for i in range(begin, n_pos - 1):
         next_name = full[i + 1].type.name
         coverage[next_name] += 1
-        predicted_row = int(torch.argmax(emitted[i] @ w_embed_t).item())
+        predicted_row = predicted_rows[i - begin]
         expected_row = row_index(*real_pairs[i + 1])
         desc = (
             f"pos {i} (in {full[i].type.name} {dict(full[i].values)}): emitted row "
@@ -197,36 +221,32 @@ def _scan(flat_pixel_eval) -> dict:
     }
 
 
-def test_flat_markers_exact(flat_pixel_eval) -> None:
-    scan = _scan(flat_pixel_eval)
-    assert not scan[
+def test_flat_markers_exact(flat_pixel_scan) -> None:
+    assert not flat_pixel_scan[
         "marker_mismatches"
     ], "flat-pass MARKER next-token mismatches:\n" + "\n".join(
-        scan["marker_mismatches"][:30]
+        flat_pixel_scan["marker_mismatches"][:30]
     )
 
 
-def test_flat_carriers_within_tolerance(flat_pixel_eval) -> None:
-    scan = _scan(flat_pixel_eval)
-    assert not scan[
+def test_flat_carriers_within_tolerance(flat_pixel_scan) -> None:
+    assert not flat_pixel_scan[
         "carrier_mismatches"
     ], "flat-pass CARRIER value mismatches:\n" + "\n".join(
-        scan["carrier_mismatches"][:25]
+        flat_pixel_scan["carrier_mismatches"][:25]
     )
 
 
-def test_flat_pixel_colors_in_option_set(flat_pixel_eval) -> None:
-    scan = _scan(flat_pixel_eval)
-    assert not scan[
+def test_flat_pixel_colors_in_option_set(flat_pixel_scan) -> None:
+    assert not flat_pixel_scan[
         "pixel_mismatches"
     ], "flat-pass PIXEL color option-set mismatches:\n" + "\n".join(
-        scan["pixel_mismatches"][:30]
+        flat_pixel_scan["pixel_mismatches"][:30]
     )
 
 
-def test_flat_coverage_floors(flat_pixel_eval) -> None:
-    scan = _scan(flat_pixel_eval)
-    coverage = scan["coverage"]
+def test_flat_coverage_floors(flat_pixel_scan) -> None:
+    coverage = flat_pixel_scan["coverage"]
     # The flat-pass spine + at least one open/close span + flat pixels.
     assert coverage["R_DrawPlanes"] >= 1, f"flat pass not reached: {coverage}"
     assert coverage["visplaneBegin"] >= 1, f"no visplane begun: {coverage}"
@@ -236,10 +256,9 @@ def test_flat_coverage_floors(flat_pixel_eval) -> None:
     assert coverage[_PIXEL_NAME] >= 1, f"no pixels: {coverage}"
 
 
-def test_flat_reaches_done(flat_pixel_eval) -> None:
+def test_flat_reaches_done(flat_pixel_scan) -> None:
     """When the window spans the full frame, the terminal DONE transition is
     teacher-forced and compared (asserted exact by ``test_flat_markers_exact``)."""
     if os.environ.get("TWDOOM_J2_SPAN") is not None:
         pytest.skip("capped AR span (TWDOOM_J2_SPAN set) does not reach DONE")
-    scan = _scan(flat_pixel_eval)
-    assert scan["coverage"]["done"] >= 1, "frame tail did not reach DONE"
+    assert flat_pixel_scan["coverage"]["done"] >= 1, "frame tail did not reach DONE"
