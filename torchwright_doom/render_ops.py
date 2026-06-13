@@ -1,18 +1,31 @@
 """Forward/render math ops, mirroring the read-side + write-side subset of
 ``doom_sandbox/implementation/forward/constants.py`` / ``forward/ops.py``.
 
-Grouped by what they compute:
+The file opens with the read-side helpers (``MARKER_PRESENT`` / ``and_`` /
+``one_minus`` / ``or_`` / ``snap_bool`` / ``SCREEN_X_CLAMP``), then nine
+``# ---`` banner sections, in the order they appear:
 
-- Read side: ``MARKER_PRESENT`` / ``and_`` / ``one_minus``.
-- BSP traversal: ``sub`` / ``neg`` / ``add_const`` (affine glue), ``mul_side``
-  (the ``R_PointOnSide`` cross-product multiply), and the ``SIDE_POSITIVE`` /
-  ``IS_SUBSECTOR`` / ``DEPTH_NONZERO`` comparators.
-- Seg projection: ``signed_world_angle`` / ``wrap_signed_angle`` (the
-  ``R_PointToAngle`` BAM-atan2 octant builder).
-- Wall-column rasterization: the screen-y clamp staircases (``CEIL_Y`` /
-  ``FLOOR_Y``) and the perspective-scale products.
-- Pixel pass: the per-pixel texture-coordinate products and native-coordinate
-  rounding.
+1. Affine glue + the ``R_PointOnSide`` cross product — ``sub`` / ``neg`` /
+   ``add_const`` plus ``mul_side`` and the ``SIDE_POSITIVE`` / ``IS_SUBSECTOR``
+   / ``DEPTH_NONZERO`` comparators.
+2. ``R_PointToAngle`` BAM-atan2 octant + one-turn angle wrap —
+   ``signed_world_angle`` / ``wrap_signed_angle`` and their helpers.
+3. Screen-coordinate product (the solid-interval coverage key, ``MUL_SCREEN``).
+4. Screen comparators, integer-equality, and the backface cross product
+   (``gt_screen`` / ``same_int`` / ``MUL_CROSS`` / ``is_negative_cross`` …).
+5. ``R_CheckBBox`` region classifier (``COORD_GT_ZERO``).
+6. The drawseg perspective-scale chain — the scale-denominator / scale products
+   and their clamps and comparators.
+7. Wall-column rasterizer screen-y ops — the ``CEIL_Y`` / ``FLOOR_Y`` clamp
+   staircases and the per-column projection products.
+8. The pixel pass — the per-pixel texture-coordinate products and the
+   native-coordinate floor.
+9. Screen-column radix key (``radix_col_key``, shared across the
+   solid-interval / visplane / wall-column column-equality tests).
+
+Per-op piecewise-linear noise bounds live in torchwright's
+``docs/op_noise_data.json``; the inline notes here explain why each op's
+breakpoint grid / sharpness fits its measured bound.
 """
 
 from __future__ import annotations

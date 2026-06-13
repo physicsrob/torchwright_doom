@@ -20,7 +20,7 @@ from ..doom_lighting import (
     doom_wall_light_static,
     doom_wall_orientation_light_bias,
 )
-from ..tokens import Token
+from ..tokens import Token, TokenType
 from ..vocab import (
     ANGLE_BAM,
     ANGLE_VALUE,
@@ -83,6 +83,17 @@ _BAM_HALF = ANGLE_BAM // 2
 
 ML_DONTPEGTOP = 0x0008
 ML_DONTPEGBOTTOM = 0x0010
+
+
+def _marked(
+    tokens: list[Token], marker: TokenType, range_id: ValueRange, value: float
+) -> None:
+    """Append a marker token then its ``VALUE`` carrier — the prefill's basic
+    marker->value pair (see GLOSSARY.md 'marker' / 'carrier'). Keeping the
+    marker, its range, and the source value on one line at each call site is the
+    point: the pairing stays explicit, just without the two-append boilerplate."""
+    tokens.append(Token(marker))
+    tokens.append(prefill_value(range_id, value))
 
 
 def _player_angle_signed(angle_256: int) -> int:
@@ -182,64 +193,53 @@ def build_prompt(
     tokens: list[Token] = []
     name_to_id = {"-": 0, "": 0, **asset_config.wall_id_by_name}
 
-    tokens.append(Token(PLAYER_X_MARK))
-    tokens.append(prefill_value(ValueRange.R1, state.x))
-    tokens.append(Token(PLAYER_Y_MARK))
-    tokens.append(prefill_value(ValueRange.R1, state.y))
-    tokens.append(Token(PLAYER_Z_MARK))
-    tokens.append(prefill_value(ValueRange.R3, state.viewz))
+    _marked(tokens, PLAYER_X_MARK, ValueRange.R1, state.x)
+    _marked(tokens, PLAYER_Y_MARK, ValueRange.R1, state.y)
+    _marked(tokens, PLAYER_Z_MARK, ValueRange.R3, state.viewz)
+    # Angle uses the ANGLE_VALUE carrier (not prefill_value), so it stays explicit.
     tokens.append(Token(PLAYER_ANGLE_MARK))
     tokens.append(Token(ANGLE_VALUE, {"angle": _player_angle_signed(state.angle)}))
 
     for j, node in enumerate(md.nodes):
         tokens.append(Token(NODE, {"j": j}))
-        tokens.append(Token(NODE_PX))
-        tokens.append(prefill_value(ValueRange.R1, node.px))
-        tokens.append(Token(NODE_PY))
-        tokens.append(prefill_value(ValueRange.R1, node.py))
-        tokens.append(Token(NODE_DX))
-        tokens.append(prefill_value(ValueRange.R2, node.dx))
-        tokens.append(Token(NODE_DY))
-        tokens.append(prefill_value(ValueRange.R2, node.dy))
+        _marked(tokens, NODE_PX, ValueRange.R1, node.px)
+        _marked(tokens, NODE_PY, ValueRange.R1, node.py)
+        _marked(tokens, NODE_DX, ValueRange.R2, node.dx)
+        _marked(tokens, NODE_DY, ValueRange.R2, node.dy)
         tokens.append(
             Token(NODE_FRONT_CHILD, {"child_u": _child_unified(node.front_child)})
         )
         tokens.append(
             Token(NODE_BACK_CHILD, {"child_u": _child_unified(node.back_child)})
         )
+        # Front then back bbox edges, each marker paired with its edge value
+        # (all ValueRange.R0). Order is load-bearing — it mirrors get_prefill.
         ft, fb, fl, fr = node.front_bbox
         bt, bb, bl, br = node.back_bbox
-        tokens.append(Token(BBOX_TOP_FRONT))
-        tokens.append(prefill_value(ValueRange.R0, ft))
-        tokens.append(Token(BBOX_BOT_FRONT))
-        tokens.append(prefill_value(ValueRange.R0, fb))
-        tokens.append(Token(BBOX_LEFT_FRONT))
-        tokens.append(prefill_value(ValueRange.R0, fl))
-        tokens.append(Token(BBOX_RIGHT_FRONT))
-        tokens.append(prefill_value(ValueRange.R0, fr))
-        tokens.append(Token(BBOX_TOP_BACK))
-        tokens.append(prefill_value(ValueRange.R0, bt))
-        tokens.append(Token(BBOX_BOT_BACK))
-        tokens.append(prefill_value(ValueRange.R0, bb))
-        tokens.append(Token(BBOX_LEFT_BACK))
-        tokens.append(prefill_value(ValueRange.R0, bl))
-        tokens.append(Token(BBOX_RIGHT_BACK))
-        tokens.append(prefill_value(ValueRange.R0, br))
+        for bbox_marker, edge in (
+            (BBOX_TOP_FRONT, ft),
+            (BBOX_BOT_FRONT, fb),
+            (BBOX_LEFT_FRONT, fl),
+            (BBOX_RIGHT_FRONT, fr),
+            (BBOX_TOP_BACK, bt),
+            (BBOX_BOT_BACK, bb),
+            (BBOX_LEFT_BACK, bl),
+            (BBOX_RIGHT_BACK, br),
+        ):
+            _marked(tokens, bbox_marker, ValueRange.R0, edge)
 
     for s, sub in enumerate(md.subsectors):
         tokens.append(Token(SS, {"s": s}))
         for k in range(sub.seg_count):
             i = sub.first_seg + k
+            # seg is the BAKED Segment (geometry.py); md.segs[i] below is the raw
+            # WAD Seg (types.py) — two different types reached in this loop body.
             seg = segments[i]
             tokens.append(Token(SEG, {"i": i, "is_first_of_ss": 1 if k == 0 else 0}))
-            tokens.append(Token(SEG_AX))
-            tokens.append(prefill_value(ValueRange.R1, seg.ax))
-            tokens.append(Token(SEG_AY))
-            tokens.append(prefill_value(ValueRange.R1, seg.ay))
-            tokens.append(Token(SEG_BX))
-            tokens.append(prefill_value(ValueRange.R1, seg.bx))
-            tokens.append(Token(SEG_BY))
-            tokens.append(prefill_value(ValueRange.R1, seg.by))
+            _marked(tokens, SEG_AX, ValueRange.R1, seg.ax)
+            _marked(tokens, SEG_AY, ValueRange.R1, seg.ay)
+            _marked(tokens, SEG_BX, ValueRange.R1, seg.bx)
+            _marked(tokens, SEG_BY, ValueRange.R1, seg.by)
             tokens.append(Token(SEG_TWO_SIDED, {"flag": 1 if seg.is_two_sided else 0}))
             tokens.append(Token(SEG_NORMAL_ANGLE))
             tokens.append(
@@ -306,10 +306,9 @@ def build_prompt(
     for s, info in enumerate(plane_tables.subsectors):
         if info is None:
             continue
-        if info.floor_plane_id is not None:
-            tokens.append(Token(SS_FLOOR_PLANE, {"s": s, "p": info.floor_plane_id}))
-        if info.ceiling_plane_id is not None:
-            tokens.append(Token(SS_CEILING_PLANE, {"s": s, "p": info.ceiling_plane_id}))
+        # Both plane ids are always set (int) once info exists — no per-field guard.
+        tokens.append(Token(SS_FLOOR_PLANE, {"s": s, "p": info.floor_plane_id}))
+        tokens.append(Token(SS_CEILING_PLANE, {"s": s, "p": info.ceiling_plane_id}))
 
     tokens.append(Token(BEGIN))
     return tokens

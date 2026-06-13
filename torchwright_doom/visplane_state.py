@@ -12,6 +12,26 @@ every node-building literal is relocated inside the function that uses it (the
 no-import-time-nodes rule). The plain-list ``linear`` matrices (raw arrays) stay
 at module level. ``compare_const(c, sharpness)`` becomes the real ``compare(node,
 c, sharpness)`` (the sandbox ``input_range`` has no real counterpart).
+
+Layout (top to bottom):
+
+  - Plain weight tables + radix-key helpers (``_radix_plane_key``,
+    ``_lifted_instance_key`` / ``_lifted_instance_query``): the column- and
+    plane-id encodings the attention reads dot against. The lift turns an id
+    equality into a small dot that scores 1 on a match and drops by >= 1 per
+    unit of mismatch, so it costs far fewer residual columns than a wide one-hot.
+  - State dataclasses (``VisplaneColumnValues``, ``OccupancyRadix``,
+    ``UsedPlaneSuccessor``, ``RuntimeVisplaneState``): the bundles of published
+    rows and the values read back off them.
+  - ``RuntimeVisplaneState.publish``: builds every per-position channel — the
+    occupancy radix rows, the per-instance min/max-x and per-column-range keys,
+    and the used-plane / used-vp successor rows.
+  - ``check_conflict`` (R_CheckPlane): the three-head successor scan asking
+    whether instance (plane, vp) already occupies a column in [x1, x2]
+    (same-bucket / next-bucket / carry).
+  - Small accessors (``next_plane_after``, ``next_vp_after``, ``min_x`` /
+    ``max_x``, ``column_range``): read the channels ``publish`` built — the
+    plane/vp iteration successors and the per-instance column-coverage lookups.
 """
 
 from __future__ import annotations
@@ -298,6 +318,10 @@ class RuntimeVisplaneState:
         vp_sentinel = constant(float(N_VP_SENTINEL))
         plane_sentinel = constant(float(N_PLANE_SENTINEL))
 
+        # --- Occupancy rows: one per screen column a marked seg covers. Read by
+        # check_conflict to test instance overlap. The plane-mark seg's (p, vp)
+        # comes from the PLANE_MARK row one position back; the column from the
+        # wall-column cursor.
         occupied_active = inp.screen_range_after_plane_mark
         occupied_p_value = past.attend_to_offset(plane_mark_p_or_zero, delta_pos=-1)
         occupied_vp_value = past.attend_to_offset(plane_mark_vp_or_zero, delta_pos=-1)
@@ -316,6 +340,9 @@ class RuntimeVisplaneState:
             occupied_instance_oh_value,
         )
         occupied_x = past.publish("visplane_occupied_x", occupied_x_value)
+        # --- Per-instance min/max-x keys: read by min_x / max_x. A (plane, vp)
+        # query argmaxes these over every occupied column; the +/-occupied_x tail
+        # term picks the smallest (min) or largest (max) matching column.
         # Radix the plane equality (was one_hot(plane, 32), the d_qk driver) into
         # a (bucket, digit) pair; the vp one-hot (width 8) stays. Both query and
         # key scale by 128, so a matched digit/vp column contributes 128*128 to
@@ -349,6 +376,10 @@ class RuntimeVisplaneState:
                 ),
             ),
         )
+        # --- Per-column coverage rows: read by column_range. A (plane, vp, x)
+        # query argmaxes col_key to find the row for exactly that column of that
+        # instance, returning its [top, bottom] from col_range (an empty range if
+        # the column is unoccupied).
         # column_range key: lift the (plane, vp) instance to a width-3 scalar-id
         # equality (the same form OccupancyRadix uses) and radix the screen column
         # (was a width-(SCREEN_WIDTH+1) one_hot), so a (plane, vp, x) lookup needs
@@ -376,6 +407,10 @@ class RuntimeVisplaneState:
             ),
         )
 
+        # --- Used-plane successor rows: read by next_plane_after to iterate
+        # planes in R_DrawPlanes order. Every occupied column's plane is a used
+        # row, plus the sentinel plane published once at DRAW_PLANES_BEGIN so a
+        # successor is always present.
         used_plane_active = or_(occupied_active, inp.is_draw_planes_begin)
         used_plane_value_raw = select(
             inp.is_draw_planes_begin,
@@ -386,6 +421,9 @@ class RuntimeVisplaneState:
             past, used_plane_active, used_plane_value_raw
         )
 
+        # --- Used-vp successor rows: read by next_vp_after to iterate a plane's
+        # visplane instances. Each occupied column contributes its vp; the
+        # per-plane sentinel vp (published at the PLANE_DEF row) bounds the scan.
         used_vp_sentinel_active = inp.is_plane_def
         used_vp_active = or_(occupied_active, used_vp_sentinel_active)
         used_vp_p = select(used_vp_sentinel_active, inp.plane_def_p, occupied_p_value)

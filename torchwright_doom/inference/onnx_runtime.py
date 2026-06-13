@@ -583,6 +583,14 @@ class OnnxTokenRuntime(TokenRuntime):
         cache: KVCache,
         past_len: int | None = None,
     ) -> tuple[torch.Tensor, KVCache]:
+        """One forward pass: validate invariants, tag expiry, dispatch CPU vs CUDA.
+
+        Checks the no-uncommitted-batch and cache-overrun guards and the
+        position/committed-count length invariant, computes the per-row
+        expiry tags the windowed placement policy needs, then hands off to
+        :meth:`_step_cuda_io` (CUDA I/O binding available) or
+        :meth:`_step_cpu` (the reference path).
+        """
         if not isinstance(cache, KVCache):
             raise TypeError(
                 "OnnxTokenRuntime.step requires a KVCache from empty_past(max_len)"
@@ -634,6 +642,13 @@ class OnnxTokenRuntime(TokenRuntime):
     def _step_cpu(
         self, inputs, cache: KVCache, past_len: int, n_new: int, base: int, expiring
     ):
+        """Reference CPU path: bind the full/exact prefix, run, persist deltas.
+
+        Binds the full S-row cache (unbounded) or the exact ``C + n_new``
+        prefix (windowed) and runs the session once with no CUDA-graph
+        capture, then writes the per-layer KV deltas into the owned cache
+        tail.
+        """
         import numpy as np
 
         token_ids = (
@@ -810,6 +825,23 @@ class OnnxTokenRuntime(TokenRuntime):
     def _step_cuda_io(
         self, inputs, cache: KVCache, past_len: int, n_new: int, base: int, expiring
     ):
+        """CUDA I/O-binding step, dispatched by pass width ``n_new``:
+
+        1. ``n_new == 1`` -> the persistent captured decode binding (the
+           pure-decode bucket, smallest covering S_eff / the constant
+           ``C + 1`` windowed); contents-only updates, one replayed graph.
+        2. ``2 <= n_new <= W`` (``W = self._batch_bucket_width``) -> the
+           padded captured spec-verify bucket: variable draft batches are
+           padded up to ``W`` so a single captured graph per stride bucket
+           serves every draft width (pad rows mask to zero weight, are
+           sliced off the outputs, and are never persisted).  Falls
+           through to path 3 when ``base + W`` exceeds the last bucket
+           (near the cache end), where ``s_eff`` comes back None.
+        3. else (prefill / oversized / near-cache-end) -> the uncaptured
+           per-call binding: bind the smallest prefix bucket covering
+           ``base + n_new`` (or the exact ``C + n_new`` windowed), run with
+           ``gpu_graph_id="-1"``, copy the deltas into the cache slots.
+        """
         import numpy as np
 
         windowed = cache.windowed is not None

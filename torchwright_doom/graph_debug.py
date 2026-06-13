@@ -1,4 +1,9 @@
-"""Debug helpers for exact-math (``reference_eval``) passes over the renderer graph."""
+"""Debug helpers for exact-math (``reference_eval``) passes over the renderer graph.
+
+Used only by the exact-math oracle tests (``tests/scene/test_*_oracle.py``) and
+the Plan-K diagnostic scripts (``scripts/k_*.py``); it is never imported by the
+live ``forward()`` build (``render_main``) or by the production runtime
+(``inference/`` / ``prompt/``), so it has no effect on the compiled path."""
 
 from __future__ import annotations
 

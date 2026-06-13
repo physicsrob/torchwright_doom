@@ -131,6 +131,38 @@ from .vocab import (
 
 @dataclass(frozen=True)
 class ProtocolEntry:
+    """One token type's cross-cutting protocol metadata.
+
+    Fields (allowed values come from the ``PROTOCOL_ENTRIES`` table below and
+    the ``_inert`` / ``_carrier`` / ``_branch`` constructors):
+
+    - ``token``: the :class:`~.tokens.TokenType` this entry describes.
+    - ``vocab_phase``: which vocab block the token lives in — ``"prefill"``
+      (scene/player/map rows replayed before the AR loop) or ``"ar"`` (rows
+      emitted during autoregression).
+    - ``role``: one of ``"inert"`` (emits ``NO_OP``), ``"carrier"`` (a numeric
+      payload row routed by its preceding marker), ``"branch"`` (a renderer
+      state with its own dispatch branch), ``"begin"`` (the final prefill
+      marker that seeds the AR loop), or ``"terminal"`` (the frame-end token).
+    - ``owner``: the module that builds this token's branch nodes — ``"scene"``,
+      ``"payload_router"``, ``"main"``, ``"traversal"``, or ``"projection"``.
+    - ``predicate``: the :class:`~.protocol_tokens.ProtocolTokenView`
+      cached-property name this token dispatches on (e.g. ``"is_value"``,
+      ``"is_inert_non_payload"``).
+    - ``branch``: the ``build_branch_outputs`` (in ``render_main``) dict key
+      whose next-token this entry selects when its predicate fires.
+    - ``dispatch_order``: integer that orders ``DISPATCH_TRANSITIONS`` (entries
+      are sorted by this before being grouped into transitions).
+    - ``prefill_replay``: how prefill replay treats this token —
+      ``"never"`` (default; not replayed), ``"input"`` (replayed verbatim from
+      the prefill input), or ``"scene_payload"`` (a carrier replayed only in a
+      scene context; see :func:`_build_prefill_replay_predicates`).
+    - ``payload_group``: the marker group consumed by
+      :func:`_tokens_for_payload_group`, or ``None`` — one of ``"scene_value"``,
+      ``"scene_angle"``, ``"projection_angle"``, ``"bbox_value"``,
+      ``"bbox_angle"``, ``"drawseg_value"``, ``"drawseg_u_angle"``.
+    """
+
     token: TokenType
     vocab_phase: str
     role: str
@@ -144,6 +176,10 @@ class ProtocolEntry:
 
 @dataclass(frozen=True)
 class DispatchTransition:
+    """One dispatch arm: a predicate, the branch it selects, and the token
+    types that share that (predicate, branch) pair (grouped by
+    :func:`_build_dispatch_transitions`)."""
+
     predicate: str
     branch: str
     tokens: tuple[TokenType, ...]

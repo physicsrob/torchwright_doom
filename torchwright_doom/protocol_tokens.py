@@ -111,7 +111,43 @@ from .vocab import (
 
 
 class ProtocolTokenView:
-    """Lazy typed view over the current AR protocol token."""
+    """Lazy typed view over the current AR protocol token.
+
+    The body holds 100+ cached properties. They fall into a handful of groups;
+    the body is banner-commented (``# ---``) in the same order:
+
+    - One-token dispatch predicates ``is_*`` — installed from the registry at
+      import time by :func:`_install_registry_token_checks` (declared in the
+      ``TYPE_CHECKING`` block above, not written out in the body). Each is
+      exactly ``token.check(input_vec)``: a ±1 test of the current row's type.
+    - Marker-relative phase predicates ``is_value_after_*`` — true when the
+      current row is a ``VALUE`` carrier AND the previous row's type was a
+      specific marker, so a shared carrier is disambiguated by what preceded it.
+    - Range-bank numeric ``VALUE`` decoders (``value_v*`` / ``value_inv*``) —
+      decode the carrier's number through a given value range; call sites give
+      them role-specific local names.
+    - ``seg_kpart_*`` accessors — the wall texture-part bits and offsets read
+      off a single ``SEG_KPART`` row.
+    - Payload-group membership tests (``is_inert_non_payload``,
+      ``is_scene_value_payload``, ``is_scene_angle_payload``,
+      ``is_projection_angle_payload``, ``is_bbox_angle_payload``) — classify a
+      carrier row by the marker group its previous token belongs to.
+    - Angle after-marker phase predicates ``angle_after_*`` — like the
+      ``is_value_after_*`` group but for ``ANGLE_VALUE`` carriers.
+    - ``screen_*_after_*`` phase predicates — disambiguate ``SCREEN_Y_VALUE`` /
+      ``SCREEN_RANGE`` rows by their one or two preceding markers.
+    - Per-token slot accessors — typed reads of a single named slot off the
+      current row (``plane_mark_*``, ``r_check_plane_*``, ``flat_*``,
+      ``span_*``, ``think_node``, ``cursor_*``, ``pixel_*``, ``screen_*``, …);
+      each returns 0 when the current row is not that token's type.
+    - bbox sub-protocol tests and accessors (``bbox_scan_*``, ``bbox_boxpos``,
+      ``bbox_corner_*_boxpos``, ``boxpos_check_*``, ``boxpos_fails_open``) —
+      the bounding-box visibility sub-protocol's reads.
+    - The ``*_or_zero`` value accessors — sum a set of mutually-exclusive
+      per-token extractors so the result is the one populated value, or zero.
+
+    See ``GLOSSARY.md`` for the coined vocabulary (carrier, marker, …).
+    """
 
     if TYPE_CHECKING:
         # These cached properties are installed from TOKEN_CHECK_PREDICATES at
@@ -255,6 +291,7 @@ class ProtocolTokenView:
     def value_v8(self) -> Node:
         return value_derived(self.input_vec, ValueRange.R8)
 
+    # --- SEG_KPART accessors: wall texture-part bits and offsets ---
     @cached_property
     def seg_kpart_K_part_0(self) -> Node:
         return extract_derived(self.input_vec, "K_part_0")
@@ -279,6 +316,7 @@ class ProtocolTokenView:
     def seg_kpart_has_lower(self) -> Node:
         return indicator_to_bool(extract_derived(self.input_vec, "has_lower"))
 
+    # --- Current-type tests and same-row slot accessors (visplane setup) ---
     @cached_property
     def is_set_cursor_x(self) -> Node:
         return SET_CURSOR_X.check(self.input_vec)
@@ -307,6 +345,7 @@ class ProtocolTokenView:
     def ss_ceiling_plane_p(self) -> Node:
         return SS_CEILING_PLANE.extract(self.input_vec, "p")
 
+    # --- Payload-group membership tests: classify a carrier by its marker ---
     @cached_property
     def is_inert_non_payload(self) -> Node:
         """Rows whose type is intrinsically inert and should emit `NO_OP`.
@@ -349,6 +388,7 @@ class ProtocolTokenView:
             _prev_type_matches_any(self.prev_input_type, _BBOX_ANGLE_MARKERS),
         )
 
+    # --- Angle after-marker phase predicates: ANGLE_VALUE row after marker M ---
     @cached_property
     def angle_after_world_a(self) -> Node:
         return and_(
@@ -412,6 +452,7 @@ class ProtocolTokenView:
             _input_type_matches(self.prev_input_type, BBOX_THETA_MARK_B),
         )
 
+    # --- More VALUE after-marker phase predicates (bbox corners, drawseg) ---
     @cached_property
     def is_value_after_bbox_corner_x_a(self) -> Node:
         return and_(
@@ -513,6 +554,7 @@ class ProtocolTokenView:
             _input_type_matches(self.prev_input_type, SET_CURSOR_Y),
         )
 
+    # --- SCREEN_Y / SCREEN_RANGE after-marker phase predicates ---
     @cached_property
     def screen_y_after_wall_column_scale(self) -> Node:
         # The wall-column rw_scale carrier follows WALL_COL_U; its
@@ -539,6 +581,8 @@ class ProtocolTokenView:
             _input_type_matches(self.prev_input_type, PLANE_MARK),
         )
 
+    # --- Per-token slot accessors: typed reads of one named slot off the
+    # current row (each returns 0 when the active row is not that type) ---
     @cached_property
     def plane_mark_kind(self) -> Node:
         return PLANE_MARK.extract(self.input_vec, "kind")
@@ -739,6 +783,7 @@ class ProtocolTokenView:
     def screen_range_y2(self) -> Node:
         return SCREEN_RANGE.extract(self.input_vec, "y2")
 
+    # --- bbox sub-protocol tests and accessors (bounding-box visibility) ---
     @cached_property
     def bbox_scan_x(self) -> Node:
         return BBOX_SCAN.extract(self.input_vec, "x")
@@ -787,6 +832,12 @@ class ProtocolTokenView:
     def boxpos_fails_open(self) -> Node:
         return indicator_to_bool(extract_derived(self.input_vec, "fails_open"))
 
+    # --- The *_or_zero value accessors ---
+    # Each candidate is a per-token .extract(), which returns its slot value
+    # only when the current row is that token's type and 0 otherwise. Exactly
+    # one source slot is populated per row (a row has one type), so summing the
+    # candidates yields that one value, or zero when none of them is the active
+    # type — a marker-free way to read "whichever of these tokens this row is".
     @cached_property
     def boxpos_or_zero(self) -> Node:
         return vec_sum(

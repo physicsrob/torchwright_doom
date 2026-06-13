@@ -1,5 +1,10 @@
 """Read-only branch owner for R_StoreWallRange / drawseg setup.
 
+Branch builders follow the ``after_<token>`` convention (see GLOSSARY.md):
+``after_X()`` builds the emit head for the token the protocol emits after an
+``X`` token, and ``render_main.build_branch_outputs`` selects exactly one per
+AR step by the current input token's type.
+
 Ported from ``doom_sandbox/implementation/forward/wall_range_builder.py``. Owns
 the drawseg/range transitions: from ``R_STORE_WALL_RANGE`` it emits the
 ``SEG_KPART`` → ``SEG_DC_TMID_*`` → ``DRAWSEG_META`` → scale chain

@@ -1,5 +1,11 @@
 """Read-only mixed branch owner for SCREEN_RANGE transitions (Phase H).
 
+In the per-token ``forward()`` flow this is the
+``render_main.build_branch_outputs`` owner for the ``screen_range`` branch (the
+host-visible clip/visplane merge token): that builder constructs a
+``RangeDispatcher`` and wires its ``after_screen_range`` head to the
+``"screen_range"`` dispatch branch.
+
 Ported from ``doom_sandbox/implementation/forward/range_dispatcher.py``;
 ``type_switch`` exists real-side (``std``), so the two-arm wall/visplane merge
 ports directly.

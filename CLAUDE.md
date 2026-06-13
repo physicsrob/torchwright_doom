@@ -83,16 +83,29 @@ Rough layout of `torchwright_doom/`:
   (shared math: atan2, distance, clamps).
 - **Rasterization** — `wall_range_*` / `wall_column_*` (wall columns),
   `visplane_*` / `flat_*` (floor/ceiling planes), `solid_intervals`
-  (occlusion), `pixel_dispatcher` / `uv_compute` (final pixels).
+  (occlusion), `pixel_dispatcher` / `uv_compute` / `pwl_banks` (final
+  pixels; `pwl_banks` is texture-coordinate PWL wraps for the pixel pass,
+  *not* lighting — distinct from `emit.py`'s digit-quad PWL).
 - **Assets + lighting** — `wad_assets` / `assets` / `asset_*` (textures
-  and flats compiled to lookup tables), `doom_lighting` / `lighting` /
-  `pwl_banks` (light levels and colormaps).
+  and flats compiled to lookup tables), `doom_lighting` / `lighting`
+  (light levels and colormaps).
 - **Graph infrastructure** — `past` / `attention_handles` (reading
   previously-emitted tokens) and `std` (the helper-op shim).
 - **Runtime** — `inference/` (the production runtime: ONNX session +
   CUDA-graph capture in `onnx_runtime`, windowed KV cache in
   `kv_cache`, generation loops in `generation`, compile cache, config,
   CLI) and `prompt/` (prefill prompt construction from the WAD scene).
+
+**Reading path** for one `forward()` pass, read side → write side:
+`vocab` / `tokens` → `embedding` / `extract` → `scene_tokens` /
+`scene_headers` / `scene_index` / `scene_facts` (static read side) →
+`protocol_tokens` / `protocol_registry` (the dispatch table) →
+`render_main.forward` (assembly) → the write side: `bsp_traversal`
+(R_RenderBSPNode) → `seg_projection` → the `wall_*` / `visplane_*` /
+`flat_*` rasterizers → the pixel pass. The **prefill pipeline** (WAD →
+the tokens the model reads before autoregression) is `prompt/wad.py` →
+`prompt/subset.py` → `prompt/build.py` → `inference/tokens_bridge.py`;
+`README.md` spells out both chains with file:function references.
 
 Each renderer module is ported from a `doom_sandbox` counterpart; many
 docstrings note that provenance and the sandbox path.

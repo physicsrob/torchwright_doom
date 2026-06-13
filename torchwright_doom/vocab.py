@@ -5,6 +5,14 @@ Token types emitted by :func:`torchwright_doom.prompt.build.build_prompt`
 ``forward()`` (``AR_TYPES``). The combined ``VOCAB_TYPES`` is what the
 embedding table is built against.
 
+ORDER IS LOAD-BEARING: each type's position in these lists (and so in
+the combined ``VOCAB_TYPES``) is its E8 type-identity-code index — the
+8-wide category code that ``embedding.py`` writes into every row of that
+type. ``Layout.e8_indices`` is built by ``enumerate(types)`` (see
+``embedding.py``), so appending a new type is safe but reordering or
+inserting one shifts every later type's identity code and rebuilds the
+embedding table.
+
 Capacity constants (``N_NODES_MAX`` etc.) bound the ``IntSlot`` ranges;
 bumping them is a vocab-scale change that propagates to the embedding
 table.
@@ -40,6 +48,13 @@ from .value_ranges import (
 # ---------------------------------------------------------------------------
 # Capacity constants
 # ---------------------------------------------------------------------------
+
+# These ``N_*`` constants define the instance-space capacities (how many
+# nodes / subsectors / segs / planes a scene may carry) and the one-past
+# sentinel values the runtime scans use (``N_PLANE_SENTINEL`` etc.). They
+# set the upper bound of the matching ``IntSlot`` ranges below, so bumping
+# any of them widens those slots and — as the module docstring warns —
+# propagates to the embedding table (more rows / wider digit-quad blocks).
 
 ANGLE_BAM = 8192
 BACK_HEIGHT_SENTINEL = -4096.0
@@ -419,6 +434,10 @@ SS_CEILING_PLANE = TokenType(
 BEGIN = TokenType("begin")
 
 
+# ORDER IS LOAD-BEARING: each type's position here is its E8 type-identity-code
+# index (see embedding.py Layout.e8_indices). Append new types at the end; never
+# reorder or insert, or every later type's identity code shifts and the embedding
+# table changes.
 PROMPT_TYPES = [
     # Shared payload
     VALUE,
@@ -480,6 +499,14 @@ PROMPT_TYPES = [
 # AR-loop types (ported from spec09__ref/setup.py)
 # ---------------------------------------------------------------------------
 
+# These declarations are grouped below by pipeline phase. The phases are
+# interleaved in source order (the bbox-visibility marks sit between the
+# point-on-side decision and the traversal spine), so each phase banner
+# labels the block that follows it, not a strictly sequential run.
+
+# --- Phase: BSP traversal (point-on-side decision + seg world/clip angles) ---
+# Which side of a node the viewer is on, plus the clip-angle marks for a
+# seg's two endpoints.
 NO_OP = TokenType("noOp")
 THINK_SIDE = TokenType("R_PointOnSide", slots={"node": IntSlot(0, N_NODES_MAX)})
 SIDE_RECORD = TokenType(
@@ -493,6 +520,9 @@ WORLD_ANGLE_MARK_A = TokenType("angle1")
 THETA_MARK_A = TokenType("theta1")
 WORLD_ANGLE_MARK_B = TokenType("angle2")
 THETA_MARK_B = TokenType("theta2")
+# --- Phase: bbox visibility (R_CheckBBox) ---
+# Clip-angle marks and corner picks for the node bounding-box visibility
+# test that decides whether a whole subtree can be skipped.
 BBOX_WORLD_ANGLE_MARK_A = TokenType("bbox.angle1")
 BBOX_THETA_MARK_A = TokenType("bbox.theta1")
 BBOX_WORLD_ANGLE_MARK_B = TokenType("bbox.angle2")
@@ -502,6 +532,9 @@ BBOX_CORNER_X_MARK_A = TokenType("bbox.x1", slots={"boxpos": _boxpos_slot()})
 BBOX_CORNER_Y_MARK_A = TokenType("bbox.y1", slots={"boxpos": _boxpos_slot()})
 BBOX_CORNER_X_MARK_B = TokenType("bbox.x2", slots={"boxpos": _boxpos_slot()})
 BBOX_CORNER_Y_MARK_B = TokenType("bbox.y2", slots={"boxpos": _boxpos_slot()})
+# --- Phase: BSP traversal (the depth-first walk spine) ---
+# Descend into the front child, check the back child, return up the tree,
+# and visit a subsector's leaf when reached.
 TRAVERSE_ENTER = TokenType(
     "bspFront",
     slots={"node": IntSlot(0, N_NODES_MAX), "depth": IntSlot(0, N_DEPTH_MAX)},
@@ -518,6 +551,9 @@ VISIT_SUBSECTOR = TokenType(
     "R_Subsector",
     slots={"s": IntSlot(0, N_SUBSECTORS_MAX), "depth": IntSlot(0, N_DEPTH_MAX)},
 )
+# --- Phase: seg projection (R_AddLine + clip-run scanning) ---
+# Add a seg's line to the active clip, scan for the visible run of screen
+# columns, advance to the next seg, and emit the run's right edge.
 PROCESS_SEG = TokenType("R_AddLine", slots={"i": IntSlot(0, N_SEGS_MAX)})
 FIND_RUN = TokenType(
     "clipScan", slots={"x": IntSlot(0, SCREEN_WIDTH + 1, derived=_SCAN_X_DERIVED)}
@@ -529,6 +565,10 @@ ADVANCE_SEG = TokenType("nextSeg", slots={"i": IntSlot(0, N_SEGS_MAX)})
 EMIT_X2 = TokenType(
     "drawseg.x2", slots={"x": IntSlot(0, SCREEN_WIDTH, derived=_SCREEN_X_DERIVED)}
 )
+# --- Phase: wall-range store (R_StoreWallRange + drawseg state) ---
+# Record the drawseg for a visible wall range: which parts exist, the
+# per-column texture-mid markers, and the scale / silhouette state the
+# column rasterizer reads back.
 R_STORE_WALL_RANGE = TokenType(
     "R_StoreWallRange",
     slots={"i": IntSlot(0, N_SEGS_MAX, derived=_ID_LIFTED_KEY_DERIVED)},
@@ -570,6 +610,10 @@ DRAWSEG_SCALESTEP = TokenType("drawseg.scalestep")
 DRAWSEG_BSILHEIGHT = TokenType("drawseg.bsilheight")
 DRAWSEG_TSILHEIGHT = TokenType("drawseg.tsilheight")
 DRAWSEG_U_PHASE = TokenType("drawseg.uPhase")
+# --- Phase: wall-column raster (per-column texel emit + clip/plane marks) ---
+# Walk each screen column of a wall: set the cursor, emit texel pixels,
+# update the per-column clip, and mark the floor/ceiling visplanes this
+# column opened.
 R_CHECK_PLANE = TokenType(
     "R_CheckPlane",
     slots={"kind": IntSlot(0, 2), "vp": IntSlot(0, N_VP_PER_PLANE_MAX)},
@@ -610,6 +654,9 @@ PLANE_MARK = TokenType(
         "vp": IntSlot(0, N_VP_PER_PLANE_MAX),
     },
 )
+# --- Phase: flat pass (R_DrawPlanes — floor/ceiling visplane fill) ---
+# After the walls, iterate the visplanes, build their spans, and emit the
+# floor/ceiling flat pixels row by row.
 DRAW_PLANES_BEGIN = TokenType("R_DrawPlanes")
 FLAT_NEXT_PLANE = TokenType(
     "R_DrawPlanes.nextPlane", slots={"p": IntSlot(-1, N_PLANES_MAX)}
@@ -641,9 +688,14 @@ SCREEN_RANGE = TokenType(
         "y2": IntSlot(-1, SCREEN_HEIGHT + 1),
     },
 )
+# --- Phase: terminal ---
+# Frame complete.
 DONE = TokenType("done")
 
 
+# ORDER IS LOAD-BEARING (continues PROMPT_TYPES): each type's position here is
+# its E8 type-identity-code index in the combined VOCAB_TYPES (see embedding.py
+# Layout.e8_indices). Append new types at the end; never reorder or insert.
 AR_TYPES = [
     NO_OP,
     THINK_SIDE,

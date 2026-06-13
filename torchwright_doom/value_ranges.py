@@ -54,16 +54,18 @@ _PROJ_RATIO = (SCREEN_WIDTH - 1) / 59.0
 
 
 class ValueRange(IntEnum):
-    R0 = 0
-    R1 = 1
-    R2 = 2
-    R3 = 3
-    R4 = 4
-    R5 = 5
-    R6 = 6
-    R7 = 7
-    R8 = 8
-    R9 = 9
+    # The lo/hi bounds and their numeric rationale live on VALUE_RANGES below;
+    # these trailing comments name what each range carries.
+    R0 = 0  # wide map coordinates and bbox corners
+    R1 = 1  # medium map coordinates
+    R2 = 2  # node deltas
+    R3 = 3  # normal sector heights and texture-mid/span values
+    R4 = 4  # back-height / upper+lower dc_texturemid range (R3 widened down)
+    R5 = 5  # wall scale (projection / distance)
+    R6 = 6  # scale denominator (rw_distance x cosine)
+    R7 = 7  # drawseg width in screen columns
+    R8 = 8  # per-column scale step
+    R9 = 9  # finite silheight values (sentinels via the range endpoints)
 
 
 @dataclass(frozen=True)

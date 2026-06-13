@@ -4,6 +4,12 @@
 marker that precedes them, so this router is the handoff point that delegates a
 carrier row to the protocol owner of its marker sequence.
 
+In the per-token ``forward()`` flow this is one of the three protocol owners
+built in ``render_main.publish_runtime_protocols`` (held on
+``RuntimeProtocols.payload_router``): the ``value`` and ``angle`` dispatch
+branches route their carriers through ``after_value`` / ``after_angle_value``
+here.
+
 Ported from ``doom_sandbox/implementation/forward/payload_router.py``. The
 ``BBoxPruner`` (published by ``BspTraversal``) is the VALUE fallback for the
 bbox corner rows and owns the ``is_bbox_angle`` ANGLE_VALUE arm.

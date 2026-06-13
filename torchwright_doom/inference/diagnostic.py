@@ -17,12 +17,16 @@ The J2 bars and carrier-delta logic mirror
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from ..embedding import TOKEN_VOCAB
 from ..vocab import ANGLE_VALUE, PIXEL, VALUE
 from .generation import argmax_rows
 from .decode import decode_xy_by_position
 from .tokens_bridge import rows_to_input
+
+if TYPE_CHECKING:
+    from torchwright.debug.onnx_debug import OnnxDebugSession
 
 _CARRIERS = {"value", "angleValue"}
 _VALUE_ENC_TOL = 5.0e-3
@@ -73,7 +77,7 @@ class Divergence:
 
 
 def teacher_forced_scan(
-    compiled,
+    compiled: "OnnxDebugSession",
     full_rows: list[int],
     begin: int,
     options: dict[tuple[int, int], set[tuple[int, int, int]]],
@@ -83,6 +87,11 @@ def teacher_forced_scan(
 ) -> list[Divergence]:
     """Teacher-force ``full_rows`` through the compiled model and return every
     hard divergence (under the J2 bars) at AR positions ``>= begin``.
+
+    ``compiled`` is an :class:`~torchwright.debug.onnx_debug.OnnxDebugSession`
+    (the disabled-memory-planning debug session), **not** the production
+    ``OnnxTokenRuntime``: its ``empty_past()`` takes no ``max_len`` (the bare
+    call below is correct), and it materializes full per-chunk logits.
 
     The pass threads the KV cache in ``chunk_size``-row chunks — semantically
     identical to one wide forward (same mask geometry; production prefill is

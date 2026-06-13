@@ -8,7 +8,8 @@ The three shared pixel/cursor branches (``after_wall_column`` on SET_CURSOR_X,
 ``flat_span_seen`` (``+1`` once a ``SPAN_ROW`` has fired this frame, ``-1``
 before). ``SPAN_ROW`` is only emitted by ``FlatPassRenderer`` after the BSP walk,
 so before the flat pass ``flat_span_seen`` is structurally false and every fork
-degenerates to the wall arm.
+degenerates to the wall arm. The full flat-pass token sequence (where these
+shared branches sit in it) is mapped in ``flat_pass_renderer.py``.
 
 Changes from the sandbox: ``Vec`` -> ``Node``; ``make_token`` ->
 ``make_token_head``; ``make_value`` -> the eager R3 VALUE head (so the

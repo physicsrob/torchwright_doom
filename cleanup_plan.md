@@ -10,6 +10,74 @@ below (`#N`) index that file.
 `3bf2162`: doc truth, dependency closure, the `ruff check --select F`
 lint gate, and fail-loud error paths. This file tracks what remains.
 
+---
+
+## 2026-06-13 — comprehension + density pass (Batch 5)
+
+A second audit, scoped to **newcomer comprehension of the computational
+graph** and **density that increases clarity** (not generic tech debt).
+13 lens-scoped finders + two-lens adversarial verification (accuracy +
+"does this actually help a newcomer") + a completeness critic: 56 findings
+confirmed, 68 rejected (4 as duplicates of the 2026-06-12 settled set).
+
+**Landed (uncommitted, working tree).** All docs-only + host-code findings:
+
+- *Orientation docs.* `README.md` rewritten (3 lines -> what-it-is, the
+  dumb-host principle, the entry point, the read-side->write-side reading
+  path, the WAD->prefill chain). `GLOSSARY.md` gained ~4 sections /
+  ~20 entries (read side / write side, the `after_<token>` convention, the
+  import-time-node rule, the Phase-letter legend, owner split, handle /
+  validity / presence / subcontext, scene fact / header context, `span`,
+  marker's 3 senses, assets+lighting cluster, prefill cluster, runtime
+  cluster). `CLAUDE.md` "Rough layout" gained the reading path + prefill
+  chain and re-homed `pwl_banks` (pixel-pass, not lighting).
+- *Module docstrings/comments (50 edits, comment-only — zero graph nodes
+  added, so the compiled graph is bit-identical).* Highlights: `scene_facts`
+  channel-contract correction (it described the OPPOSITE of how presence
+  lookups key); `ProtocolEntry` field docs; `ProtocolTokenView` category map
+  + banners; `WallColumnState.publish` section skeleton; `visplane_*` branch
+  maps + layout; the flat-pass control-flow map; the windowed-cache
+  read-distance invariant noted at `past`/`attention_handles`; the
+  spec-decode reuse machinery explained; `render_ops` section list; the
+  `digit_quad_row` dangling reference; `value_ranges` R0..R9 purposes.
+- *Host-code (lint-green; behavior validated locally — see below).*
+  `dispatch_next_token` dead `input_vec` param dropped; `PastHandleScope`'s
+  four pass-through delegators deleted (rely on `__getattr__`, -34);
+  `assets.py` dead `_WALL_*`/`_FLAT_*` aliases + misleading comment deleted;
+  `PlaneTables.flat_names` (computed, never read) deleted; `build_prompt`
+  marker->value boilerplate folded into a `_marked` helper + the BBOX block
+  into a scannable table-loop (marker/range stay explicit); raw-`Seg` vs
+  baked-`Segment` disambiguated; dead `is not None` plane-id guards removed;
+  `diagnostic.teacher_forced_scan`'s `compiled` param typed `OnnxDebugSession`
+  (its `empty_past()` legitimately takes no `max_len`).
+
+**Certification.** `make lint` green. Behavior-relevant host-code changes
+validated locally via `make test-local`: `test_prompt_equivalence`
+(build_prompt byte-identical to sandbox `get_prefill`), `test_graph_past`
+(delegator removal), `test_dispatch_dedup` + `test_forward_compiles` (the
+full forward graph still compiles to ONNX, render_main param). The docs-only
+edits add no graph node, so the compiled schedule is unchanged by
+construction. **The formal gate — the full `make test` Modal suite (~22 min)
+— has NOT been run** (it exceeds the foreground tool cap, and the project
+rule is "never run tests in the background"); run it to finalize before
+relying on these in production.
+
+**Deferred from this pass (not done):**
+
+- `_xtoviewangle_rad` recomputes `_TAN_FOV_HALF` inline (a third copy the
+  4c cross-module dedup missed) — **graph-touching**, needs production-scale
+  token-identical certification; bundle into a future certified graph batch.
+- A PLAYPAL-consistency test (`asset_config.PLAYPAL` == `asset_banks.PLAYPAL`)
+  — skipped because importing `asset_banks` triggers a WAD load whose
+  presence in the Modal test image isn't certain; add only with a graceful
+  skip or once WAD-in-image is confirmed.
+- A few LOW items: committing `render_protocol_table()` output somewhere
+  discoverable; `_U_MOD_BY_BANK` is a dead duplicate of
+  `WallAssets.__post_init__` but is cited as a pattern exemplar (left in,
+  flagged). Full per-finding detail: `out/audit_confirmed.json` (gitignored).
+
+---
+
 **Progress (2026-06-12, this cleanup session):**
 
 - **Loose end CLOSED.** Batch 1 certified at production scale: fresh-

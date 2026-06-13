@@ -7,6 +7,12 @@ banks the wall texel pass and the flat span pass read:
   (aligned to ``WALL_HEIGHT_BANK``), selected per span by ``h_idx_oh``.
 * ``MOD64_PWL`` — the ``frac mod 64`` wrap for the 64×64 flat tiles.
 
+These are texture-coordinate wraps (``v mod H`` / ``frac mod 64``) for the
+pixel pass — the staircase that tiles a texel coordinate back into a texture.
+They are NOT the numeric digit-quadratic encoding PWL in ``emit.py`` (which
+splits an integer step index into base-256 digits to address an embedding
+row); the two share the ``pwl_def`` machinery but serve unrelated purposes.
+
 ``pwl_def`` returns a *closure* (it builds no graph node until the closure is
 called), so these module-level tuples are node-free at import — ``global_node_id``
 stays ``0`` — exactly like ``assets._U_MOD_BY_BANK`` /

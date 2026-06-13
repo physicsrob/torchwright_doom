@@ -10,6 +10,9 @@ source of truth for the ``wall_scale_diminish`` VALUE-derived column
 (see :func:`value_ranges.value_derived_columns`) and for the forward
 renderer's lighting. Kept faithful to the sandbox so the
 translation table maps 1:1.
+
+Ported from ``doom_sandbox/implementation/doom_lighting.py`` (the sandbox's
+top-level lighting math, not the ``forward/`` graph port).
 """
 
 from __future__ import annotations

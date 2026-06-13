@@ -15,9 +15,15 @@ The five public groups mirror the data render code needs:
 Channel contract used below:
 
 - `*_key` is an exact-match key only on producer rows and zero elsewhere.
-  Mandatory scene tables use lifted scalar-id equality; optional/presence
-  tables keep one-hot keys so missing-ID probes still fall below the presence
-  threshold.
+  Both the mandatory value tables and the presence tables key on lifted
+  scalar-id equality (the id is encoded as ``[id, -id^2, 1]`` so one
+  attention dot-product peaks at exact id equality; see ``GLOSSARY.md``).
+  A lifted key has no "no-match" state -- a query always returns the nearest
+  matched id -- so absence is detected by recovering that nearest id and
+  comparing it to the query, NOT by a one-hot probe scoring zero (see
+  ``LiftedKeyPresenceHandle``). The one exception is ``PlaneIndex``, which
+  keys on a width-N one-hot over plane id because plane ids are dense and
+  small.
 - `*_value` is published on every row; it is meaningful only where the matching
   key/validity marker says the row is a producer.
 - `*_marker` is the same-row presence bit used by optional lookups to
@@ -27,8 +33,11 @@ Ported from ``doom_sandbox/implementation/forward/scene_facts.py``. Changes
 from the sandbox source: the import block (``Vec`` -> ``Node``; ``Past`` ->
 ``GraphPast``; ``one_hot`` from the real-side shim, token declarations from
 ``vocab``, constants/ops from the real-side render shim). The five index
-dataclasses, their ``publish`` classmethods, the ~15 module-level lookup
-helpers, and ``SegIndex.is_portal`` are a line-for-line port.
+dataclasses, their ``publish`` classmethods, the 13 module-level lookup
+helpers, and ``SegIndex.is_portal`` are a line-for-line port -- except that
+the node and seg VALUE-backed lookups, which the sandbox kept as separate
+helpers, are merged here into the single ``_keyed_value_lookup`` (it differs
+only in which header context supplies the key).
 """
 
 from __future__ import annotations

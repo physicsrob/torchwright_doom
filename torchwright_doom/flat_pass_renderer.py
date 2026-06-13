@@ -7,6 +7,42 @@ SPAN_ROWs -> SET_CURSOR_Y (which flips ``flat_span_seen`` so the shared
 pixel/cursor branches route the flat arm), terminating at ``DONE`` when the
 plane successor returns the sentinel.
 
+Flat pass control flow (the single map of the four-file token state machine
+that draws floors/ceilings). The flat pass is split across four files: this
+file is the control spine, ``visplane_marker.py`` records each wall seg's
+floor/ceiling region DURING the BSP/wall walk (the rows this pass later reads
+back), ``flat_state.py`` publishes the per-row span/cursor state those reads
+consume, and ``pixel_dispatcher.py`` owns the shared pixel/cursor branches both
+the wall pass and this flat pass route through. Token transitions below; the
+owner of each arrow is named in brackets. (Reconstructed from the ``after_*``
+methods across these files — read those, not this comment, if they disagree.)
+
+    DRAW_PLANES_BEGIN -> SET_CURSOR_DIRECTION_X            [FlatPassRenderer]
+    SET_CURSOR_DIRECTION_X -> FLAT_NEXT_PLANE(p = -1)      [FlatPassRenderer]
+    FLAT_NEXT_PLANE -> DONE  (no further used plane)       [FlatPassRenderer]
+                    -> FLAT_NEXT_VP(next plane, vp = -1)
+    FLAT_NEXT_VP -> FLAT_NEXT_PLANE  (no further vp)       [FlatPassRenderer]
+                 -> FLAT_VISPLANE_BEGIN(plane, vp)
+    FLAT_VISPLANE_BEGIN -> FLAT_NEXT_VP  (sky: skip span)  [FlatPassRenderer]
+                        -> MAKE_SPANS_COL(x = minx)
+    MAKE_SPANS_COL -> SPAN_CLOSE_SLOT(slot 0 or 1)         [FlatPassRenderer]
+                   -> (no close: advance / next vp)
+    SPAN_CLOSE_SLOT -> SPAN_ROW(y)  (slot has rows)        [FlatPassRenderer]
+                    -> SPAN_CLOSE_SLOT(other slot) / advance
+    SPAN_ROW -> SET_CURSOR_Y(y)                            [FlatPassRenderer]
+    SET_CURSOR_Y -> SET_CURSOR_X(span x1)  (flat arm)      [PixelDispatcher]
+    SET_CURSOR_X -> PIXEL(first flat texel)  (flat arm)    [PixelDispatcher]
+    PIXEL -> PIXEL(next flat texel)  (still in span)       [PixelDispatcher]
+          -> back to SPAN_ROW / SPAN_CLOSE_SLOT / next vp / MAKE_SPANS_COL
+             (span row finished -> after_completed_flat_span_row below)
+
+The SET_CURSOR_Y / SET_CURSOR_X / PIXEL arrows are SHARED with the wall pass:
+``PixelDispatcher`` forks each on the runtime boolean ``flat_span_seen`` (true
+only once a SPAN_ROW has fired this frame), so before the flat pass starts they
+degenerate to the wall arm. The visplane regions this pass walks were recorded
+earlier by ``VisplaneMarker`` (one SCREEN_RANGE per marked wall seg) while the
+BSP/wall walk was still running.
+
 Changes from the sandbox: ``make_token`` -> ``make_token_head``; ``Vec`` ->
 ``Node``; the module-level sentinel ``constant``\\ s relocated inside the methods
 (no import-time graph nodes).
@@ -142,6 +178,12 @@ class FlatPassRenderer:
     def after_span_row(self) -> "Node":
         return make_token_head(SET_CURSOR_Y, y=self.projection.core.inp.span_row_y)
 
+    # --- Continuation helpers, not dispatch branches (no entry in render_main's
+    # branch table). after_make_spans_without_close is called from the two
+    # branches above (after_make_spans_col, after_span_close_slot) when a column
+    # opens no close slots; after_completed_flat_span_row is a hidden re-entry
+    # reached only from PixelDispatcher.after_flat_pixel_color when a flat span's
+    # pixel run finishes ---
     def after_make_spans_without_close(self) -> "Node":
         projection = self.projection
         flat = projection.flats.flat_pass.flat_visplane_values(projection.core.past)

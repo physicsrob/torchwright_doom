@@ -153,6 +153,13 @@ class SceneTokenView:
         """The current SEG_TWO_SIDED flag."""
         return indicator_to_bool(SEG_TWO_SIDED.extract(self.input_vec, "flag"))
 
+    # The three `seg_*_texture_present` accessors below all read the same
+    # `present` derived span off this row -- which texture (upper/lower/mid)
+    # the bit describes is fixed by the `is_seg_<upper/lower/mid>_texture`
+    # marker that gates the matching seg lookup, not by the payload. So the
+    # three names track the marker contract, not three separate payloads;
+    # keep them distinct because the names are the prefill protocol's
+    # documentation.
     @cached_property
     def is_seg_upper_texture(self) -> Node:
         return SEG_UPPER_TEXTURE.check(self.input_vec)

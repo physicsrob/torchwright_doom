@@ -40,16 +40,6 @@ from .pwl_banks import build_sawtooth_bank
 # 128}). Consumed by ``wall_column_state`` for the span h_idx_oh payload width.
 _H_IDX_OH_WIDTH = len(DEFAULT_ASSET_BANKS.wall_height_bank)
 
-# Module-level RAW data only (no graph nodes — see module docstring). The
-# sandbox wraps these in ``constant(...)`` at module scope; the real side keeps
-# them as plain Python/numpy and wraps inside the accessors below.
-_WALL_LOCAL_ID_VALUES_BY_BANK = DEFAULT_ASSET_BANKS.wall_local_id_values_by_bank
-_WALL_BANK_TABLE_2D = DEFAULT_ASSET_BANKS.wall_bank_table_2d
-_WALL_BANK_ROW_ADDR = DEFAULT_ASSET_BANKS.wall_bank_row_addr
-_FLAT_ID_VALUES = DEFAULT_ASSET_BANKS.flat_id_values
-_FLAT_TABLE_2D = DEFAULT_ASSET_BANKS.flat_table_2d
-_FLAT_ROW_ADDR = DEFAULT_ASSET_BANKS.flat_row_addr
-
 
 def _python_floor_mod(v: float, h: int) -> float:
     iv = math.floor(v)

@@ -122,7 +122,6 @@ def publish_runtime_protocols(
 
 
 def dispatch_next_token(
-    input_vec: Node,
     inp: ProtocolTokenView,
     branches: BranchOutputs,
 ) -> Node:
@@ -148,10 +147,11 @@ def dispatch_next_token(
        next-token head (~8 this phase) rather than 64. Because exactly one
        transition predicate is +1, exactly one grouped predicate is +1.
 
-    The sandbox also wraps dispatch in a prefill-replay ``select`` so prefill
-    rows re-emit their input verbatim (a render-trace nicety; those emissions are
-    discarded and ``BEGIN`` — the AR seed — is not replayed). That replay is
-    **deferred**: it would select the full ``input_vec``, whose W_EMBED rows span
+    **Not ported:** the sandbox also wraps dispatch in a prefill-replay
+    ``select`` so prefill rows re-emit their input verbatim (a render-trace
+    nicety; those emissions are discarded and ``BEGIN`` — the AR seed — is not
+    replayed). That replay is **deferred** (which is why this function takes no
+    ``input_vec``): it would select the full input row, whose W_EMBED rows span
     a ~100x dynamic range, and a single input ``value_type`` can't satisfy both
     the read-side interval arithmetic and the whole-row replay guard. The AR
     rollout and the oracle are unaffected (prefill emissions are discarded; the
@@ -233,7 +233,7 @@ def forward(
     pos_scalar = pos.get_position_scalar()
     protocols = publish_runtime_protocols(input_vec, scope, inp, scene, pos_scalar)
     branches = build_branch_outputs(inp, protocols)
-    return dispatch_next_token(input_vec, inp, branches)
+    return dispatch_next_token(inp, branches)
 
 
 def build_branch_outputs(

@@ -154,7 +154,7 @@ def digit_quad_row(slot: IntSlot | FloatSlot, slot_value: int | float) -> torch.
     """Build the digit-quadratic payload for a row representing
     ``slot=slot_value``.
 
-    Splits the integer step index ``k = slot_value_to_step_index(slot,
+    Splits the integer step index ``k = _step_index_for(slot,
     slot_value)`` into base-256 digits and emits the centered
     ``[d_c, -d_c²]`` pair for each:
 

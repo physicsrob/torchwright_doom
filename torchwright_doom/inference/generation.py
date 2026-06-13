@@ -265,7 +265,28 @@ class TokenRuntime(ABC):
         sandbox_token_to_row_fn: Callable[[Any], int] | None = None,
         row_to_sandbox_token_fn: Callable[[int], Any] | None = None,
     ) -> tuple[RolloutResult, dict[str, Any]]:
-        """Generate the rollout with speculative decoding. Returns (result, stats)."""
+        """Generate the rollout with speculative decoding. Returns (result, stats).
+
+        Phases:
+
+        1. Prefill once, then argmax the last position to seed the first
+           emitted row; if the drafter's first guess matches that seed,
+           consume it so the drafter and the emitted stream stay aligned.
+        2. Initialize the draft-tail reuse state (``reuse_buffer`` empty,
+           ``reuse_health`` at its start value, ``reuse_probe`` at 0; see
+           the reuse-machinery block comment above the ``_REUSE_*``
+           constants for what these track).
+        3. Main loop, per step: stop on the terminal row or the position
+           cap; otherwise either run a batched draft-verify step
+           (``_spec_step``, when the drafter still has tokens or a reused
+           tail is waiting and there is room for at least one draft) or
+           fall back to a single non-speculative step; then maybe print
+           progress.
+
+        The reuse state (``reuse_buffer``/``reuse_health``/``reuse_probe``)
+        is threaded through ``_spec_step`` and updated from its three
+        trailing return values on every batched step.
+        """
         from .tokens_bridge import (
             row_to_sandbox_token,
             sandbox_token_to_row,
@@ -277,6 +298,7 @@ class TokenRuntime(ABC):
         stats = _new_spec_stats()
         t0 = time.time()
 
+        # --- prefill once, then seed the first emitted row ---
         prefill_t0 = time.time()
         # Cache holds prefill + (max_positions - 1) committed rows; a speculative
         # batch transiently writes up to draft_window extra rows past cache_len
@@ -299,10 +321,13 @@ class TokenRuntime(ABC):
                 flush=True,
             )
 
+        # Align the drafter to the seed: if its first guess equals the
+        # seed we already emitted, consume it so its cursor matches.
         first = drafter.next_draft()
         if first is not None and sandbox_token_to_row_fn(first) == seed_row:
             drafter.consume(first)
 
+        # --- initialize draft-tail reuse state ---
         reuse_buffer: list = []
         reuse_health = _REUSE_HEALTH_INIT
         reuse_probe = 0
@@ -311,6 +336,7 @@ class TokenRuntime(ABC):
         last_timed_print = time.time()
         stopped = "cap"
 
+        # --- main loop: stop on terminal/cap, else batched verify or single step ---
         while True:
             next_input_row = emitted[-1]
             if next_input_row == terminal_row:
@@ -330,6 +356,8 @@ class TokenRuntime(ABC):
                     f"remaining={remaining_capacity}",
                     flush=True,
                 )
+            # Batched draft-verify step when drafts (reused or fresh) remain
+            # and there is room for at least one; otherwise a plain step.
             if (
                 not drafter_done
                 and remaining_capacity >= 2
@@ -393,6 +421,33 @@ class TokenRuntime(ABC):
         )
 
 
+# --- draft-tail reuse machinery ---
+#
+# When a batched draft is only partially accepted, the rejected tail
+# (the drafts past the first mismatch, plus the model's own next
+# prediction) is often still the right continuation one step later —
+# the model just mispredicted one token in the middle.  So instead of
+# throwing that tail away, ``_spec_step`` keeps it (``reuse_buffer``)
+# and re-offers it as the front of the next batch's drafts before
+# pulling fresh ones from the drafter.
+#
+# ``reuse_health`` is a confidence counter that gates whether reuse is
+# worth doing at all:
+#   - starts at _REUSE_HEALTH_INIT (4);
+#   - when a reused tail was offered and at least one draft was
+#     accepted, increment by 1, capped at _REUSE_HEALTH_CAP (8);
+#   - when a reused tail was offered but nothing was accepted,
+#     decrement by _REUSE_HEALTH_PENALTY (2), floored at 0;
+#   - reuse is only attempted while health > 0.
+# (The increment/decrement only fire on steps that actually offered a
+# reused tail, so health tracks how well reuse itself is paying off,
+# not the overall accept rate.)
+#
+# ``reuse_probe`` re-probes after reuse has been turned off: once
+# health hits 0, every subsequent step increments the probe counter,
+# and after _REUSE_PROBE_INTERVAL (64) steps health is nudged back to
+# 1 to try reuse again (in case the stream has become predictable
+# again).  Any nonzero health resets the probe counter to 0.
 _REUSE_HEALTH_INIT = 4
 _REUSE_HEALTH_CAP = 8
 _REUSE_HEALTH_PENALTY = 2
@@ -453,9 +508,38 @@ def _spec_step(
     sandbox_token_to_row_fn: Callable[[Any], int],
     row_to_sandbox_token_fn: Callable[[int], Any],
 ):
-    """One batched draft-verify step. Returns (new_past, reuse_tail, health, probe)."""
+    """One batched draft-verify step.
+
+    Returns ``(new_past, reuse_tail, reuse_health, reuse_probe)`` — the
+    updated cache, the rejected-tail tokens to re-offer next step (the
+    new ``reuse_buffer``; empty when reuse is off or a terminal row was
+    committed), and the threaded reuse-health and reuse-probe counters
+    (see the reuse-machinery block comment above the ``_REUSE_*``
+    constants).
+
+    Phases:
+
+    1. Snapshot the drafter, then collect up to ``max_drafts`` drafts —
+       reused tail first (only while reuse is on and health > 0), then
+       fresh ones from the drafter.
+    2. If no drafts were collected, roll back and fall back to a single
+       non-speculative step.
+    3. Build the verify batch (the real next input row plus the draft
+       rows), run one forward pass, and find the accept prefix (the run
+       of leading drafts whose argmax matches the prediction).
+    4. Truncate the commit if a terminal row appears within it.
+    5. Update the run stats (batches, accept histogram, reuse tallies, ...).
+    6. Roll the drafter back to the snapshot and replay exactly the
+       committed tokens into both the drafter and the emitted list.
+    7. Update reuse-health and the re-probe counter from this step's
+       accept outcome.
+    8. Build the reuse tail (the rejected drafts plus the model's own
+       next prediction) to offer next step, unless reuse is off or a
+       terminal row was hit.
+    """
     from .tokens_bridge import rows_to_input
 
+    # --- collect drafts: reused tail first, then fresh from the drafter ---
     cache_len = past.length
     snap = drafter.snapshot()
 
@@ -474,6 +558,7 @@ def _spec_step(
         drafts.append(d)
         drafter.consume(d)
 
+    # --- no drafts available: fall back to a single non-speculative step ---
     n_drafts = len(drafts)
     if n_drafts == 0:
         drafter.rollback(snap)
@@ -483,6 +568,7 @@ def _spec_step(
         drafter.consume(row_to_sandbox_token_fn(emitted[-1]))
         return new_past, [], reuse_health, reuse_probe
 
+    # --- verify batch: run one pass, find the accept prefix ---
     draft_rows = [sandbox_token_to_row_fn(d) for d in drafts]
     batch_rows = [next_input_row] + draft_rows
     out, new_past = compiled.step(rows_to_input(batch_rows), past)
@@ -496,6 +582,7 @@ def _spec_step(
             break
     ncommit = (n_drafts + 1) if accept == n_drafts else (accept + 1)
 
+    # --- truncate the commit at a terminal row, if one appears within it ---
     terminal_hit = False
     for i in range(ncommit):
         emission_row = draft_rows[i] if i < accept else pred[i]
@@ -507,6 +594,7 @@ def _spec_step(
 
     new_past = commit(new_past, cache_len + ncommit)
 
+    # --- update run stats ---
     stats["batches"] += 1
     stats["attempted_drafts"] += n_drafts
     stats["committed_rows"] += ncommit
@@ -521,6 +609,7 @@ def _spec_step(
             stats["reject_at_0"] += 1
     stats["accept_histogram"][accept] = stats["accept_histogram"].get(accept, 0) + 1
 
+    # --- replay exactly the committed tokens into drafter + emitted ---
     drafter.rollback(snap)
     for i in range(ncommit):
         emission_row = draft_rows[i] if i < accept else pred[i]
@@ -528,6 +617,7 @@ def _spec_step(
         drafter.consume(emission_tok)
         emitted.append(emission_row)
 
+    # --- update reuse-health and the re-probe counter ---
     if n_reused > 0:
         if accept > 0:
             reuse_health = min(_REUSE_HEALTH_CAP, reuse_health + 1)
@@ -541,6 +631,7 @@ def _spec_step(
     else:
         reuse_probe = 0
 
+    # --- build the rejected-tail reuse buffer for the next step ---
     if terminal_hit or not enable_reuse or reuse_health == 0:
         return new_past, [], reuse_health, reuse_probe
     reuse_tail = [

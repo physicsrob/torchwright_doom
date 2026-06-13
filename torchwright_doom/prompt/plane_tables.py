@@ -31,7 +31,6 @@ class SubsectorPlaneInfo:
 
 @dataclass(frozen=True)
 class PlaneTables:
-    flat_names: list[str]
     planes: list[PlaneRecord]
     subsectors: list[SubsectorPlaneInfo | None]
 
@@ -76,13 +75,6 @@ def _subsector_front_sector(md: MapData, s: int) -> Sector | None:
 def build_plane_tables(
     md: MapData, flat_ids: dict[str, int] | None = None
 ) -> PlaneTables:
-    flat_names = sorted(
-        {
-            flat
-            for sector in md.sectors
-            for flat in (sector.floor_tex, sector.ceiling_tex)
-        }
-    )
     # Global asset flat numbering (matches the sandbox), so PLANE_DEF.flat_id
     # *and* plane ordering (sorted by flat_id) align with get_prefill. Assumes
     # the map's flats are compiled into asset_config.FLAT_ID_BY_NAME.
@@ -131,4 +123,4 @@ def build_plane_tables(
                 ceiling_plane_id=plane_id_by_key[ceiling_key],
             )
         )
-    return PlaneTables(flat_names=flat_names, planes=planes, subsectors=subsectors)
+    return PlaneTables(planes=planes, subsectors=subsectors)

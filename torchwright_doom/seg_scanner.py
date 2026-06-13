@@ -1,5 +1,10 @@
 """Read-only branch owner for subsector seg scanning and endpoint projection.
 
+Branch builders follow the ``after_<token>`` convention (see GLOSSARY.md):
+``after_X()`` builds the emit head for the token the protocol emits after an
+``X`` token, and ``render_main.build_branch_outputs`` selects exactly one per
+AR step by the current input token's type.
+
 Ported from ``doom_sandbox/implementation/forward/seg_scanner.py``. Owns the
 ``R_Subsector`` / ``R_AddLine`` scan-cycle transitions: start a subsector's seg
 loop, backface-cull each seg, run the per-endpoint atan2 / theta-wrap chain

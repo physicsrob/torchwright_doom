@@ -12,6 +12,10 @@ Read order:
 3. `scene_facts`: queryable player/node/subsector/seg facts.
 4. `attention_handles`: generic GraphPast lookup plumbing.
 
+This is the static-scene side. From here the reading path continues onto the
+dynamic/dispatch side: `protocol_tokens` / `protocol_registry` ->
+`render_main.forward` (see CLAUDE.md "Rough layout" for the full reading path).
+
 Ported from ``doom_sandbox/implementation/forward/scene_index.py``. Changes
 from the sandbox source: the import block (``Vec`` -> ``Node``;
 ``Past`` -> ``GraphPast``; ``one_hot`` / ``N_PLANES_MAX`` from the real-side

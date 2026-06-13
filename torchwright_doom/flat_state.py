@@ -2,7 +2,9 @@
 
 A *flat* is DOOM's floor/ceiling texture (as opposed to a wall texture); the
 flat pass fills floor/ceiling pixels. See ``GLOSSARY.md`` for the other coined
-terms (visplane, span, marker).
+terms used here: ``subcontext`` (the named ``SegProjection`` slice this state
+hangs off), ``span`` (a horizontal run of floor/ceiling pixels at one screen
+row), and ``visplane`` / ``marker``.
 
 Real-side port of ``doom_sandbox/implementation/forward/flat_state.py`` — the
 ``FlatPassState`` that owns two things:
@@ -19,6 +21,9 @@ Real-side port of ``doom_sandbox/implementation/forward/flat_state.py`` — the
 2. **R_MapPlane affine cursor** (``r_plane.c:144-169``). ``(xfrac0, yfrac0)`` is
    the flat-texture ``(u, v)`` at the span's first pixel; ``(xstep, ystep)`` the
    per-screen-x increment; plus the distance-light colormap row.
+
+The flat-pass control flow that drives the tokens this state feeds is mapped in
+``flat_pass_renderer.py``.
 
 Changes from the sandbox: ``Vec`` -> ``Node``; ``...api`` -> ``.std``; the
 sandbox ``.ops`` shims -> ``.render_ops``; module-level ``constant`` / ``floor``

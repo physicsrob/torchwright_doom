@@ -1,9 +1,28 @@
 """Read-side std/helper shim.
 
 Mirrors the sandbox ``...api`` std surface the ported renderer read-side
-imports (``concat``, ``split``, ``one_hot``, ``gate``, ``linear``,
-``constant``, ``bool_and``, ``bool_or``, ``sum``), lowering each to an
-existing torchwright op per ``docs/sandbox/translation_table.md``.
+imports, lowering each to an existing torchwright op per
+``docs/sandbox/translation_table.md``. The helpers fall into these categories:
+
+- Column plumbing (residual-column reshaping): ``concat``, ``split``,
+  ``linear``, ``reduce_sum``.
+- Booleans over ±1 predicates: ``bool_and``, ``bool_or``, ``bool_to_01``.
+- Mutually-exclusive selection: ``select`` (two-way), ``type_switch`` (one
+  of N gated branches), ``pick_by_one_hot`` (slot value by one-hot mask),
+  ``pick_by_index`` (slot value by scalar index).
+- Token emission: ``make_token`` / ``make_token_head`` (next-token rows /
+  heads), ``clamp`` / ``clamp_to_slot`` (pin a value to a slot's range).
+- Piecewise-linear and table builders: ``one_hot``, ``gate``, ``constant``,
+  ``pwl_def`` (reusable 1D piecewise-linear function), ``table_lookup_2d``.
+- Emit-deferral re-exports from :mod:`.emit`: ``ScalarEmit`` /
+  ``AngleInputEmit`` (the deferred-carrier wrappers) and ``value_scalar`` /
+  ``angle_scalar`` / ``angle_inputs`` (their builders).
+
+``type_switch`` and ``pick_by_one_hot`` are the two helpers the output-head
+dispatch is built from: ``render_main.dispatch_next_token`` uses
+``type_switch`` to select the winning branch's head, and ``pick_by_one_hot``
+to pick a numeric carrier / world-angle scalar float-exact from its
+candidates.
 
 The two helpers the sandbox also imports from ``...api`` but which already
 exist on the real side — ``extract_derived`` and ``indicator_to_bool`` (in

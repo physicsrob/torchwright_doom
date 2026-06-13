@@ -2,8 +2,12 @@
 
 Ported from ``doom_sandbox/implementation/forward/wall_column_renderer.py``:
 ``make_token`` -> ``make_token_head``, ``make_value`` -> ``value_scalar``,
-``Vec`` -> ``Node``; every module-level ``constant`` node relocated inside the
-method that uses it (no-import-time-nodes rule).
+``Vec`` -> ``Node``.
+
+Branch builders follow the after_<token> convention (see GLOSSARY.md).
+
+Sentinel/constant nodes are built inside the publish methods, not at module
+scope — see GLOSSARY.md 'the import-time-node rule'.
 """
 
 from __future__ import annotations
@@ -313,6 +317,8 @@ class WallColumnRenderer:
 
         DOOM: R_RenderSegLoop (r_segs.c:221-226, 294-313).
         """
+        # This y is re-read by WallColumnState.publish as inp.screen_y
+        # (staged_new_ceiling); the two MUST agree — this is the emit half.
         projection = self.projection
         center_y = constant(float(CENTER_Y))
         screen_height = constant(float(SCREEN_HEIGHT))

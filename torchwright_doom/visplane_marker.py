@@ -1,7 +1,38 @@
 """Read-only branch owner for visplane marker/check transitions (Phase H).
 
 DOOM: R_CheckPlane (r_plane.c) — owns ceiling/floor visplane instance
-assignment and the handoff to wall-column rendering.
+assignment and the handoff to wall-column rendering. "Marker" here is DOOM's
+plane-mark sense (record a visplane region for the later flat pass to fill),
+NOT the protocol "marker" token (the recency row a ``RecentMarkerHandle``
+publishes elsewhere).
+
+These branches run DURING the wall walk, BEFORE the flat pass, and decide which
+visplane instance each wall seg's floor/ceiling region belongs to. The full
+flat-pass control map (this is its left edge) lives in ``flat_pass_renderer.py``.
+The branches, in the order one wall seg flows through them:
+
+  - first_check_or_start_wall_columns: entry for a freshly-stored drawseg.
+    Decides whether this seg needs a ceiling visplane and/or a floor visplane
+    (a sky/portal with matching back surface needs neither). If ceiling is
+    needed it emits R_CHECK_PLANE(ceiling, vp = 0); else if floor is needed
+    R_CHECK_PLANE(floor, vp = 0); else nothing to mark -> start_wall_columns.
+
+  - after_r_check_plane: tests whether candidate instance (plane, vp) already
+    covers a column in this seg's screen range [x1, x2] (check_conflict). On a
+    conflict it re-emits R_CHECK_PLANE with vp + 1 — looping through candidate
+    visplane ids until one is free. On no conflict the candidate is free, so it
+    emits R_CHECK_PLANE_RESULT(kind, vp) carrying the chosen instance.
+
+  - after_r_check_plane_result: chains the ceiling check to the floor check.
+    If the result just resolved a ceiling AND a floor is also needed, emit
+    R_CHECK_PLANE(floor, vp = 0); otherwise both planes are resolved, so
+    start_wall_columns (SET_CURSOR_X) begins the wall-column pass for this seg.
+
+  - after_plane_mark: emits SCREEN_RANGE carrying the seg's per-column clip
+    bounds (floor_y1/y2 or ceiling_y1/y2). That following SCREEN_RANGE row is
+    what ``visplane_state.publish`` reads back (its ``screen_range_after_plane_mark``
+    predicate) to record this seg's screen range into the chosen visplane
+    instance, so the flat pass can read the region's coverage later.
 
 Ported from ``doom_sandbox/implementation/forward/visplane_marker.py``:
 ``make_token`` -> ``make_token_head``, ``Vec`` -> ``Node``; module-level

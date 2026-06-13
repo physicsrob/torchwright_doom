@@ -1,13 +1,9 @@
 """Wall-column runtime state for the SegProjection ``wall`` subcontext (Phase H).
 
-Ported from ``doom_sandbox/implementation/forward/wall_column_state.py``. The
-sandbox keeps a family of module-level ``constant(...)`` nodes (``_CENTER_Y``,
-the clip sentinels, the span ordinals, ``ONE``/``ZERO``/``FALSE``); on the real
-side a ``constant`` is a graph ``Node`` with a global auto-incrementing id, so
-building one at import time aliases it under the test harness's node-id reset.
-Every such node is therefore relocated **inside** the publish functions
-(``global_node_id`` must be 0 after import). The plain-list ``linear`` matrices
-stay at module level (they are raw arrays, not nodes).
+Ported from ``doom_sandbox/implementation/forward/wall_column_state.py``.
+
+Sentinel/constant nodes are built inside the publish methods, not at module
+scope — see GLOSSARY.md 'the import-time-node rule'.
 """
 
 from __future__ import annotations
@@ -228,12 +224,29 @@ class WallColumnState:
         range_seg_i: Node,
         plane_ids: PlaneIdLookup,
     ) -> "WallColumnState":
+        """Stage per-column wall state at the SCREEN_Y_VALUE row after a scale pair.
+
+        Phases below, in order:
+        - recover this column's x / scale / staged new-ceiling from prior rows;
+        - world-relative tier heights (top/bottom/high/low minus the view z);
+        - middle-tier span yl/yh (front ceiling..floor), clamped by the clip arrays;
+        - portal flag and the wall-clip markceiling/markfloor gates;
+        - upper-tier y bounds;
+        - lower-tier y bounds, then the portal-floor and new clip (ceiling/floor);
+        - clip-changed decision (whether to emit a clip-update record);
+        - plane-mark gates (one-sided/closed walls mark planes too);
+        - ceiling plane-mark bounds + emit gate;
+        - floor plane-mark bounds + emit gate;
+        - span visibility flags + the clamped published y bounds;
+        - assemble and publish the state handles.
+        """
         center_y = constant(float(CENTER_Y))
         screen_height = constant(float(SCREEN_HEIGHT))
         screen_height_m1 = constant(float(SCREEN_HEIGHT - 1))
         clip_ceiling_initial = constant(OPEN_CLIP_CEILING)
         one = constant(1.0)
 
+        # --- Phase: recover this column's x / scale / staged new-ceiling ---
         row = RecentMarkerHandle.publish(
             past,
             "wall_column",
@@ -256,13 +269,19 @@ class WallColumnState:
                 delta_pos=-1,
             )
         )
+        # staged_new_ceiling is the SCREEN_Y_VALUE emitted by
+        # WallColumnRenderer.wall_column_new_ceiling_from_value; the worldtop/yl
+        # recompute below is for the span/plane-mark math, not a second copy of
+        # the clip bound.
         staged_new_ceiling = CLIP_Y_CLAMP(inp.screen_y)
 
+        # --- Phase: world-relative tier heights (front/back, ceiling/floor) ---
         worldtop = sub(scene.segs.front_ceiling(seg_i), scene.view.z)
         worldbottom = sub(scene.segs.front_floor(seg_i), scene.view.z)
         worldhigh = sub(scene.segs.back_ceiling(seg_i), scene.view.z)
         worldlow = sub(scene.segs.back_floor(seg_i), scene.view.z)
 
+        # --- Phase: middle-tier span yl/yh (front ceiling..floor), clip-clamped ---
         top_y_raw = sub(center_y, mul_height_scale(worldtop, scale))
         bot_y_raw = sub(center_y, mul_height_scale(worldbottom, scale))
         yl_unclipped = CEIL_Y(top_y_raw)
@@ -282,6 +301,7 @@ class WallColumnState:
         yl = select(ceiling_unclipped_wins, yl_unclipped, ceiling_min)
         yh = select(floor_clip_wins, floor_max, yh_unclipped)
 
+        # --- Phase: portal flag and wall-clip markceiling/markfloor gates ---
         portal = scene.segs.is_portal(seg_i)
         solid_or_closed = one_minus(portal)
 
@@ -301,6 +321,7 @@ class WallColumnState:
         )
         markfloor = and_(markfloor, gt_height(scene.view.z, front_floor))
 
+        # --- Phase: upper-tier y bounds (front top down to back top) ---
         high_y_raw = sub(center_y, mul_height_scale(worldhigh, scale))
         # FLOOR_Y_WIDE keeps negative values when high_y_raw is below 0 (back
         # ceiling above viewer's horizon). The narrower FLOOR_Y would clamp
@@ -314,6 +335,7 @@ class WallColumnState:
         )
         upper_y1 = yl
         upper_y2 = upper_mid
+        # --- Phase: lower-tier y bounds, then portal floor and new clip arrays ---
         lower_geom = gt_height(worldlow, worldbottom)
         low_y_raw = sub(center_y, mul_height_scale(worldlow, scale))
         lower_min = add_const(staged_new_ceiling, 1.0)
@@ -354,6 +376,7 @@ class WallColumnState:
             clip_ceiling_initial,
             CLIP_Y_CLAMP(portal_floor),
         )
+        # --- Phase: clip-changed decision (whether to emit a clip-update) ---
         solid_clip_same = and_(
             same_int(clip.ceiling, screen_height),
             same_int(clip.floor, clip_ceiling_initial),
@@ -366,6 +389,7 @@ class WallColumnState:
             one,
         )
 
+        # --- Phase: plane-mark gates (one-sided/closed walls mark planes too) ---
         # Plane-mark gates, mirroring `_render_wall_columns` in
         # the reference. The wall-clip `markceiling`/`markfloor` above
         # gate clip-array tightening for portal tiers; plane-mark gating
@@ -383,6 +407,7 @@ class WallColumnState:
             gt_height(scene.view.z, front_floor),
         )
 
+        # --- Phase: ceiling plane-mark bounds + emit gate ---
         # Bounds (per reference._append_plane_marks):
         # Ceiling: top = ceilingclip+1; bottom = yl-1, clamped to floorclip-1.
         ceiling_top_raw = add_const(clip.ceiling, 1.0)
@@ -411,6 +436,7 @@ class WallColumnState:
             and_(ceiling_bottom_ge_0, ceiling_top_le_bottom),
         )
 
+        # --- Phase: floor plane-mark bounds + emit gate ---
         # Floor: top = yh+1, clamped to ceilingclip+1; bottom = floorclip-1.
         floor_top_raw = add_const(yh, 1.0)
         ceilingclip_plus_one = add_const(clip.ceiling, 1.0)
@@ -437,6 +463,7 @@ class WallColumnState:
             and_(floor_bottom_ge_0, floor_top_le_bottom),
         )
 
+        # --- Phase: span visibility flags + clamped published y bounds ---
         middle_span_ok_value = le_span_y(yl, yh)
         upper_span_ok_value = le_span_y(upper_y1, upper_y2)
         lower_span_ok_value = le_span_y(lower_y1, lower_y2)
@@ -448,6 +475,7 @@ class WallColumnState:
         lower_y2_published = SPAN_Y_CLAMP(lower_y2)
         new_floor_published = CLIP_Y_CLAMP(new_floor)
 
+        # --- Phase: assemble and publish the state handles ---
         # Values needed by the two-step PLANE_MARK y emission path.
         return cls(
             row=row,

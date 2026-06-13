@@ -163,6 +163,18 @@ class GraphPast:
         so callers can pass ``MATCH_GAIN_LONG = 300_000.0``. At unit
         content gap that gain is safe up to roughly 37,500 positions;
         the facade default remains the underlying op default, ``200.0``.
+
+        Windowed-KV-cache invariant. A recency read can reach arbitrarily
+        far back, so the row it lands on may be older than the cache
+        window. Every committed row is either PERMANENT (resident for the
+        whole run) or EXPIRING (its slot recycles once the window fills),
+        decided by token type at the inference layer. A long-range recency
+        read may target ONLY a permanent (non-expiring) published channel:
+        if it matches an expiring-type row that sits beyond the resident
+        window, that row is already gone and the windowed cache produces a
+        wrong value SILENTLY — no error, only token divergence in gates.
+        Any long read distance must be certified per CLAUDE.md "Windowed KV
+        cache — the protocol invariant" before relying on it here.
         """
         self._check_node(query, "pick_most_recent query")
         key_node = self._check_handle(key, "pick_most_recent key")
@@ -177,7 +189,17 @@ class GraphPast:
         )
 
     def attend_to_offset(self, value: PastHandle, delta_pos: int = -1) -> Node:
-        """Read ``value`` at a fixed causal offset."""
+        """Read ``value`` at a fixed causal offset.
+
+        Same windowed-KV-cache invariant as :meth:`pick_most_recent`: a
+        committed row is PERMANENT (resident for the whole run) or EXPIRING
+        (its slot recycles once the window fills). A small fixed offset (the
+        previous few rows) stays inside the resident window and is safe even
+        on an expiring-type row; an offset that can reach beyond the window
+        may target ONLY a permanent published channel, or the read returns a
+        wrong value SILENTLY once that row's slot has recycled. Certify any
+        deep offset per CLAUDE.md "Windowed KV cache — the protocol invariant".
+        """
         if not isinstance(delta_pos, int):
             raise TypeError(
                 "GraphPast.attend_to_offset: delta_pos must be an int, "
@@ -325,48 +347,10 @@ class PastHandleScope:
         self._handles[name] = handle
         return handle
 
-    def input_type(self) -> PastHandle:
-        return self._past.input_type()
-
-    def input_slot(self, name: str) -> PastHandle:
-        return self._past.input_slot(name)
-
-    def pick_argmin_above(
-        self,
-        score: PastHandle,
-        indicators_above: PastHandle,
-        threshold_onehot: Node,
-        value: PastHandle,
-    ) -> Node:
-        return self._past.pick_argmin_above(
-            score,
-            indicators_above,
-            threshold_onehot,
-            value,
-        )
-
-    def pick_argmin_above_in_bucket(
-        self,
-        score: PastHandle,
-        validity: PastHandle,
-        key_bucket_onehot: PastHandle,
-        score_above_each_threshold: PastHandle,
-        query_bucket_onehot: Node,
-        threshold_onehot: Node,
-        value: PastHandle,
-        *,
-        assert_hardness_gt: float | None = None,
-    ) -> Node:
-        return self._past.pick_argmin_above_in_bucket(
-            score,
-            validity,
-            key_bucket_onehot,
-            score_above_each_threshold,
-            query_bucket_onehot,
-            threshold_onehot,
-            value,
-            assert_hardness_gt=assert_hardness_gt,
-        )
+    # input_type / input_slot / pick_argmin_above / pick_argmin_above_in_bucket
+    # are intentionally NOT redefined here: they are pure pass-throughs to the
+    # wrapped GraphPast, which __getattr__ (below) already forwards. __getitem__'s
+    # self.input_type() / self.input_slot(...) calls resolve through it too.
 
     def __getitem__(self, name: str) -> PastHandle:
         if name.startswith("input."):

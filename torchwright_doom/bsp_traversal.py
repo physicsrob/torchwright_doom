@@ -1,5 +1,10 @@
 """BSP traversal protocol for the wall-pass forward pass.
 
+Branch builders follow the ``after_<token>`` convention (see GLOSSARY.md):
+``after_X()`` builds the emit head for the token the protocol emits after an
+``X`` token, and ``render_main.build_branch_outputs`` selects exactly one per
+AR step by the current input token's type.
+
 This module owns the autoregressive token transitions that correspond to
 DOOM's `R_RenderBSPNode` tree walk:
 

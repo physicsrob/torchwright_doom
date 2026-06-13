@@ -120,6 +120,7 @@ def subset_by_bbox(
     if not md.nodes:
         raise ValueError("subset_by_bbox requires a MapData with a non-trivial BSP")
 
+    # --- which segs survive the bbox, and the subsectors holding them ---
     selected_orig = _select_segs_in_bbox(md, left, bottom, right, top)
     if not selected_orig:
         raise ValueError(
@@ -131,6 +132,7 @@ def subset_by_bbox(
     seg_to_ss = _build_seg_to_subsector(md)
     selected_subsectors: set[int] = {seg_to_ss[s] for s in selected_orig}
 
+    # --- minimal BSP subtree (root-to-leaf node ids) addressing those subsectors ---
     root_idx = len(md.nodes) - 1
     paths = _walk_paths(md, root_idx)
     subset_node_ids: set[int] = set()
@@ -138,10 +140,12 @@ def subset_by_bbox(
         for node_idx in paths[ss_idx]:
             subset_node_ids.add(node_idx)
 
+    # --- subsector old->new id map; reserve the synthetic empty subsector slot ---
     sorted_old_ss = sorted(selected_subsectors)
     old_to_new_ss = {old: new for new, old in enumerate(sorted_old_ss)}
     empty_ss_new_idx = len(sorted_old_ss)
 
+    # --- gather kept segs per subsector, recording each subsector's new run ---
     new_segs_old_indices: list[int] = []
     new_subsector_first_seg: list[int] = []
     new_subsector_seg_count: list[int] = []
@@ -156,6 +160,7 @@ def subset_by_bbox(
         new_subsector_first_seg.append(first_new_seg)
         new_subsector_seg_count.append(len(new_segs_old_indices) - first_new_seg)
 
+    # --- dense old->new id maps, walking cross-references seg -> ld -> sd -> sector ---
     kept_ld_old = {md.segs[old].linedef for old in new_segs_old_indices}
     sorted_old_ld = sorted(kept_ld_old)
     old_to_new_ld = {old: new for new, old in enumerate(sorted_old_ld)}
@@ -178,6 +183,7 @@ def subset_by_bbox(
     sorted_old_sec = sorted(kept_sec_old)
     old_to_new_sec = {old: new for new, old in enumerate(sorted_old_sec)}
 
+    # --- kept vertices (referenced by either segs or linedefs) and node id map ---
     kept_v_old: set[int] = set()
     for old_seg_idx in new_segs_old_indices:
         seg = md.segs[old_seg_idx]
@@ -195,6 +201,7 @@ def subset_by_bbox(
     sorted_old_node = sorted(subset_node_ids)
     old_to_new_node = {old: new for new, old in enumerate(sorted_old_node)}
 
+    # --- centroid of kept vertices; emit vertices shifted into the centred frame ---
     centroid_x = sum(md.vertices[old].x for old in sorted_old_v) / len(sorted_old_v)
     centroid_y = sum(md.vertices[old].y for old in sorted_old_v) / len(sorted_old_v)
 
@@ -206,6 +213,7 @@ def subset_by_bbox(
         for old in sorted_old_v
     ]
 
+    # --- emit remapped sectors/sidedefs/linedefs/segs/subsectors through the id maps ---
     new_sectors = [md.sectors[old] for old in sorted_old_sec]
 
     def _remap_sd(old: int) -> int:
@@ -259,6 +267,7 @@ def subset_by_bbox(
     ]
     new_subsectors.append(Subsector(seg_count=0, first_seg=0))
 
+    # --- emit BSP nodes: redirect pruned children to the empty subsector, shift bboxes ---
     def _remap_child(child_ref: int) -> int:
         is_ss, ref = _decode_child(child_ref)
         if is_ss:
@@ -291,6 +300,7 @@ def subset_by_bbox(
         for old in sorted_old_node
     ]
 
+    # --- assemble the renumbered, mean-centred MapData (centroid in scene_origin) ---
     return MapData(
         name=md.name,
         vertices=new_vertices,

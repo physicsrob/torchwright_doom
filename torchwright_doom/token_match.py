@@ -8,7 +8,11 @@ byte-for-byte in sync).
 
 Shared infrastructure: ported once here, imported — not re-created — by both
 views; kept at a neutral top-level path rather than scene-private because the
-protocol view reaches across to it too.
+protocol view reaches across to it too. In the per-token ``forward()`` flow
+this is the predicate primitive behind every ``is_*_after_<marker>`` phase
+test in ``protocol_tokens.py`` and ``scene_tokens.py`` (both import it as
+``_input_type_matches``): each phase test calls it to compare the previous
+position's input type against the marker that gates that phase.
 
 The sandbox built a one-hot ``linear`` over ``VOCAB.types``; the real side
 repoints the body at :func:`torchwright_doom.extract.type_matches`,

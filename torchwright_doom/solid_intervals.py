@@ -14,13 +14,10 @@ bucket, or — if that bucket is exhausted — the lowest in the next non-empty
 higher bucket (a *carry*). See ``GLOSSARY.md``.
 
 Changes from the sandbox source: ``Vec`` -> ``Node``; the sandbox-``api``
-imports map to the real ``std`` / ``past`` / ``render_ops`` shims; and the
-module-level ``constant(...)`` sentinels (``_SENTINEL_KEY`` etc.) are built
-*inside* the methods — a module-level ``constant`` is a graph node whose low
-id aliases test-built nodes after the conftest id-counter reset
-(``reference_eval`` / ``probe_compiled`` memoisation). The integer index
-tables used by the radix successor are plain weight data, so they stay at
-module scope.
+imports map to the real ``std`` / ``past`` / ``render_ops`` shims.
+
+Sentinel/constant nodes are built inside the publish methods, not at module
+scope — see GLOSSARY.md 'the import-time-node rule'.
 """
 
 from __future__ import annotations
