@@ -28,7 +28,17 @@ from torchwright.ops.arithmetic_ops import (
 )
 
 from .past import PastHandle, PastHandleScope
-from .render_ops import SCREEN_X_CLAMP, add_const, neg, one_minus, or_, snap_bool
+from .render_ops import (
+    COL_RADIX_BASE as _RADIX_BASE,
+    N_COL_BUCKETS as _N_BUCKETS,
+    SCREEN_X_CLAMP,
+    add_const,
+    neg,
+    one_minus,
+    or_,
+    radix_col_key as _radix_col_key,
+    snap_bool,
+)
 from .std import (
     bool_and,
     clamp,
@@ -91,8 +101,8 @@ _USED_VP_THRESHOLD_SCALE = _scale_matrix(N_VP_PER_PLANE_MAX + 1, 16.0)
 # and an inclusive (>= x1) lower bound; the single ``c* <= x2`` compare then
 # subsumes the same-bucket two-sided range case with no extra staging.
 
-_RADIX_BASE = math.ceil(math.sqrt(SCREEN_WIDTH + 1))  # 8 at SW=60, 13 at SW=160
-_N_BUCKETS = SCREEN_WIDTH // _RADIX_BASE + 1
+# The screen-column radix key is the shared render_ops scheme
+# (radix_col_key, imported above as the historical local name).
 _INSTANCE_BREAKPOINTS = list(range(N_VISPLANE_MAX))
 
 # Plain weight data (no graph nodes), so module scope is safe. The runtime graph
@@ -154,16 +164,6 @@ def _radix_plane_key(plane_scalar: Node) -> Node:
     hi = thermometer_floor_div(plane_scalar, _PLANE_RADIX_BASE, N_PLANES_MAX)
     lo = mod_const(plane_scalar, _PLANE_RADIX_BASE, N_PLANES_MAX)
     return concat(one_hot(hi, _PLANE_N_BUCKETS), one_hot(lo, _PLANE_RADIX_BASE))
-
-
-def _radix_col_key(col_scalar: Node) -> Node:
-    """Exact screen-column-equality key for ``column_range``: ``concat(
-    one_hot(x // B), one_hot(x % B))`` over the occupancy radix base (width
-    ``N_BUCKETS + B = 16``). Same cancellation-free one-hot dot as the plane key.
-    """
-    hi = thermometer_floor_div(col_scalar, _RADIX_BASE, SCREEN_WIDTH)
-    lo = mod_const(col_scalar, _RADIX_BASE, SCREEN_WIDTH)
-    return concat(one_hot(hi, _N_BUCKETS), one_hot(lo, _RADIX_BASE))
 
 
 def _lifted_instance_key(instance_idx: Node) -> Node:

@@ -26,7 +26,6 @@ module scope.
 from __future__ import annotations
 
 from dataclasses import dataclass
-import math
 
 from torchwright.graph import Node
 from torchwright.ops.arithmetic_ops import compare, mod_const, thermometer_floor_div
@@ -36,7 +35,15 @@ from .constants import SCREEN_WIDTH
 from .render_constants import PRESENT_THRESHOLD
 from .past import PastHandle, PastHandleScope
 from .protocol_tokens import ProtocolTokenView
-from .render_ops import MUL_SCREEN, add_const, and_, one_minus, snap_bool
+from .render_ops import (
+    COL_RADIX_BASE as _RADIX_BASE,
+    MUL_SCREEN,
+    N_COL_BUCKETS as _N_BUCKETS,
+    add_const,
+    and_,
+    one_minus,
+    snap_bool,
+)
 from .scene_index import SceneIndex
 from .std import (
     bool_and,
@@ -50,8 +57,8 @@ from .std import (
     split,
 )
 
-_RADIX_BASE = math.ceil(math.sqrt(SCREEN_WIDTH + 1))
-_N_BUCKETS = SCREEN_WIDTH // _RADIX_BASE + 1
+# Radix base/buckets are the shared screen-column scheme in render_ops
+# (imported above as the historical local names).
 _INVALID_HI = _N_BUCKETS
 
 # Plain weight data (no graph nodes), so module scope is safe. The runtime graph

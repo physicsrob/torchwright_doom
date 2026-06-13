@@ -29,15 +29,18 @@ from torchwright.ops.arithmetic_ops import (
     clamp,
     compare,
     floor_int,
+    mod_const,
     multiply_2d,
     piecewise_linear,
+    thermometer_floor_div,
 )
 from torchwright.ops.linear_relu_linear import linear_relu_linear
 from torchwright.ops.logic_ops import bool_all_true, bool_any_true, bool_not
 
 from .constants import SCREEN_HEIGHT, SCREEN_WIDTH
-from .std import concat, constant, linear, select
-from .vocab import N_NODES_MAX
+from .std import concat, constant, linear, one_hot, select
+from .value_ranges import _PROJ_RATIO
+from .vocab import _TAN_FOV_HALF, ANGLE_BAM, N_NODES_MAX
 
 
 # Marker and integer-slot ids are exact integers, so ``> 0.5`` cleanly
@@ -176,8 +179,7 @@ def DEPTH_NONZERO(depth: Node) -> Node:
 # ``cot(k)·|dy| - |dx| > 0`` (high half, 1024..2048) is +1 while the true angle
 # exceeds k, so the booleans form a thermometer whose sum is the first-quadrant
 # angle. Quadrant placement then folds in the signs of dx, dy.
-
-ANGLE_BAM = 8192
+# (ANGLE_BAM itself is canonical in vocab.py and imported above.)
 
 # Coordinate deltas entering the ray classifier clamp to this square before the
 # abs PWL. 3072 covers every committed-fixture corner with headroom (see above).
@@ -426,11 +428,12 @@ def MUL_CROSS(a: Node, b: Node) -> Node:
 # ---------------------------------------------------------------------------
 #
 # Projection / scale constants mirror ``reference.py``. FOV_HALF_BAM =
-# ANGLE_BAM/8 = 45°, so the focal length is (SCREEN_WIDTH-1)/(2·tan 45°);
-# _PROJ_RATIO normalises it to the width-60 tuning (= 1.0 at 60×50).
-_TAN_FOV_HALF = math.tan((ANGLE_BAM // 8) * 2.0 * math.pi / ANGLE_BAM)
+# ANGLE_BAM/8 = 45°, so the focal length is (SCREEN_WIDTH-1)/(2·tan 45°).
+# ``_TAN_FOV_HALF`` is canonical in vocab.py and ``_PROJ_RATIO`` (the focal
+# length normalised to the width-60 tuning, = 1.0 at 60×50) in
+# value_ranges.py — both imported above; the ranges in value_ranges and
+# this module's scale math must track the same values.
 _PROJECTION = (SCREEN_WIDTH - 1) / (2.0 * _TAN_FOV_HALF)
-_PROJ_RATIO = (SCREEN_WIDTH - 1) / 59.0
 _MIN_SCALE = 1.0 / 256.0
 _MAX_SCALE = 64.0
 NEAR_DEN_SCALE_FACTOR = 1024.0
@@ -863,3 +866,31 @@ def mul_dist_base(distance: Node, basescale: Node) -> Node:
         n=512,
         name="mul_dist_base",
     )
+
+
+# ---------------------------------------------------------------------------
+# Screen-column radix key (shared by solid_intervals / visplane_state /
+# wall_column_state — was three private copies under two naming schemes)
+# ---------------------------------------------------------------------------
+
+# Columns split into a high *bucket* digit and a low digit so a column-
+# equality key is two one-hots of total width N_COL_BUCKETS + COL_RADIX_BASE
+# (16 at SCREEN_WIDTH=60, 26 at 160) instead of a width-SCREEN_WIDTH one-hot.
+COL_RADIX_BASE = math.ceil(math.sqrt(SCREEN_WIDTH + 1))  # 8 at SW=60, 13 at 160
+N_COL_BUCKETS = SCREEN_WIDTH // COL_RADIX_BASE + 1
+
+
+def radix_col_key(col_scalar: Node) -> Node:
+    """Exact screen-column-equality key: ``concat(one_hot(c // B),
+    one_hot(c % B))`` over the column radix base.  The dot of two such keys
+    is ``bucket_match + digit_match`` — 2 on an exact column match, <= 1
+    otherwise (cancellation-free one-hot dot).
+
+    The column may be the soft (~0.02 leak) output of a ``pick_most_recent``
+    recovery: ``thermometer_floor_div`` (ramps at ``k*B - 0.5``) and the
+    bucket-consistent ``mod_const`` keep the leaked value on the right digit,
+    and ``one_hot`` rounds it to a clean integer one-hot — so no pre-snap is
+    needed and a matched key's dot is exactly 2."""
+    hi = thermometer_floor_div(col_scalar, COL_RADIX_BASE, SCREEN_WIDTH)
+    lo = mod_const(col_scalar, COL_RADIX_BASE, SCREEN_WIDTH)
+    return concat(one_hot(hi, N_COL_BUCKETS), one_hot(lo, COL_RADIX_BASE))

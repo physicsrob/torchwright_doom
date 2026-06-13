@@ -250,7 +250,7 @@ class NodeIndex:
             has_any=_node_has_any(past, token, node_context),
             exists=_node_presence_lookup(past, token),
             root=_node_root(past, node_context),
-            px=_node_value_lookup(
+            px=_keyed_value_lookup(
                 past,
                 token,
                 node_context,
@@ -258,7 +258,7 @@ class NodeIndex:
                 NODE_PX,
                 ValueRange.R1,
             ),
-            py=_node_value_lookup(
+            py=_keyed_value_lookup(
                 past,
                 token,
                 node_context,
@@ -266,7 +266,7 @@ class NodeIndex:
                 NODE_PY,
                 ValueRange.R1,
             ),
-            dx=_node_value_lookup(
+            dx=_keyed_value_lookup(
                 past,
                 token,
                 node_context,
@@ -274,7 +274,7 @@ class NodeIndex:
                 NODE_DX,
                 ValueRange.R2,
             ),
-            dy=_node_value_lookup(
+            dy=_keyed_value_lookup(
                 past,
                 token,
                 node_context,
@@ -310,7 +310,7 @@ class NodeIndex:
                 token.is_back_child,
                 token.child_lifted_key,
             ),
-            bbox_top_front=_node_value_lookup(
+            bbox_top_front=_keyed_value_lookup(
                 past,
                 token,
                 node_context,
@@ -318,7 +318,7 @@ class NodeIndex:
                 BBOX_TOP_FRONT,
                 ValueRange.R0,
             ),
-            bbox_bottom_front=_node_value_lookup(
+            bbox_bottom_front=_keyed_value_lookup(
                 past,
                 token,
                 node_context,
@@ -326,7 +326,7 @@ class NodeIndex:
                 BBOX_BOT_FRONT,
                 ValueRange.R0,
             ),
-            bbox_left_front=_node_value_lookup(
+            bbox_left_front=_keyed_value_lookup(
                 past,
                 token,
                 node_context,
@@ -334,7 +334,7 @@ class NodeIndex:
                 BBOX_LEFT_FRONT,
                 ValueRange.R0,
             ),
-            bbox_right_front=_node_value_lookup(
+            bbox_right_front=_keyed_value_lookup(
                 past,
                 token,
                 node_context,
@@ -342,7 +342,7 @@ class NodeIndex:
                 BBOX_RIGHT_FRONT,
                 ValueRange.R0,
             ),
-            bbox_top_back=_node_value_lookup(
+            bbox_top_back=_keyed_value_lookup(
                 past,
                 token,
                 node_context,
@@ -350,7 +350,7 @@ class NodeIndex:
                 BBOX_TOP_BACK,
                 ValueRange.R0,
             ),
-            bbox_bottom_back=_node_value_lookup(
+            bbox_bottom_back=_keyed_value_lookup(
                 past,
                 token,
                 node_context,
@@ -358,7 +358,7 @@ class NodeIndex:
                 BBOX_BOT_BACK,
                 ValueRange.R0,
             ),
-            bbox_left_back=_node_value_lookup(
+            bbox_left_back=_keyed_value_lookup(
                 past,
                 token,
                 node_context,
@@ -366,7 +366,7 @@ class NodeIndex:
                 BBOX_LEFT_BACK,
                 ValueRange.R0,
             ),
-            bbox_right_back=_node_value_lookup(
+            bbox_right_back=_keyed_value_lookup(
                 past,
                 token,
                 node_context,
@@ -417,20 +417,22 @@ def _node_presence_lookup(
     return LiftedKeyPresenceLookup(past, handle)
 
 
-def _node_value_lookup(
+def _keyed_value_lookup(
     past: GraphPast,
     token: SceneTokenView,
-    node_context: HeaderContext,
+    context: HeaderContext,
     name: str,
     marker_type: TokenType,
     range_id: ValueRange,
 ) -> LiftedKeyValueLookup:
-    """Publish one VALUE-backed NODE lookup keyed by current node."""
+    """Publish one VALUE-backed scene lookup keyed by the current entity
+    (node or seg) header context — the NODE and SEG sides are the same
+    publish, differing only in which header context supplies the key."""
     handle = LiftedKeyValueHandle.publish(
         past,
         name,
         token.value_after(marker_type),
-        node_context.current_key,
+        context.current_key,
         token.payload_value(range_id),
     )
     return LiftedKeyValueLookup(past, handle)
@@ -563,7 +565,7 @@ class SegIndex:
         return cls(
             subsector=_seg_subsector_lookup(past, token, subsector_context),
             exists=_seg_presence_lookup(past, token),
-            ax=_seg_value_lookup(
+            ax=_keyed_value_lookup(
                 past,
                 token,
                 seg_context,
@@ -571,7 +573,7 @@ class SegIndex:
                 SEG_AX,
                 ValueRange.R1,
             ),
-            ay=_seg_value_lookup(
+            ay=_keyed_value_lookup(
                 past,
                 token,
                 seg_context,
@@ -579,7 +581,7 @@ class SegIndex:
                 SEG_AY,
                 ValueRange.R1,
             ),
-            bx=_seg_value_lookup(
+            bx=_keyed_value_lookup(
                 past,
                 token,
                 seg_context,
@@ -587,7 +589,7 @@ class SegIndex:
                 SEG_BX,
                 ValueRange.R1,
             ),
-            by=_seg_value_lookup(
+            by=_keyed_value_lookup(
                 past,
                 token,
                 seg_context,
@@ -618,7 +620,7 @@ class SegIndex:
                 "seg_normal_cos",
                 token.angle_cos,
             ),
-            front_floor=_seg_value_lookup(
+            front_floor=_keyed_value_lookup(
                 past,
                 token,
                 seg_context,
@@ -626,7 +628,7 @@ class SegIndex:
                 SEG_FRONT_FLOOR,
                 ValueRange.R3,
             ),
-            front_ceiling=_seg_value_lookup(
+            front_ceiling=_keyed_value_lookup(
                 past,
                 token,
                 seg_context,
@@ -634,7 +636,7 @@ class SegIndex:
                 SEG_FRONT_CEILING,
                 ValueRange.R3,
             ),
-            back_floor=_seg_value_lookup(
+            back_floor=_keyed_value_lookup(
                 past,
                 token,
                 seg_context,
@@ -642,7 +644,7 @@ class SegIndex:
                 SEG_BACK_FLOOR,
                 ValueRange.R4,
             ),
-            back_ceiling=_seg_value_lookup(
+            back_ceiling=_keyed_value_lookup(
                 past,
                 token,
                 seg_context,
@@ -709,7 +711,7 @@ class SegIndex:
                 token.seg_dontpegbottom_flag,
             ),
             # DOOM: side_t.rowoffset (r_defs.h) — vertical offset added to all wall textures on this side.
-            rowoffset=_seg_value_lookup(
+            rowoffset=_keyed_value_lookup(
                 past,
                 token,
                 seg_context,
@@ -782,25 +784,6 @@ def _seg_presence_lookup(
         token.seg_i,
     )
     return LiftedKeyPresenceLookup(past, handle)
-
-
-def _seg_value_lookup(
-    past: GraphPast,
-    token: SceneTokenView,
-    seg_context: HeaderContext,
-    name: str,
-    marker_type: TokenType,
-    range_id: ValueRange,
-) -> LiftedKeyValueLookup:
-    """Publish one VALUE-backed SEG lookup keyed by current seg."""
-    handle = LiftedKeyValueHandle.publish(
-        past,
-        name,
-        token.value_after(marker_type),
-        seg_context.current_key,
-        token.payload_value(range_id),
-    )
-    return LiftedKeyValueLookup(past, handle)
 
 
 def _seg_angle_lookup(

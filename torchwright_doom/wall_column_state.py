@@ -15,14 +15,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import math
 
 from torchwright.graph import Node
-from torchwright.ops.arithmetic_ops import mod_const, thermometer_floor_div
 
 from .assets import _H_IDX_OH_WIDTH
 from .attention_handles import RecentMarkerHandle
-from .constants import CENTER_Y, SCREEN_HEIGHT, SCREEN_WIDTH
+from .constants import CENTER_Y, SCREEN_HEIGHT
 from .past import PastHandle, PastHandleScope
 from .render_constants import MATCH_GAIN_CLIP, OPEN_CLIP_CEILING, PART_NONE
 from .render_ops import (
@@ -43,6 +41,7 @@ from .render_ops import (
     mul_height_scale,
     one_minus,
     or_,
+    radix_col_key as _radix_col_key,
     same_int,
     sub,
 )
@@ -75,30 +74,12 @@ _PART_IS_UPPER_LINEAR = [[0.0], [1.0], [0.0]]
 # (2 * MATCH_GAIN_CLIP, computed without subtracting ~1e9 terms) and the
 # 8-per-position recency tiebreak survives under any fp32 matmul accumulation
 # order (the lifted key's match_gain*c^2 cancellation lost it on A100).
-_CLIP_RADIX_BASE = math.ceil(math.sqrt(SCREEN_WIDTH + 1))  # 8 at SW=60, 13 at 160
-_CLIP_N_BUCKETS = SCREEN_WIDTH // _CLIP_RADIX_BASE + 1
+# The clip-memory column key is the shared render_ops radix scheme
+# (render_ops.radix_col_key, aliased in the import block above).
 # Column scalar published on rows that are NOT a clip update. Any value that can
 # never equal a real column (0..SCREEN_WIDTH) works: a query recovers it and the
 # same_int presence test reads ABSENT, so the column falls to the default clip.
 _ABSENT_COLUMN = -1.0
-
-
-def _radix_col_key(col_scalar: Node) -> Node:
-    """Column equality key: ``concat(one_hot(c // B), one_hot(c % B))`` (width
-    ``N_BUCKETS + B``). The dot of two such keys is ``bucket_match + digit_match``
-    — 2 on an exact column match, <= 1 otherwise.
-
-    The column may be the soft (~0.02 leak) output of a ``pick_most_recent``
-    recovery: ``thermometer_floor_div`` (ramps at ``k*B - 0.5``) and the
-    bucket-consistent ``mod_const`` keep the leaked value on the right digit, and
-    ``one_hot`` rounds it to a clean integer one-hot — so no pre-snap is needed
-    and a matched key's dot is exactly 2."""
-    hi = thermometer_floor_div(col_scalar, _CLIP_RADIX_BASE, SCREEN_WIDTH)
-    lo = mod_const(col_scalar, _CLIP_RADIX_BASE, SCREEN_WIDTH)
-    return concat(
-        one_hot(hi, _CLIP_N_BUCKETS),
-        one_hot(lo, _CLIP_RADIX_BASE),
-    )
 
 
 def _part_is_mid(part_oh: Node) -> Node:

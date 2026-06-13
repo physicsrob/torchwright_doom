@@ -25,60 +25,20 @@ _PIXEL_NAME = PIXEL.name
 Rgb = tuple[int, int, int]
 
 
-def decode_rows_to_pixels(
-    rows,
-    palette: tuple[tuple[int, int, int], ...] | list[tuple[int, int, int]] = PLAYPAL,
-) -> dict[tuple[int, int], Rgb]:
-    """Walk a generated row stream -> ``{(x, y): rgb}``.
+def _walk_pixels(rows):
+    """The cursor state machine shared by both decoders: yield
+    ``(stream_index, row, (x, y))`` for every ``pixel`` token with an
+    established cursor, advancing per the direction marks.  Pixels emitted
+    before a cursor is established are dropped (matches the sandbox host
+    decode).  Cursor bookkeeping only — the dumb-host contract.
 
-    First write at each ``(x, y)`` wins (front-to-back compositing: a conditional
-    write, not computation). Pixels emitted before a cursor is established are
-    dropped (matches the sandbox host decode).
+    Shared so the render decode and the teacher-forced diagnostic
+    (:func:`decode_xy_by_position`) can never disagree about where a
+    pixel landed.
     """
     cursor_dx, cursor_dy = 0, 1  # default: walls advance in Y
     cursor_x: int | None = None
     cursor_y: int | None = None
-    buf: dict[tuple[int, int], Rgb] = {}
-    for row in rows:
-        rtype, values = TOKEN_VOCAB.row_to_token[row]
-        name = rtype.name
-        if name == "setCursorDirectionX":
-            cursor_dx, cursor_dy = 1, 0
-        elif name == "setCursorDirectionY":
-            cursor_dx, cursor_dy = 0, 1
-        elif name == "setCursorX":
-            cursor_x = int(values["x"])
-        elif name == "setCursorY":
-            cursor_y = int(values["y"])
-        elif name == _PIXEL_NAME:
-            if cursor_x is None or cursor_y is None:
-                continue
-            color = row - _PIXEL_START  # palette index in [0, 256)
-            key = (cursor_x, cursor_y)
-            if key not in buf:
-                r, g, b = palette[color]
-                buf[key] = (int(r), int(g), int(b))
-            cursor_x += cursor_dx
-            cursor_y += cursor_dy
-    return buf
-
-
-def pixel_color_index(row: int) -> int:
-    """Palette index carried by a ``pixel`` row (``row - pixel_start``)."""
-    return row - _PIXEL_START
-
-
-def decode_xy_by_position(rows) -> dict[int, tuple[int, int]]:
-    """Map each ``pixel`` row's stream position -> its ``(x, y)`` screen cursor.
-
-    Same cursor walk as :func:`decode_rows_to_pixels` but keyed by stream
-    position (for the teacher-forced diagnostic, which checks the compiled
-    pixel color against the option set at the reference cursor position).
-    """
-    cursor_dx, cursor_dy = 0, 1
-    cursor_x: int | None = None
-    cursor_y: int | None = None
-    xy: dict[int, tuple[int, int]] = {}
     for i, row in enumerate(rows):
         rtype, values = TOKEN_VOCAB.row_to_token[row]
         name = rtype.name
@@ -93,7 +53,39 @@ def decode_xy_by_position(rows) -> dict[int, tuple[int, int]]:
         elif name == _PIXEL_NAME:
             if cursor_x is None or cursor_y is None:
                 continue
-            xy[i] = (cursor_x, cursor_y)
+            yield i, row, (cursor_x, cursor_y)
             cursor_x += cursor_dx
             cursor_y += cursor_dy
-    return xy
+
+
+def decode_rows_to_pixels(
+    rows,
+    palette: tuple[tuple[int, int, int], ...] | list[tuple[int, int, int]] = PLAYPAL,
+) -> dict[tuple[int, int], Rgb]:
+    """Walk a generated row stream -> ``{(x, y): rgb}``.
+
+    First write at each ``(x, y)`` wins (front-to-back compositing: a conditional
+    write, not computation).
+    """
+    buf: dict[tuple[int, int], Rgb] = {}
+    for _, row, key in _walk_pixels(rows):
+        if key not in buf:
+            r, g, b = palette[row - _PIXEL_START]
+            buf[key] = (int(r), int(g), int(b))
+    return buf
+
+
+def pixel_color_index(row: int) -> int:
+    """Palette index carried by a ``pixel`` row (``row - pixel_start``)."""
+    return row - _PIXEL_START
+
+
+def decode_xy_by_position(rows) -> dict[int, tuple[int, int]]:
+    """Map each ``pixel`` row's stream position -> its ``(x, y)`` screen cursor.
+
+    Same cursor walk as :func:`decode_rows_to_pixels` (literally — both
+    consume :func:`_walk_pixels`), keyed by stream position for the
+    teacher-forced diagnostic, which checks the compiled pixel color
+    against the option set at the reference cursor position.
+    """
+    return {i: xy for i, _, xy in _walk_pixels(rows)}
