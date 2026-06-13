@@ -33,6 +33,25 @@ if TYPE_CHECKING:
     from .scene_index import SceneIndex
 
 
+def rw_distance_for(scene: SceneIndex, seg_i: Node) -> Node:
+    """DOOM: rw_distance (r_segs.c:R_StoreWallRange) — perpendicular distance
+    from the viewpoint to the seg's line: the view-relative endpoint dotted
+    with the seg normal, clamped to the R5 range.
+
+    The single definition for both consumers — ``WallRangeBuilder`` (the
+    drawseg store path) and :meth:`SegLevelFacts.publish` (the seg-level
+    fact row) previously built this identical chain independently.
+    """
+    ax, ay = scene.segs.endpoint_a(seg_i)
+    rel_x = sub(ax, scene.view.x)
+    rel_y = sub(ay, scene.view.y)
+    distance = vec_sum(
+        mul_normal_coord(scene.segs.normal_cos(seg_i), rel_x),
+        mul_normal_coord(scene.segs.normal_sin(seg_i), rel_y),
+    )
+    return RW_DISTANCE_CLAMP(distance)
+
+
 @dataclass(frozen=True)
 class RecentDrawsegState:
     """Recent drawseg values reused by eager branch builders."""
@@ -115,14 +134,7 @@ class SegLevelFacts:
         h_idx_oh_upper_val = scene.assets.walls.h_idx_oh(upper_tex_id)
         h_idx_oh_lower_val = scene.assets.walls.h_idx_oh(lower_tex_id)
 
-        ax, ay = scene.segs.endpoint_a(seg_i)
-        rel_x = sub(ax, scene.view.x)
-        rel_y = sub(ay, scene.view.y)
-        distance = vec_sum(
-            mul_normal_coord(scene.segs.normal_cos(seg_i), rel_x),
-            mul_normal_coord(scene.segs.normal_sin(seg_i), rel_y),
-        )
-        rw_distance_value = RW_DISTANCE_CLAMP(distance)
+        rw_distance_value = rw_distance_for(scene, seg_i)
 
         active_kpart = inp.is_seg_kpart
         seg_key_kpart = seg_key_at_kpart_row

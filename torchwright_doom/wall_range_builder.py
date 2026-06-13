@@ -37,14 +37,12 @@ from .render_ops import (
     NEAR_DEN_SCALE_UP,
     NEAR_FLOOR_NUMERATOR,
     PROJECT_SCALE,
-    RW_DISTANCE_CLAMP,
     SCALE_CLAMP,
     SINEB_ABOVE_FLOOR,
     SINEB_CLAMP,
     and_,
     gt_height,
     mul_far_scale,
-    mul_normal_coord,
     mul_scalestep,
     one_minus,
     or_,
@@ -65,6 +63,7 @@ from .std import (
 )
 from .std import sum as vec_sum
 from .value_ranges import ValueRange
+from .wall_range_state import rw_distance_for
 from .vocab import (
     DRAWSEG_BSILHEIGHT,
     DRAWSEG_META,
@@ -389,17 +388,10 @@ class WallRangeBuilder:
         )
 
     def rw_distance(self, seg_i: Node) -> Node:
-        # DOOM: rw_distance (r_segs.c:R_StoreWallRange) — perpendicular
-        # distance from the viewpoint to the segment.
-        scene = self.projection.core.scene
-        ax, ay = scene.segs.endpoint_a(seg_i)
-        rel_x = sub(ax, scene.view.x)
-        rel_y = sub(ay, scene.view.y)
-        distance = vec_sum(
-            mul_normal_coord(scene.segs.normal_cos(seg_i), rel_x),
-            mul_normal_coord(scene.segs.normal_sin(seg_i), rel_y),
-        )
-        return RW_DISTANCE_CLAMP(distance)
+        # DOOM: rw_distance (r_segs.c:R_StoreWallRange) — the shared
+        # definition in wall_range_state (SegLevelFacts publishes the same
+        # chain on its fact row).
+        return rw_distance_for(self.projection.core.scene, seg_i)
 
     def scale_sineb(self, *, is_stop: bool) -> Node:
         projection = self.projection

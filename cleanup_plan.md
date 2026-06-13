@@ -27,9 +27,43 @@ lint gate, and fail-loud error paths. This file tracks what remains.
   node.child0/child1 never mirrored) — fixed sandbox-side
   (doom_sandbox `5e7196c`), baseline regenerated. #62 and #64 also
   done.
-- **Batch 2 LANDED** (see commit). Suite 270 passed, 0 skipped.
-- **Batch 4b LANDED** (see commit).
-- **Batch 4c / 4d:** remaining.
+- **Batch 2 LANDED** (`5f63c75`). Suite 270 passed, 0 skipped.
+  Verification render: bare `make run` (zero variables) resolved every
+  knob from the YAML — full frame 25,350 tokens, stopped=terminal,
+  spec-decode 7.61 tok/pass at 87% per-token accept, 100% of pixels
+  within the reference option set.
+- **Batch 4b LANDED** (`08ae6d9`). Suite 274 passed, 0 skipped.
+- **Batch 4c LANDED** (`3b1e581`): constants + byte-identical helpers
+  (ANGLE_BAM/_TAN_FOV_HALF, _PROJ_RATIO, the screen-column radix
+  scheme, scene_facts `_keyed_value_lookup`, decode `_walk_pixels`).
+  Gates recorded below.
+- **Batch 4d:** `rw_distance` dedup landed (see commit). **#33
+  (radix-successor scaffolding unification) examined and DECLINED** —
+  inspection shows the solid_intervals and visplane_state publishers
+  are parametrically different, not copy-paste: different radix
+  domains (screen columns vs plane ids), different table semantics
+  (`lo >= k` inclusive vs `lo > t` strict), different table widths
+  (the plane `above_lo` table is B+1 wide with a leading "above -1"
+  slot for R_DrawPlanes' find-first query), different H2 sentinel
+  wiring and payload compositions.  A shared builder would need ~8
+  parameters and would bury exactly the semantic differences that are
+  load-bearing — the "parallel-but-different siblings are the design"
+  verdict the audit's verifiers applied elsewhere.  Reopen only with a
+  design that keeps the per-domain tables explicit.
+
+**Session finding — the mode=both propagated-tie budget is
+mis-calibrated for the production frame.** Cross-process spec-vs-pure
+at the production config differs at 200/25,350 positions: 173 `value`
+scratch ties (141 at ±1 bin; 3 at 2048 bins on degenerate
+`scalestep.den = -1` sentinel rows), 27 pixel colormap/±-texel ties —
+all type-aligned, both legs 100% within the reference option set,
+zero structural divergence.  The same 27 pixel diffs appear in-process
+(deterministic batched-vs-single-row kernel shapes, NOT run-to-run
+noise), so `cli._PROPAGATED_TIE_BUDGET = 8` (calibrated at
+d4096/9,739 tokens: 2 propagated) fails any production-scale
+`mode=both` run on arrival.  Decision deferred to the user: either
+scale the budget to frame length (~30 for 160×100) or document
+`mode=both` as a sub-production-scale tool only.
 
 ---
 
@@ -43,12 +77,19 @@ lint gate, and fail-loud error paths. This file tracks what remains.
   feeds tokens and blits pixels. No batch may move computation host-side.
 - **Two verification tiers.**
   - *Non-graph changes* (docs, deps, runtime/host code, tests): `make
-    lint` green + the full `make test` Modal suite (today: 238 passed /
-    23 skipped — the 23 are batch 3's target).
+    lint` green + the full `make test` Modal suite (262+ passed,
+    0 skipped since batch 3).
   - *Graph-touching changes* (anything that alters node construction in
-    the `torchwright_doom/*.py` renderer modules): the above PLUS the
-    **spec/pure equivalence gate at production scale** on `make run`.
-    `make test` only certifies at test scale (60×50, small `d`).
+    the `torchwright_doom/*.py` renderer modules): the above PLUS
+    production-scale certification: a fresh-process `make run
+    RENDER_MODE=pure_ar` full frame, compared against the prior
+    certified dump with `scripts/compare_token_dumps.py`
+    (`--allow-value-ties N` for cross-artifact compares).  NB
+    in-process `mode=both` CANNOT gate at the production config — its
+    leg-2 kernel-shape ties trip the propagated budget by themselves
+    (see plan_tier1_expiry.md "Gate findings" and the session findings
+    below).  `make test` only certifies at test scale (60×50, small
+    `d`).
 - **The node-id-shift rule.** Adding or removing *any* graph node —
   even an unreachable one — shifts `global_node_id` for every node
   built after it, which moves set/dict iteration order in the compiler,
