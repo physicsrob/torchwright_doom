@@ -9,12 +9,12 @@ Usage (via Makefile):
 Direct:
     uv run modal run modal_run.py --module scripts.compile_report
 
-The GPU container mounts the compile cache volume (read-mostly) plus the
-``doom_sandbox`` checkout and ``configs/``, so the artifact-debugging scripts
-run against the real compiled ONNX — the cache key must be computed LOCALLY
-(it embeds git SHAs the container can't derive) and handed over explicitly:
+The GPU container mounts the compile cache volume (read-mostly) plus
+``configs/`` and the WAD, so the artifact-debugging scripts run against the real
+compiled ONNX — the cache key must be computed LOCALLY (it embeds git SHAs the
+container can't derive) and handed over explicitly:
 
-    make modal-run MODULE=scripts.k_localize_divergence \\
+    make modal-run MODULE=scripts.compile_report \\
         ARGS="--config configs/e1m1.yaml --cache-dir /root/.cache/torchwright_doom/compiled/<key>"
 
 The CPU-only container is sized via env vars read at (local) import time —
@@ -57,9 +57,8 @@ def _build_cmd(module: str, script: str, args: str) -> list[str]:
     cpu=8,
     memory=32768,
     timeout=1800,
-    # The sandbox/configs-augmented image: the artifact-debugging scripts
-    # (k_probe/k_localize) need the reference renderer and the committed
-    # configs next to the mounted compile cache.
+    # The configs-augmented image: the artifact-debugging scripts need the
+    # committed configs + WAD next to the mounted compile cache.
     image=ASSETS_IMAGE,
     volumes={"/root/.cache/torchwright_doom/compiled": CACHE_VOLUME},
 )

@@ -1,7 +1,8 @@
 """Phase J2 gate — flat floor/ceiling span pass oracle (through DONE).
 
-Drives the real ``forward()`` graph teacher-forced on the sandbox golden token
-stream for ``e1m1_start_room_textured`` over a window that reaches the flat pass
+Drives the real ``forward()`` graph teacher-forced on the in-tree pydoom
+drafter's golden token stream for the e1m1 production frame (loaded from
+``configs/e1m1.yaml`` + ``doom1.wad``) over a window that reaches the flat pass
 (``R_DrawPlanes`` … the per-visplane ``R_MakeSpans`` columns, ``SPAN_ROW``s, the
 flat ``SET_CURSOR_X`` arm, flat pixels) and the frame tail to ``DONE``. Asserts:
 
@@ -11,8 +12,8 @@ flat ``SET_CURSOR_X`` arm, flat pixels) and the frame tail to ``DONE``. Asserts:
   ``R_MakeSpans.col`` / ``R_MakeSpans.closeSlot`` / ``R_MapPlane.row`` and the
   terminal ``DONE``;
 * numeric carriers within the value-encoding tolerance;
-* every PIXEL color (wall *and* flat) is within the sandbox's option set (the
-  flat option set additionally allows ±1 colormap row).
+* every PIXEL color (wall *and* flat) is within the Python renderer's option set
+  (the flat option set additionally allows ±1 colormap row).
 
 Same teacher-forced ``reference_eval`` (exact math, CPU, no compile). The window
 spans the whole frame by default; set ``TWDOOM_J2_SPAN=<n>`` to cap the AR span
@@ -24,6 +25,7 @@ from __future__ import annotations
 
 import os
 from collections import Counter
+from pathlib import Path
 
 import pytest
 import torch
@@ -36,10 +38,8 @@ from torchwright_doom.graph_debug import silenced_graph_asserts
 from torchwright_doom.inference.diagnostic import carrier_delta as _carrier_delta
 from torchwright_doom.past import GraphPast
 from torchwright_doom.render_main import forward
-from torchwright_doom.vocab import PIXEL, VOCAB_TYPES
-
-from ..prefill_fixture import row_index, tokens_to_input
-from ..sandbox_support import import_sandbox, require_doom_sandbox
+from torchwright_doom.inference.tokens_bridge import row_index, tokens_to_input
+from torchwright_doom.vocab import PIXEL
 
 _CARRIERS = {"value", "angleValue"}
 _ANGLE_BAM_TOL = 2
@@ -103,20 +103,25 @@ def _decode_pixel_xy(full) -> dict[int, tuple[int, int]]:
 
 @pytest.fixture(scope="module")
 def flat_pixel_eval():
-    require_doom_sandbox()
+    import torchwright_doom.asset_banks as asset_banks
+    import torchwright_doom.pydoom as pydoom
+    from torchwright_doom.inference.config import load_render_config
+    from torchwright_doom.inference.wad_scene import (
+        load_render_scene,
+        pose_from_world,
+        pydoom_scene_for,
+    )
+    from torchwright_doom.prompt.build import build_prompt
 
-    fixtures = import_sandbox("doom_sandbox.fixtures")
-    sb_prefill = import_sandbox("doom_sandbox.implementation.prefill")
-    drafter = import_sandbox("doom_sandbox.implementation.reference_drafter")
-    reference = import_sandbox("doom_sandbox.implementation.reference")
-    asset_banks = import_sandbox("doom_sandbox.implementation.asset_banks")
+    submodule_root = Path(__file__).resolve().parents[2]
+    config = load_render_config(submodule_root / "configs" / "e1m1.yaml")
+    scene = load_render_scene(config, base_dir=submodule_root)
+    pose = pose_from_world(scene)
+    py_scene = pydoom_scene_for(scene, pose)
+    py_pose = py_scene.test_poses[0]
 
-    name_to_real = {t.name: t for t in VOCAB_TYPES}
-
-    scene = fixtures.load_fixture("e1m1_start_room_textured")
-    pose = scene.test_poses[0]
-    prefill = list(sb_prefill.get_prefill(scene, pose))
-    golden = list(drafter.expected_ar_tokens(scene, pose))
+    prefill = list(build_prompt(scene.map_data, pose, asset_config=scene.asset_config))
+    golden = list(pydoom.expected_ar_tokens(py_scene, py_pose))
     full = prefill + golden
     begin = len(prefill) - 1
 
@@ -125,11 +130,11 @@ def flat_pixel_eval():
         n_pos = min(begin + int(span_env), len(full) - 1) + 1
     else:
         n_pos = len(full)  # full frame, through DONE
-    real_pairs = [(name_to_real[t.type.name], dict(t.values)) for t in full]
+    real_pairs = [(t.type, dict(t.values)) for t in full]
     inputs = {"iv": tokens_to_input(real_pairs[:n_pos])}
 
     options = {}
-    for opt in reference.expected_pixel_color_options(scene, pose):
+    for opt in pydoom.expected_pixel_color_options(py_scene, py_pose):
         options.setdefault((opt.x, opt.y), set()).update(opt.colors)
     playpal = [tuple(int(c) for c in rgb) for rgb in asset_banks.PLAYPAL]
 
@@ -141,7 +146,7 @@ def flat_pixel_eval():
     with silenced_graph_asserts():
         cache = reference_eval(next_token, inputs, n_pos)
 
-    pixel_start, _ = TOKEN_VOCAB.type_to_row_range[name_to_real[_PIXEL_NAME]]
+    pixel_start, _ = TOKEN_VOCAB.type_to_row_range[PIXEL]
     return {
         "emitted": cache[next_token],
         "full": full,

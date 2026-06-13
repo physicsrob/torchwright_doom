@@ -22,7 +22,6 @@ Usage (via Makefile):
     make test ARGS="-k test_foo" # filter applied to all shards
 """
 
-import os
 import shlex
 import subprocess
 import sys
@@ -60,16 +59,11 @@ _MEDIUM_FILE_GROUPS: list[list[str]] = [
         "tests/scene/test_radix_successor_oracle.py",
         "tests/embedding/test_shared_slot_layout.py",
     ],
-    # Wall rasterization oracles (reference_eval, mid-size windows).
+    # The emit-graph correctness gate. The wall/projection/traversal oracle
+    # gates that used to share these shards were folded into the pydoom
+    # whole-frame routing gate (test_flat_pixel_oracle) and deleted with the
+    # sandbox.
     [
-        "tests/scene/test_wall_pixel_oracle.py",
-        "tests/scene/test_wall_column_oracle.py",
-        "tests/scene/test_bbox_oracle.py",
-    ],
-    # Projection / traversal oracles + the emit-graph correctness gate.
-    [
-        "tests/scene/test_projection_oracle.py",
-        "tests/scene/test_traversal_oracle.py",
         "tests/embedding/test_emit_graph_correctness.py",
     ],
 ]
@@ -98,10 +92,6 @@ SHARDS = [
 def run_pytest(pytest_args: str, shard_id: int = 0, extra_args: str = "") -> int:
     tag = f"[shard {shard_id}]"
     t0 = time.time()
-    # The oracle gates must RUN here, not skip: tests/sandbox_support.py
-    # fails loud (and tests/test_sandbox_gates_guard.py goes red) if the
-    # doom_sandbox sibling shipped in TEST_IMAGE stops being importable.
-    os.environ["TWDOOM_REQUIRE_SANDBOX_GATES"] = "1"
     cmd = [
         sys.executable,
         "-m",

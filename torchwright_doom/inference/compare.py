@@ -5,8 +5,8 @@ diverge (off-by-one edges change pixel counts), so we **report rich stats and
 render PNGs first**, and pick the acceptance bar once the real divergence is
 visible. This module fixes no threshold; it measures.
 
-``doom_sandbox`` (the reference renderer) is imported lazily so this module loads
-in a standalone checkout (the stats/PNG helpers that take buffers work without it).
+The in-tree ``pydoom`` renderer is imported lazily inside the reference helpers,
+so the stats/PNG helpers that take buffers load without touching it.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ PixelBuf = dict[tuple[int, int], Rgb]
 
 def reference_pixels(scene, pose) -> PixelBuf:
     """Reference frame as ``{(x, y): rgb}`` (first emission at each pixel wins)."""
-    from doom_sandbox.implementation.reference import expected_pixel_pass
+    from ..pydoom import expected_pixel_pass
 
     out: PixelBuf = {}
     for p in expected_pixel_pass(scene, pose):
@@ -40,7 +40,7 @@ def reference_pixels(scene, pose) -> PixelBuf:
 
 def reference_options(scene, pose) -> dict[tuple[int, int], set[Rgb]]:
     """Per-pixel accepted-color option sets (texture-neighborhood + lighting tol)."""
-    from doom_sandbox.implementation.reference import expected_pixel_color_options
+    from ..pydoom import expected_pixel_color_options
 
     opts: dict[tuple[int, int], set[Rgb]] = {}
     for o in expected_pixel_color_options(scene, pose):

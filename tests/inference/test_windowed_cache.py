@@ -397,8 +397,8 @@ def test_windowed_spec_decode_stream_and_buffer():
         terminal_row=_TERMINAL,
         draft_window=4,
         argmax_fn=_ident_argmax,
-        sandbox_token_to_row_fn=_ident_token,
-        row_to_sandbox_token_fn=_ident_token,
+        token_to_row_fn=_ident_token,
+        row_to_token_fn=_ident_token,
     )
     assert res.emitted_rows == _EXPECTED
     assert stats["mispredicts"] >= 1

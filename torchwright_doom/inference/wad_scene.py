@@ -1,11 +1,10 @@
-"""WAD-backed prompt scene and sandbox adapter for render jobs."""
+"""WAD-backed prompt scene and the in-tree pydoom adapter for render jobs."""
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from ..asset_config import AssetConfig
 from ..prompt.build import build_prompt
@@ -82,73 +81,52 @@ def prefill_rows_for(scene: LoadedRenderScene, pose: GameState) -> list[int]:
     return [row_index(t.type, dict(t.values)) for t in tokens]
 
 
-def reference_stream(
-    config: RenderConfig,
-    *,
-    base_dir: str | Path | None = None,
-    x: float | None = None,
-    y: float | None = None,
-    angle: int | None = None,
-    viewz: float | None = None,
-):
-    """Reference token stream for one pose of ``config``'s scene.
+def pydoom_scene_for(scene: LoadedRenderScene, pose: GameState):
+    """Build the in-tree :class:`torchwright_doom.pydoom.Scene` the renderer and
+    drafter consume, from the WAD-loaded render scene and pose."""
+    from ..pydoom import Scene as PyScene
 
-    Prefill rows from the real prompt builder plus the sandbox reference
-    renderer's expected AR rollout — the teacher-forcing input for the
-    divergence tools (``scripts/k_localize_divergence.py`` /
-    ``k_probe_divergence.py``).  Pose components default to the config's
-    default pose (``pose_from_world``).  Returns
-    ``(sb_scene, sb_pose, prefill_rows, full_rows)``.
-    """
-    from .tokens_bridge import sandbox_token_to_row
-
-    scene = load_render_scene(config, base_dir=base_dir)
-    pose = pose_from_world(scene, x=x, y=y, angle=angle, viewz=viewz)
-    prefill_rows = prefill_rows_for(scene, pose)
-    sb_scene = sandbox_scene_for(scene, pose)
-    sb_pose = sb_scene.test_poses[0]
-    from doom_sandbox.implementation import reference_drafter
-
-    ar_rows = [
-        sandbox_token_to_row(t)
-        for t in reference_drafter.expected_ar_tokens(sb_scene, sb_pose)
-    ]
-    return sb_scene, sb_pose, prefill_rows, prefill_rows + ar_rows
-
-
-def sandbox_scene_for(scene: LoadedRenderScene, pose: GameState):
-    ensure_doom_sandbox()
-    from doom_sandbox.types import GameState as SandboxGameState
-    from doom_sandbox.types import Scene as SandboxScene
-
-    sb_scene = SandboxScene(
-        map_data=scene.map_data.model_dump(),
-        test_poses=[SandboxGameState(**pose.model_dump())],
-        wall_textures=[_texture_dict(t) for t in scene.asset_book.wall_textures],
-        flat_textures=[_texture_dict(t) for t in scene.asset_book.flat_textures],
-        palette=[tuple(int(c) for c in rgb) for rgb in scene.asset_book.palette],
-        colormap=[list(int(v) for v in row) for row in scene.asset_book.colormap],
+    # model_validate over a plain dict: pydantic coerces map_data / textures /
+    # palette into the typed pydoom models (the native<->sandbox-shape round-trip
+    # the adapter has always relied on).
+    py_scene = PyScene.model_validate(
+        {
+            "map_data": scene.map_data.model_dump(),
+            "test_poses": [pose.model_dump()],
+            "wall_textures": [_texture_dict(t) for t in scene.asset_book.wall_textures],
+            "flat_textures": [_texture_dict(t) for t in scene.asset_book.flat_textures],
+            "palette": [tuple(int(c) for c in rgb) for rgb in scene.asset_book.palette],
+            "colormap": [
+                list(int(v) for v in row) for row in scene.asset_book.colormap
+            ],
+        }
     )
-    patch_sandbox_assets(sb_scene, scene.asset_config)
-    return sb_scene
+    patch_pydoom_assets(py_scene, scene.asset_config)
+    return py_scene
 
 
-def patch_sandbox_assets(sb_scene, asset_config: AssetConfig) -> None:
-    """Patch doom_sandbox reference globals to the YAML asset ordering.
+def patch_pydoom_assets(py_scene, asset_config: AssetConfig) -> None:
+    """Patch the pydoom renderer's module-level asset globals to the YAML asset
+    ordering.
 
-    The sandbox reference renderer historically reads module-level asset globals.
-    The WAD adapter supplies an in-memory Scene, so the corresponding globals are
-    updated before the drafter/reference render runs. This keeps host work at
-    reference/draft generation only; the compiled renderer still owns rendering.
+    The vendored renderer reads module-level asset globals (``ASSET_BOOK``,
+    ``PLAYPAL``, ...) and the drafter reads them through that same module. The WAD
+    adapter supplies an in-memory scene, so those globals are updated before the
+    drafter / reference render runs. This keeps host work at reference/draft
+    generation only; the compiled renderer still owns rendering.
     """
-    ensure_doom_sandbox()
-    import doom_sandbox.implementation.reference as ref
+    from ..pydoom import renderer
 
-    book = _SandboxAssetBook(
-        wall_textures=tuple(sb_scene.wall_textures),
-        flat_textures=tuple(sb_scene.flat_textures),
-        palette=tuple(tuple(rgb) for rgb in sb_scene.palette),
-        colormap=tuple(tuple(row) for row in sb_scene.colormap),
+    # Deliberate monkey-patch of the renderer's module-level asset globals; cast
+    # to Any so the (intentionally) type-incompatible rebind is explicit, not a
+    # silent error.
+    ref = cast(Any, renderer)
+
+    book = _PydoomAssetBook(
+        wall_textures=tuple(py_scene.wall_textures),
+        flat_textures=tuple(py_scene.flat_textures),
+        palette=tuple(tuple(rgb) for rgb in py_scene.palette),
+        colormap=tuple(tuple(row) for row in py_scene.colormap),
     )
     ref.ASSET_BOOK = book
     ref.PLAYPAL = book.palette
@@ -160,7 +138,7 @@ def patch_sandbox_assets(sb_scene, asset_config: AssetConfig) -> None:
 
 
 @dataclass(frozen=True)
-class _SandboxAssetBook:
+class _PydoomAssetBook:
     wall_textures: tuple[Any, ...]
     flat_textures: tuple[Any, ...]
     palette: tuple[tuple[int, int, int], ...]
@@ -174,16 +152,3 @@ def _texture_dict(texture) -> dict[str, Any]:
         "height": int(texture.height),
         "pixels": texture.pixels,
     }
-
-
-def ensure_doom_sandbox() -> None:
-    try:
-        import doom_sandbox  # noqa: F401
-
-        return
-    except ImportError:
-        pass
-    umbrella = Path(__file__).resolve().parents[3]
-    if (umbrella / "doom_sandbox").is_dir():
-        sys.path.insert(0, str(umbrella))
-    import doom_sandbox  # noqa: F401  - raise clearly if still missing

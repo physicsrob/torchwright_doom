@@ -99,7 +99,7 @@ def run_config(
         load_render_scene,
         pose_from_world,
         prefill_rows_for,
-        sandbox_scene_for,
+        pydoom_scene_for,
     )
 
     if mode not in ("spec_decode", "pure_ar", "both"):
@@ -159,18 +159,21 @@ def run_config(
             flush=True,
         )
 
-    sb_scene = None
-    sb_pose = None
+    py_scene = None
+    py_pose = None
     if mode in ("spec_decode", "both") or png or compare_images:
-        sb_scene = sandbox_scene_for(render_scene, pose)
-        sb_pose = sb_scene.test_poses[0]
+        py_scene = pydoom_scene_for(render_scene, pose)
+        py_pose = py_scene.test_poses[0]
 
     if mode in ("spec_decode", "both"):
-        from doom_sandbox.implementation.reference_drafter import ARDrafter
+        from ..pydoom import ARDrafter
 
+        # py_scene/py_pose were built above (spec_decode is a subset of the
+        # branch that sets them).
+        assert py_scene is not None and py_pose is not None
         spec, spec_stats = compiled.spec_decode_rollout(
             prefill_ids,
-            ARDrafter(sb_scene, sb_pose),
+            ARDrafter(py_scene, py_pose),
             max_positions=max_positions,
             terminal_row=terminal_row,
             draft_window=draft_window,
@@ -248,8 +251,8 @@ def run_config(
     report = None
     pngs: list[Path] = []
     if png or compare_images:
-        ref = compare_mod.reference_pixels(sb_scene, sb_pose)
-        options = compare_mod.reference_options(sb_scene, sb_pose)
+        ref = compare_mod.reference_pixels(py_scene, py_pose)
+        options = compare_mod.reference_options(py_scene, py_pose)
         report = compare_mod.compare(gen, ref, options)
         if compare_images:
             print(report.format_short(), flush=True)

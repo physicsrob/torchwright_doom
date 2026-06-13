@@ -1,31 +1,26 @@
-"""Token <-> ``W_EMBED``-row encode/decode, plus the sandbox<->real name bridge.
+"""Token <-> ``W_EMBED``-row encode/decode helpers.
 
-This is the public home for the row-index helpers that used to live only in
-``tests/prefill_fixture.py`` (that file now re-exports from here). All compute is
-pure host arithmetic over the static vocab; **no graph nodes are created at import
-or call time** (the import-time-node-free rule, twdoom CLAUDE.md). ``doom_sandbox``
-is imported lazily so ``torchwright_doom`` stays importable standalone.
+All compute is pure host arithmetic over the static vocab; **no graph nodes are
+created at import or call time** (the import-time-node-free rule, twdoom
+CLAUDE.md).
 
 The compiled artifact reads a 1-wide integer ``token_ids`` input and re-embeds
 each id through its in-graph ``Embedding``; ``rows_to_input`` builds that input.
 Decode is ``argmax(out @ W_EMBED.t())`` -> a row index -> ``(TokenType, values)``
 via ``TOKEN_VOCAB.row_to_token``.
+
+The vendored drafter (``torchwright_doom.pydoom``) emits NATIVE ``Token``s, so the
+speculative-decode crossings (:func:`token_to_row`, :func:`row_to_token`) are a
+direct round-trip with no sandbox name bridge.
 """
 
 from __future__ import annotations
-
-from typing import TYPE_CHECKING, Any
 
 import torch
 
 from ..embedding import TOKEN_VOCAB, W_EMBED
 from ..tokens import IntSlot, Token, TokenType
 from ..value_ranges import ValueRange, encode_float
-from ..vocab import VOCAB_TYPES
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from doom_sandbox.api.tokens import Token as SandboxToken
-
 
 # --- row <-> (type, slot_values) ------------------------------------------
 
@@ -98,64 +93,29 @@ def rows_to_input(rows) -> torch.Tensor:
     return torch.tensor([[float(r)] for r in rows], dtype=torch.float32)
 
 
-# --- sandbox <-> real name bridge -----------------------------------------
+# --- row <-> native Token (the spec-decode accept / correct crossings) ----
 #
-# The reference drafter (doom_sandbox) emits sandbox ``Token``s; the compiled
-# artifact speaks ``W_EMBED`` rows. The two vocabularies are a pinned 1:1 mirror
-# (scripts/vocab_diff.py), keyed by ``TokenType.name`` (identity is by-name on
-# both sides). These two functions are the only crossing points.
-
-# real (torchwright_doom) TokenType keyed by name — built once, no graph nodes.
-_REAL_BY_NAME: dict[str, TokenType] = {t.name: t for t in VOCAB_TYPES}
-
-_SB_TYPE_BY_NAME: dict[str, Any] | None = None
+# The vendored drafter emits native ``Token``s and the compiled artifact speaks
+# ``W_EMBED`` rows. Token identity is by structure (same type + slot values), so
+# the round-trip is direct.
 
 
-def _sandbox_types() -> dict[str, Any]:
-    """Sandbox ``TokenType`` keyed by name (lazy; requires the sibling checkout)."""
-    global _SB_TYPE_BY_NAME
-    if _SB_TYPE_BY_NAME is None:
-        try:
-            from doom_sandbox.implementation.setup import VOCAB
-        except ImportError as e:  # pragma: no cover - exercised only standalone
-            raise RuntimeError(
-                "row_to_sandbox_token needs the doom_sandbox sibling checkout "
-                "(its TokenType objects); not available in a standalone "
-                "torchwright_doom checkout."
-            ) from e
-        _SB_TYPE_BY_NAME = {t.name: t for t in VOCAB.types}
-    return _SB_TYPE_BY_NAME
+def token_to_row(tok: Token) -> int:
+    """Encode a native ``Token`` to its ``W_EMBED`` row index.
 
-
-def real_type_for_name(name: str) -> TokenType:
-    """The real ``TokenType`` mirroring a sandbox token type ``name``."""
-    try:
-        return _REAL_BY_NAME[name]
-    except KeyError as e:  # pragma: no cover - guarded by the totality test
-        raise KeyError(
-            f"sandbox token type {name!r} has no real (torchwright_doom) mirror; "
-            f"the vocabularies are supposed to be 1:1 (scripts/vocab_diff.py)."
-        ) from e
-
-
-def sandbox_token_to_row(tok: "SandboxToken") -> int:
-    """Encode a sandbox ``Token`` to its ``W_EMBED`` row index.
-
-    The accept test in speculative decoding is exactly
-    ``predicted_row == sandbox_token_to_row(drafted_token)`` — "bit-identical"
-    means "same row id".
+    The speculative-decode accept test is exactly
+    ``predicted_row == token_to_row(drafted_token)`` — "token-identical" means
+    "same row id".
     """
-    return row_index(real_type_for_name(tok.type.name), dict(tok.values))
+    return row_index(tok.type, dict(tok.values))
 
 
-def row_to_sandbox_token(row: int) -> "SandboxToken":
-    """Decode a ``W_EMBED`` row index back to a sandbox ``Token``.
+def row_to_token(row: int) -> Token:
+    """Decode a ``W_EMBED`` row index back to a native ``Token``.
 
-    Used to feed ``drafter.consume`` the model's own correction/bonus emission
-    (the §3.4 re-sync). Slot values round-trip through the same value-range
-    quantization the drafter encodes with; sandbox type identity is by name.
+    Feeds ``drafter.consume`` the model's own correction/bonus emission (the
+    re-sync). Slot values round-trip through the same value-range quantization the
+    drafter encodes with.
     """
-    from doom_sandbox.api.tokens import Token as SandboxToken
-
     rtype, values = TOKEN_VOCAB.row_to_token[row]
-    return SandboxToken(_sandbox_types()[rtype.name], dict(values))
+    return Token(rtype, dict(values))

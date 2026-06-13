@@ -34,15 +34,12 @@ from torchwright_doom.embedding import (
 )
 from torchwright_doom.tokens import Derived, FloatSlot, IntSlot, TokenType
 from torchwright_doom.vocab import (
-    ANGLE_BAM,
     ANGLE_VALUE,
     EMIT_X2,
     SCREEN_WIDTH,
     SEG,
     VALUE,
 )
-
-from ..sandbox_support import import_sandbox, require_doom_sandbox
 
 
 def _float_slot(token_type: TokenType, slot_name: str) -> FloatSlot:
@@ -277,56 +274,3 @@ def test_derived_column_round_trip_one_hot_emit_x1() -> None:
             assert (
                 actual == expected
             ), f"EMIT_X2.x={x} derived={col_name}: {actual} != {expected}"
-
-
-def test_cross_check_against_sandbox() -> None:
-    """Build a parallel ANGLE_VALUE through the sandbox API and confirm
-    its derived columns match what W_EMBED holds for the same angle.
-
-    ``doom_sandbox`` is a workspace sibling that uv installs with
-    ``package = false``, so it isn't on the venv's site-packages.
-    Add the umbrella checkout to ``sys.path`` so the import resolves.
-    Skipped only when the umbrella checkout isn't laid out the way the
-    workspace expects.
-    """
-    require_doom_sandbox()
-    sb_api = import_sandbox("doom_sandbox.api")
-    sb_runtime = import_sandbox("doom_sandbox.runtime.embedding")
-
-    Derived = sb_api.Derived
-    sb_angle_value = sb_api.TokenType(
-        "tw_doom_angleValue",
-        slots={
-            "angle": sb_api.IntSlot(
-                -ANGLE_BAM // 2,
-                ANGLE_BAM // 2,
-                derived={
-                    "sin": Derived(lambda a: math.sin(a * 2 * math.pi / ANGLE_BAM)),
-                    "cos": Derived(lambda a: math.cos(a * 2 * math.pi / ANGLE_BAM)),
-                },
-            ),
-        },
-    )
-    sb_vocab = sb_api.TokenVocab(types=[sb_angle_value])
-
-    layout = TOKEN_VOCAB.layout
-    test_angles = [0, 256, 1024, -1024, 2048]
-    for angle in test_angles:
-        sb_token = sb_api.Token(type=sb_angle_value, values={"angle": angle})
-        sb_vec = sb_runtime.embed(sb_token, sb_vocab.layout)
-        sb_row = sb_vec._data[0]
-
-        our_row = _angle_row(angle)
-        for derived_name in ("sin", "cos"):
-            sb_col_start, _width = sb_vocab.layout.derived_columns[
-                (sb_angle_value.name, "angle", derived_name)
-            ]
-            sb_value = float(sb_row[sb_col_start])
-            our_start, _w = layout.derived_columns[
-                (ANGLE_VALUE.name, "angle", derived_name)
-            ]
-            our_value = our_row[our_start].item()
-            assert math.isclose(sb_value, our_value, abs_tol=1e-6), (
-                f"angle={angle} derived={derived_name}: "
-                f"sandbox={sb_value} ours={our_value}"
-            )

@@ -15,8 +15,8 @@ Submodules (the import graph runs one direction, top to bottom):
 - ``compiled_model`` — build the forward graph + compile it to the artifact.
 - ``compile_cache`` — the on-disk compile-artifact cache (key = config +
   git SHAs) + the ``OnnxDebugSession`` loader.
-- ``config`` / ``wad_scene`` — YAML job config; WAD-backed scene + the
-  sandbox adapter and ``reference_stream``.
+- ``config`` / ``wad_scene`` — YAML job config; WAD-backed scene + the in-tree
+  pydoom adapter (``pydoom_scene_for``).
 - ``decode`` — generated token stream -> screen pixel buffer (dumb host).
 - ``compare`` — fetch the reference render + report image-level agreement stats.
 - ``artifacts`` — write ``token_dump.json`` + the PNGs.
@@ -30,6 +30,6 @@ screen-sized vocab AT IMPORT, so callers must ``apply_screen_env(config)``
 before importing the modules that reach it (``tokens_bridge``,
 ``compiled_model``, ``compile_cache``) — the runtime trio
 (``kv_cache``/``generation``/``onnx_runtime``) is import-clean by design.
-All ``doom_sandbox`` imports are lazy so ``torchwright_doom`` stays
-importable in a standalone checkout.
+The reference renderer + drafter are the in-tree ``torchwright_doom.pydoom``
+package; no external checkout is required.
 """

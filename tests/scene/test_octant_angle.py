@@ -26,12 +26,9 @@ from torchwright.debug.probe import reference_eval
 from torchwright.ops.inout_nodes import create_input
 
 from torchwright_doom.render_ops import (
-    _ATAN_ABS_RANGE,
     signed_world_angle,
     wrap_signed_angle,
 )
-
-from ..sandbox_support import import_sandbox, require_doom_sandbox
 
 ANGLE_BAM = 8192
 
@@ -84,49 +81,8 @@ def test_octant_matches_golden_on_dense_sweep() -> None:
     )
     # Off-grid angles can sit a single BAM step from the rounded atan2 only when
     # the true angle lands within half a BAM unit of a threshold; the count is
-    # otherwise exact. Real geometry (next test) is exact.
+    # otherwise exact. Real geometry is exercised by the flat-pixel routing gate.
     assert worst <= 1.0, f"octant diverges from golden BAM by {worst}"
-
-
-def _e1m1_octant_points() -> list[tuple[float, float]]:
-    fixtures = import_sandbox("doom_sandbox.fixtures")
-    scene = fixtures.load_fixture("e1m1_subset")
-    md = scene.map_data
-    points: list[tuple[float, float]] = []
-    for pose in scene.test_poses:
-        px, py = pose.x, pose.y
-        for seg in md.segs:
-            for vi in (seg.v1, seg.v2):
-                v = md.vertices[vi]
-                points.append((v.x - px, v.y - py))
-        for node in md.nodes:
-            for top, bot, left, right in (node.front_bbox, node.back_bbox):
-                for cx in (left, right):
-                    for cy in (top, bot):
-                        points.append((cx - px, cy - py))
-    return points
-
-
-def test_octant_exact_on_e1m1_geometry() -> None:
-    require_doom_sandbox()
-    points = _e1m1_octant_points()
-
-    # The clamp must cover the geometry: bbox corners reach |d| ~2752, which
-    # overruns the legacy 2048 clamp and is why the unified helper uses 3072.
-    max_abs = max(max(abs(dx), abs(dy)) for dx, dy in points)
-    assert (
-        max_abs < _ATAN_ABS_RANGE
-    ), f"geometry |d|={max_abs:.1f} exceeds clamp {_ATAN_ABS_RANGE}"
-
-    out = _eval_octant(points)
-    mismatches = [
-        (points[i], round(out[i].item()), _golden_bam(*points[i]))
-        for i in range(len(points))
-        if _bam_diff(out[i].item(), _golden_bam(*points[i])) > 0.0
-    ]
-    assert (
-        not mismatches
-    ), f"{len(mismatches)} octant/golden BAM mismatches, first 10: {mismatches[:10]}"
 
 
 def test_wrap_signed_angle_matches_reference() -> None:

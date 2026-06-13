@@ -60,10 +60,9 @@ class Drafter(Protocol):
     """Speculative-draft source for :meth:`TokenRuntime.spec_decode_rollout`.
 
     Deliberately a structural Protocol, not an ABC: the production
-    implementation (``doom_sandbox``'s ``ARDrafter``) lives across a repo
-    boundary and cannot subclass torchwright_doom types, and the logic tests
-    carry a second implementation.  Two genuine implementers plus a package
-    boundary is the case structural typing is for.
+    implementation (``torchwright_doom.pydoom``'s ``ARDrafter``) and the second
+    implementation the logic tests carry are two genuine implementers — the case
+    structural typing is for.
     """
 
     def next_draft(self) -> Any: ...
@@ -262,8 +261,8 @@ class TokenRuntime(ABC):
         progress_every: int = 0,
         prefill_chunk_size: int = DEFAULT_PREFILL_CHUNK_SIZE,
         argmax_fn: Callable[[torch.Tensor], list[int]] | None = None,
-        sandbox_token_to_row_fn: Callable[[Any], int] | None = None,
-        row_to_sandbox_token_fn: Callable[[int], Any] | None = None,
+        token_to_row_fn: Callable[[Any], int] | None = None,
+        row_to_token_fn: Callable[[int], Any] | None = None,
     ) -> tuple[RolloutResult, dict[str, Any]]:
         """Generate the rollout with speculative decoding. Returns (result, stats).
 
@@ -288,13 +287,13 @@ class TokenRuntime(ABC):
         trailing return values on every batched step.
         """
         from .tokens_bridge import (
-            row_to_sandbox_token,
-            sandbox_token_to_row,
+            row_to_token,
+            token_to_row,
         )
 
         argmax_fn = argmax_fn or argmax_rows
-        sandbox_token_to_row_fn = sandbox_token_to_row_fn or sandbox_token_to_row
-        row_to_sandbox_token_fn = row_to_sandbox_token_fn or row_to_sandbox_token
+        token_to_row_fn = token_to_row_fn or token_to_row
+        row_to_token_fn = row_to_token_fn or row_to_token
         stats = _new_spec_stats()
         t0 = time.time()
 
@@ -324,7 +323,7 @@ class TokenRuntime(ABC):
         # Align the drafter to the seed: if its first guess equals the
         # seed we already emitted, consume it so its cursor matches.
         first = drafter.next_draft()
-        if first is not None and sandbox_token_to_row_fn(first) == seed_row:
+        if first is not None and token_to_row_fn(first) == seed_row:
             drafter.consume(first)
 
         # --- initialize draft-tail reuse state ---
@@ -377,8 +376,8 @@ class TokenRuntime(ABC):
                     reuse_probe,
                     enable_reuse,
                     argmax_fn=argmax_fn,
-                    sandbox_token_to_row_fn=sandbox_token_to_row_fn,
-                    row_to_sandbox_token_fn=row_to_sandbox_token_fn,
+                    token_to_row_fn=token_to_row_fn,
+                    row_to_token_fn=row_to_token_fn,
                 )
                 if not reuse_buffer and drafter.next_draft() is None:
                     drafter_done = True
@@ -388,7 +387,7 @@ class TokenRuntime(ABC):
                     self, past, next_input_row, emitted, stats, argmax_fn=argmax_fn
                 )
                 if not drafter_done:
-                    drafter.consume(row_to_sandbox_token_fn(emitted[-1]))
+                    drafter.consume(row_to_token_fn(emitted[-1]))
                     if drafter.next_draft() is None:
                         drafter_done = True
 
@@ -505,8 +504,8 @@ def _spec_step(
     enable_reuse: bool,
     *,
     argmax_fn: Callable[[torch.Tensor], list[int]],
-    sandbox_token_to_row_fn: Callable[[Any], int],
-    row_to_sandbox_token_fn: Callable[[int], Any],
+    token_to_row_fn: Callable[[Any], int],
+    row_to_token_fn: Callable[[int], Any],
 ):
     """One batched draft-verify step.
 
@@ -565,11 +564,11 @@ def _spec_step(
         new_past = _single_step(
             compiled, past, next_input_row, emitted, stats, argmax_fn=argmax_fn
         )
-        drafter.consume(row_to_sandbox_token_fn(emitted[-1]))
+        drafter.consume(row_to_token_fn(emitted[-1]))
         return new_past, [], reuse_health, reuse_probe
 
     # --- verify batch: run one pass, find the accept prefix ---
-    draft_rows = [sandbox_token_to_row_fn(d) for d in drafts]
+    draft_rows = [token_to_row_fn(d) for d in drafts]
     batch_rows = [next_input_row] + draft_rows
     out, new_past = compiled.step(rows_to_input(batch_rows), past)
     stats["forward_passes"] += 1
@@ -613,7 +612,7 @@ def _spec_step(
     drafter.rollback(snap)
     for i in range(ncommit):
         emission_row = draft_rows[i] if i < accept else pred[i]
-        emission_tok = drafts[i] if i < accept else row_to_sandbox_token_fn(pred[i])
+        emission_tok = drafts[i] if i < accept else row_to_token_fn(pred[i])
         drafter.consume(emission_tok)
         emitted.append(emission_row)
 
@@ -634,7 +633,5 @@ def _spec_step(
     # --- build the rejected-tail reuse buffer for the next step ---
     if terminal_hit or not enable_reuse or reuse_health == 0:
         return new_past, [], reuse_health, reuse_probe
-    reuse_tail = [
-        row_to_sandbox_token_fn(pred[i]) for i in range(ncommit, n_drafts + 1)
-    ]
+    reuse_tail = [row_to_token_fn(pred[i]) for i in range(ncommit, n_drafts + 1)]
     return new_past, reuse_tail, reuse_health, reuse_probe

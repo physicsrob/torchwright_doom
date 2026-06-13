@@ -22,8 +22,6 @@ from __future__ import annotations
 
 from torchwright_doom.constants import SCREEN_HEIGHT
 
-from ..sandbox_support import import_sandbox, require_doom_sandbox
-
 
 def _make_spans_raw(
     table: list[tuple[int, int]], minx: int, maxx: int
@@ -143,8 +141,8 @@ def _random_tables(n: int, seed: int):
 def test_make_spans_raw_matches_reference() -> None:
     """The raw-``t1/b1`` + ``*_non_empty`` formulation equals the reference's
     ``_after``-threaded ``_make_spans`` on every adversarial / random table."""
-    require_doom_sandbox()
-    reference = import_sandbox("doom_sandbox.implementation.reference")
+    from torchwright_doom.pydoom import renderer as reference
+
     # Sentinel/height parity between the two implementations.
     assert reference.SCREEN_HEIGHT == SCREEN_HEIGHT
 

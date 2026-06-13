@@ -61,3 +61,14 @@ show_missing = true
 
 [tool.mypy]
 ignore_missing_imports = true
+
+# The vendored ``pydoom`` package (the plain-Python renderer + drafter copied
+# near-verbatim from ``doom_sandbox``) carries the sandbox's looser type
+# annotations — e.g. ``_Context.md: object``. Its correctness is pinned by
+# runtime token-identity gates (``tests/scene/test_flat_pixel_oracle.py`` drives
+# the whole frame through the compiled graph), not by static types; rewriting
+# ~4,900 lines of verbatim code to satisfy mypy would only risk transcription
+# drift. Skip type-checking it.
+[[tool.mypy.overrides]]
+module = "torchwright_doom.pydoom.*"
+ignore_errors = true

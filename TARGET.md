@@ -13,14 +13,13 @@ constants module, never a literal — guarded by
 `test_screen_scale_guard` — so the scale stays a config swap, not a
 re-port.
 
-**Vocab contract reference: `doom_sandbox` main.** The real
-`torchwright_doom.embedding.TOKEN_VOCAB` mirrors the sandbox
-`doom_sandbox.implementation.setup.VOCAB` token-for-token (108 types,
-cardinality 93,114). `scripts/vocab_diff.py` (umbrella) computes the
-live contract diff; the committed `baseline_vocab_diff.txt` is **empty**
-and `test_schema_sync` pins live == committed. When the sandbox pin
-moves, re-bump the umbrella's `doom_sandbox` pointer to main and
-regenerate the baseline in one reviewable commit.
+**Vocab contract.** `torchwright_doom.embedding.TOKEN_VOCAB` is the single
+source of truth for the token vocabulary (108 types; cardinality 93,114 at the
+60×50 fixture scale). It was proven token-for-token identical to the original
+`doom_sandbox` vocab before the sandbox was removed. The vendored drafter and
+the compiled model both derive their tokens from this one vocab, so they stay
+token-identical by construction; the end-to-end guard is the whole-frame
+routing gate (`tests/scene/test_flat_pixel_oracle.py`).
 
 **Baseline SHAs (Plan A landing):**
 - `doom_sandbox`: `23ca589` (main) — the contract reference.
