@@ -36,8 +36,11 @@ lint gate, and fail-loud error paths. This file tracks what remains.
 - **Batch 4c LANDED** (`3b1e581`): constants + byte-identical helpers
   (ANGLE_BAM/_TAN_FOV_HALF, _PROJ_RATIO, the screen-column radix
   scheme, scene_facts `_keyed_value_lookup`, decode `_walk_pixels`).
-  Gates recorded below.
-- **Batch 4d:** `rw_distance` dedup landed (see commit). **#33
+  Gates: suite 274 passed / 0 skipped; production pure-AR render
+  TOKEN-IDENTICAL vs the certified baseline (out/batch4c_cert).
+- **Batch 4d LANDED** (`9b2706a`): `rw_distance` dedup.  Gates: suite
+  274 passed / 0 skipped; production pure-AR render TOKEN-IDENTICAL
+  vs the certified baseline (out/batch4d_cert).  **#33
   (radix-successor scaffolding unification) examined and DECLINED** —
   inspection shows the solid_intervals and visplane_state publishers
   are parametrically different, not copy-paste: different radix
