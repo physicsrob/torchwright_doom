@@ -21,16 +21,22 @@ from ..vocab import PIXEL
 
 _PIXEL_START, _ = TOKEN_VOCAB.type_to_row_range[PIXEL]
 _PIXEL_NAME = PIXEL.name
+# Width levels on the pixel `w` slot (IntSlot [lo, hi) -> hi - lo). Color and
+# width share the pixel row: row = _PIXEL_START + color * _PIXEL_W_LEVELS + w_idx
+# (color is the higher-order slot, declared first).
+_PIXEL_W_LEVELS = PIXEL.slots["w"].hi - PIXEL.slots["w"].lo
 
 Rgb = tuple[int, int, int]
 
 
 def _walk_pixels(rows):
     """The cursor state machine shared by both decoders: yield
-    ``(stream_index, row, (x, y))`` for every ``pixel`` token with an
-    established cursor, advancing per the direction marks.  Pixels emitted
-    before a cursor is established are dropped (matches the original host
-    decode).  Cursor bookkeeping only — the dumb-host contract.
+    ``(stream_index, row, (x, y), w)`` for every ``pixel`` token with an
+    established cursor, advancing per the direction marks.  ``(x, y)`` is the
+    base cursor; the host paints the ``w`` cells ``(x + k, y)`` for ``k`` in
+    ``0..w-1``.  Pixels emitted before a cursor is established are dropped
+    (matches the original host decode).  Cursor bookkeeping only — the
+    dumb-host contract.
 
     Shared so the render decode and the teacher-forced diagnostic
     (:func:`decode_xy_by_position`) can never disagree about where a
@@ -53,9 +59,16 @@ def _walk_pixels(rows):
         elif name == _PIXEL_NAME:
             if cursor_x is None or cursor_y is None:
                 continue
-            yield i, row, (cursor_x, cursor_y)
-            cursor_x += cursor_dx
-            cursor_y += cursor_dy
+            w = int(values["w"])
+            yield i, row, (cursor_x, cursor_y), w
+            # Advance by counting, never multiplying: in a flat span (moving in
+            # X) the cursor resumes just past the w-cell run it painted; in a
+            # wall column (moving in Y) the run is horizontal, orthogonal to the
+            # advance, so the cursor steps one row down (R_DrawColumnLow).
+            if cursor_dx:
+                cursor_x += w
+            else:
+                cursor_y += cursor_dy
 
 
 def decode_rows_to_pixels(
@@ -64,20 +77,29 @@ def decode_rows_to_pixels(
 ) -> dict[tuple[int, int], Rgb]:
     """Walk a generated row stream -> ``{(x, y): rgb}``.
 
+    Each ``pixel`` token paints ``w`` adjacent cells in +X (low-detail blits two).
     First write at each ``(x, y)`` wins (front-to-back compositing: a conditional
     write, not computation).
     """
     buf: dict[tuple[int, int], Rgb] = {}
-    for _, row, key in _walk_pixels(rows):
-        if key not in buf:
-            r, g, b = palette[row - _PIXEL_START]
-            buf[key] = (int(r), int(g), int(b))
+    for _, row, (x, y), w in _walk_pixels(rows):
+        r, g, b = palette[pixel_color_index(row)]
+        for k in range(w):
+            key = (x + k, y)
+            if key not in buf:
+                buf[key] = (int(r), int(g), int(b))
     return buf
 
 
 def pixel_color_index(row: int) -> int:
-    """Palette index carried by a ``pixel`` row (``row - pixel_start``)."""
-    return row - _PIXEL_START
+    """Palette index carried by a ``pixel`` row.
+
+    Color shares the row with the width slot, enumerated as
+    ``row = _PIXEL_START + color * _PIXEL_W_LEVELS + w_idx`` (color is the
+    higher-order slot), so the color is the row offset floored by the number
+    of width levels.
+    """
+    return (row - _PIXEL_START) // _PIXEL_W_LEVELS
 
 
 def decode_xy_by_position(rows) -> dict[int, tuple[int, int]]:
@@ -88,4 +110,4 @@ def decode_xy_by_position(rows) -> dict[int, tuple[int, int]]:
     teacher-forced diagnostic, which checks the compiled pixel color
     against the option set at the reference cursor position.
     """
-    return {i: xy for i, _, xy in _walk_pixels(rows)}
+    return {i: xy for i, _, xy, _ in _walk_pixels(rows)}

@@ -640,7 +640,12 @@ PIXEL = TokenType(
                 "pixel_g": lambda color: _pixel_rgb_channel(color, 1),
                 "pixel_b": lambda color: _pixel_rgb_channel(color, 2),
             },
-        )
+        ),
+        # Paint width in screen columns: 1 = high-detail (today), 2 = low-detail
+        # (the host blits W adjacent cells in +X). Riding the already-expiring
+        # pixel row avoids a new token type. Until detail:low lands (Step 2),
+        # every emitter sets w=1, keeping the frame token-identical.
+        "w": IntSlot(1, 3),
     },
 )
 CLIP_UPDATE = TokenType("clipUpdate")

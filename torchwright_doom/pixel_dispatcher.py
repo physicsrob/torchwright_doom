@@ -66,6 +66,7 @@ class PixelDispatcher:
         flat_first_pixel = make_token_head(
             PIXEL,
             color=self.flat_pixel_atlas_color(constant(0.0)),
+            w=constant(1.0),
         )
         return select(
             projection.flats.flat_pass.flat_span_seen,
@@ -131,7 +132,9 @@ class PixelDispatcher:
     @annotated("pix/R_DrawColumn")
     def make_pixel_color(self, pixel_index_vec: "Node") -> "Node":
         return make_token_head(
-            PIXEL, color=self.pixel_lit_palette_index(pixel_index_vec)
+            PIXEL,
+            color=self.pixel_lit_palette_index(pixel_index_vec),
+            w=constant(1.0),
         )
 
     @annotated("pix/R_DrawColumn")
@@ -180,6 +183,7 @@ class PixelDispatcher:
             make_token_head(
                 PIXEL,
                 color=self.flat_pixel_atlas_color(next_pixel_index),
+                w=constant(1.0),
             ),
             FlatPassRenderer(projection).after_completed_flat_span_row(),
         )

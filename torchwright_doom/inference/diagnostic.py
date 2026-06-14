@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 from ..embedding import TOKEN_VOCAB
 from ..vocab import ANGLE_VALUE, PIXEL, VALUE
 from .generation import argmax_rows
-from .decode import decode_xy_by_position
+from .decode import decode_xy_by_position, pixel_color_index
 from .tokens_bridge import rows_to_input
 
 if TYPE_CHECKING:
@@ -42,7 +42,6 @@ _VALUE_LEVELS = _VALUE_END - _VALUE_START
 _ANGLE_START, _ANGLE_END = TOKEN_VOCAB.type_to_row_range[ANGLE_VALUE]
 _ANGLE_LEVELS = _ANGLE_END - _ANGLE_START
 _ANGLE_LO = -_ANGLE_LEVELS // 2  # angle slot is centered (IntSlot(-N/2, N/2))
-_PIXEL_START, _ = TOKEN_VOCAB.type_to_row_range[PIXEL]
 
 
 def carrier_delta(name: str, predicted_row: int, expected_row: int):
@@ -124,7 +123,7 @@ def teacher_forced_scan(
 
         if exp_type == _PIXEL_NAME:
             xy = pixel_xy.get(i + 1)
-            color = pred_row - _PIXEL_START
+            color = pixel_color_index(pred_row)
             if xy is None or not (0 <= color < 256) or pred_type != _PIXEL_NAME:
                 ok = False
             else:

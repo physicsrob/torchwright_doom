@@ -1735,7 +1735,7 @@ class _WallColumnsState:
     def _emit_pixel_color(self) -> Token:
         span = self.active_span
         if span is None or span.h_scaled <= 0 or span.tex_id <= 0:
-            return Token(PIXEL, {"color": 0})
+            return Token(PIXEL, {"color": 0, "w": 1})
         tex = ref.ASSET_BOOK.wall_textures[span.tex_id - 1]
         src_x = self.u_idx % tex.width
         v_native = span.dc_tmid + (self.pixel_y - ref.CENTER_Y) * span.dc_iscale
@@ -1753,7 +1753,7 @@ class _WallColumnsState:
             colormap_row,
             raw_idx,
         )
-        return Token(PIXEL, {"color": lit_idx})
+        return Token(PIXEL, {"color": lit_idx, "w": 1})
 
     def _enter_active_span(self, span: _SpanEmit) -> None:
         self.active_span = span
@@ -2314,7 +2314,7 @@ def _column_transition_tokens(
                     colormap_row,
                     raw,
                 )
-                tokens.append(Token(PIXEL, {"color": lit}))
+                tokens.append(Token(PIXEL, {"color": lit, "w": 1}))
 
     def open_rows(lo: int, hi: int, x_open: int) -> None:
         if lo > hi:

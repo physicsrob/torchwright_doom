@@ -117,5 +117,5 @@ def test_pixel_rgb_derived_accessors() -> None:
     view = _view()
     # PLAYPAL channel reads are 0..255 floats; just confirm shape-correct and bounded.
     for chan in (view.pixel_r, view.pixel_g, view.pixel_b):
-        val = _eval(chan, token_row(PIXEL, {"color": 10})).item()
+        val = _eval(chan, token_row(PIXEL, {"color": 10, "w": 1})).item()
         assert 0.0 <= val <= 255.0

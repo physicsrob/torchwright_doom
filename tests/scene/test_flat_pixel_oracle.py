@@ -57,6 +57,9 @@ _WALLCOL_U_NAME = "wallColU"
 _WALLCOL_U_TOL = 1
 
 _PIXEL_NAME = PIXEL.name
+# Color shares the pixel row with the width slot: row = start + color * w_levels
+# + w_idx. Recover color by flooring the row offset by the number of widths.
+_PIXEL_W_LEVELS = PIXEL.slots["w"].hi - PIXEL.slots["w"].lo
 
 
 def _predicted_rows(emitted_slice: torch.Tensor) -> list[int]:
@@ -196,7 +199,7 @@ def flat_pixel_scan(flat_pixel_eval) -> dict:
         )
         if next_name == _PIXEL_NAME:
             x, y = pixel_xy[i + 1]
-            color = predicted_row - pixel_start
+            color = (predicted_row - pixel_start) // _PIXEL_W_LEVELS
             if not (0 <= color < 256):
                 pixel_mismatches.append(f"{desc}  [not a PIXEL row]")
                 continue

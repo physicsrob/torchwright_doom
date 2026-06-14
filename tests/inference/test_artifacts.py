@@ -13,7 +13,7 @@ def test_build_and_write_token_dump(tmp_path):
     prefill_rows = [row_index(BEGIN, {})]
     emitted_rows = [
         row_index(SET_CURSOR_DIRECTION_Y, {}),
-        row_index(PIXEL, {"color": 3}),
+        row_index(PIXEL, {"color": 3, "w": 1}),
     ]
     dump = artifacts.build_token_dump(
         fixture="e1m1_subset_textured",
@@ -31,7 +31,7 @@ def test_build_and_write_token_dump(tmp_path):
     rollout = case["predicted_next_tokens"]
     assert [e["type"] for e in rollout] == ["setCursorDirectionY", "pixel"]
     assert all(e["phase"] == "rollout" for e in rollout)
-    assert rollout[1]["values"] == {"color": 3}
+    assert rollout[1]["values"] == {"color": 3, "w": 1}
 
     path = artifacts.write_token_dump(tmp_path / "token_dump.json", dump)
     assert json.loads(path.read_text())["cases"][0]["fixture"] == "e1m1_subset_textured"
