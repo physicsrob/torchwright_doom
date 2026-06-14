@@ -79,9 +79,13 @@ def _predicted_rows(emitted_slice: torch.Tensor) -> list[int]:
 
 
 def _decode_pixel_xy(full) -> dict[int, tuple[int, int]]:
-    """Host pixel decode (mirrors the original ``extract.extract_pixel_pass``): walk the
-    token stream tracking cursor + direction, recording each PIXEL's ``(x, y)``.
-    Walls advance Y (default); flats advance X (after SET_CURSOR_DIRECTION_X)."""
+    """Host pixel decode (mirrors the production host ``decode.py::_walk_pixels``):
+    walk the token stream tracking cursor + direction, recording each PIXEL's base
+    ``(x, y)``. Walls advance Y (default); flats advance X (after
+    SET_CURSOR_DIRECTION_X). Width-aware: each PIXEL paints ``w`` cells, so in a
+    flat span (moving in X) the cursor resumes ``w`` past the run it painted; in a
+    wall column (moving in Y) the run is horizontal, orthogonal to the advance, so
+    the cursor steps one row down. At ``w == 1`` this is identical to a unit step."""
     cursor_dx, cursor_dy = 0, 1
     cursor_x: int | None = None
     cursor_y: int | None = None
@@ -98,9 +102,12 @@ def _decode_pixel_xy(full) -> dict[int, tuple[int, int]]:
             cursor_y = int(tok.values["y"])
         elif name == _PIXEL_NAME:
             assert cursor_x is not None and cursor_y is not None
+            w = int(tok.values["w"])
             xy[i] = (cursor_x, cursor_y)
-            cursor_x += cursor_dx
-            cursor_y += cursor_dy
+            if cursor_dx:
+                cursor_x += w
+            else:
+                cursor_y += cursor_dy
     return xy
 
 

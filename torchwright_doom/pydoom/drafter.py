@@ -103,11 +103,12 @@ from ..protocol_tokens import (
 from ..vocab import (
     ANGLE_BAM,
     ANGLE_VALUE,
+    COLUMN_COUNT,
     DONE,
     DRAW_PLANES_BEGIN,
     N_NODES_MAX,
+    PIXEL_WIDTH,
     SCREEN_HEIGHT,
-    SCREEN_WIDTH,
     SEG_KPART,
     SET_CURSOR_DIRECTION_X,
     SET_CURSOR_DIRECTION_Y,
@@ -348,7 +349,7 @@ def _next_solid_start(ranges: list[_ClipRange], x: int) -> int:
     for entry in sorted(ranges, key=lambda r: r.first):
         if entry.first > x:
             return entry.first
-    return SCREEN_WIDTH
+    return COLUMN_COUNT
 
 
 def _add_solid_range(ranges: list[_ClipRange], first: int, last: int) -> None:
@@ -683,7 +684,7 @@ class _BBoxState:
                     )
                 )
             ):
-                projected = (0, SCREEN_WIDTH - 1)
+                projected = (0, COLUMN_COUNT - 1)
             else:
                 self.completion = "closed"
                 self.phase = "complete"
@@ -786,7 +787,7 @@ class _BBoxState:
         if self.phase == "scan" and t == BBOX_SCAN:
             x = int(actual.values["x"])
             self.scan_x = x
-            last = self.proj_last if self.proj_last is not None else SCREEN_WIDTH - 1
+            last = self.proj_last if self.proj_last is not None else COLUMN_COUNT - 1
             if x > last:
                 self.completion = "closed"
                 self.phase = "complete"
@@ -798,8 +799,8 @@ class _BBoxState:
                 return True
             x = covered.last + 1
             if x > last:
-                if self.scan_x != min(x, SCREEN_WIDTH):
-                    self.scan_x = min(x, SCREEN_WIDTH)
+                if self.scan_x != min(x, COLUMN_COUNT):
+                    self.scan_x = min(x, COLUMN_COUNT)
                     return True
                 self.completion = "closed"
                 self.phase = "complete"
@@ -978,7 +979,7 @@ class _SegState:
                 self.completion = "advance"
                 return
             first = first_override
-            last = SCREEN_WIDTH - 1
+            last = COLUMN_COUNT - 1
         else:
             first, last = projected
             if first_override is not None:
@@ -1100,9 +1101,9 @@ class _HorizontalScanState:
         if self.completion is not None:
             return None
         if self.phase == "find":
-            return Token(FIND_RUN, {"x": min(int(self.x or 0), SCREEN_WIDTH)})
+            return Token(FIND_RUN, {"x": min(int(self.x or 0), COLUMN_COUNT)})
         if self.phase == "final_find":
-            return Token(FIND_RUN, {"x": min(int(self.x or 0), SCREEN_WIDTH)})
+            return Token(FIND_RUN, {"x": min(int(self.x or 0), COLUMN_COUNT)})
         if self.phase == "x2":
             return Token(
                 EMIT_X2,
@@ -1672,7 +1673,7 @@ class _WallColumnsState:
         if self.complete:
             return None
         if self.phase == "column":
-            return Token(SET_CURSOR_X, {"x": self.x})
+            return Token(SET_CURSOR_X, {"x": self.x * PIXEL_WIDTH})
         if self.phase == "col_u":
             u_native = ref._texturecolumn_native(self.x, self.scale_ctx)
             self.u_idx = u_native
@@ -1735,7 +1736,7 @@ class _WallColumnsState:
     def _emit_pixel_color(self) -> Token:
         span = self.active_span
         if span is None or span.h_scaled <= 0 or span.tex_id <= 0:
-            return Token(PIXEL, {"color": 0, "w": 1})
+            return Token(PIXEL, {"color": 0, "w": PIXEL_WIDTH})
         tex = ref.ASSET_BOOK.wall_textures[span.tex_id - 1]
         src_x = self.u_idx % tex.width
         v_native = span.dc_tmid + (self.pixel_y - ref.CENTER_Y) * span.dc_iscale
@@ -1753,7 +1754,7 @@ class _WallColumnsState:
             colormap_row,
             raw_idx,
         )
-        return Token(PIXEL, {"color": lit_idx, "w": 1})
+        return Token(PIXEL, {"color": lit_idx, "w": PIXEL_WIDTH})
 
     def _enter_active_span(self, span: _SpanEmit) -> None:
         self.active_span = span
@@ -2295,7 +2296,7 @@ def _column_transition_tokens(
             x1 = open_x_by_y.pop(y, ctx.minx)
             tokens.append(Token(SPAN_ROW, {"y": y}))
             tokens.append(Token(SET_CURSOR_Y, {"y": y}))
-            tokens.append(Token(SET_CURSOR_X, {"x": x1}))
+            tokens.append(Token(SET_CURSOR_X, {"x": x1 * PIXEL_WIDTH}))
             xfrac0, yfrac0, xstep, ystep = ref._map_plane_setup(
                 plane_height=ctx.plane.height,
                 view_x=ctx.view_x,
@@ -2314,7 +2315,7 @@ def _column_transition_tokens(
                     colormap_row,
                     raw,
                 )
-                tokens.append(Token(PIXEL, {"color": lit, "w": 1}))
+                tokens.append(Token(PIXEL, {"color": lit, "w": PIXEL_WIDTH}))
 
     def open_rows(lo: int, hi: int, x_open: int) -> None:
         if lo > hi:
@@ -2639,9 +2640,9 @@ class ARDrafter:
             view_angle_bam=int(state.angle) * _FIXTURE_TO_BAM,
             plane_tables=ref._build_plane_tables(md),
             runtime_visplanes=ref._RuntimeVisplanes(),
-            solidsegs=[_ClipRange(-(10**9), -1), _ClipRange(SCREEN_WIDTH, 10**9)],
-            ceilingclip=[-1] * SCREEN_WIDTH,
-            floorclip=[SCREEN_HEIGHT] * SCREEN_WIDTH,
+            solidsegs=[_ClipRange(-(10**9), -1), _ClipRange(COLUMN_COUNT, 10**9)],
+            ceilingclip=[-1] * COLUMN_COUNT,
+            floorclip=[SCREEN_HEIGHT] * COLUMN_COUNT,
             side_table={},
             stack=[],
         )

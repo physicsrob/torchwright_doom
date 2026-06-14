@@ -54,6 +54,11 @@ SCREEN_HEIGHT = _screen_dim_from_env(
     "TORCHWRIGHT_DOOM_SCREEN_HEIGHT", _DEFAULT_SCREEN_HEIGHT, minimum=2
 )
 CENTER_Y = SCREEN_HEIGHT / 2.0
+_DETAIL = os.environ.get("TORCHWRIGHT_DOOM_DETAIL", "high")
+if _DETAIL not in ("low", "high"):
+    raise ValueError(f"TORCHWRIGHT_DOOM_DETAIL must be 'low' or 'high', got {_DETAIL!r}")
+PIXEL_WIDTH = 2 if _DETAIL == "low" else 1
+COLUMN_COUNT = SCREEN_WIDTH // PIXEL_WIDTH
 DEFAULT_VIEW_Z = 41.0
 
 ANGLE_BAM = 8192
@@ -246,9 +251,9 @@ def viewangletox(theta_bam: int) -> int:
     if theta_bam >= FOV_HALF_BAM:
         return 0
     if theta_bam <= -FOV_HALF_BAM:
-        return SCREEN_WIDTH - 1
+        return COLUMN_COUNT - 1
     t = math.tan(theta_bam * 2 * math.pi / ANGLE_BAM)
-    return round((SCREEN_WIDTH - 1) * (1 - t / _TAN_FOV_HALF) / 2)
+    return round((COLUMN_COUNT - 1) * (1 - t / _TAN_FOV_HALF) / 2)
 
 
 def expected_wall_column_pass(scene: Scene, state: GameState) -> WallColumnPass:
@@ -258,8 +263,8 @@ def expected_wall_column_pass(scene: Scene, state: GameState) -> WallColumnPass:
     segments = bake_segments(md)
     viewz = _state_viewz(state)
     ranges = _horizontal_wall_ranges(scene, state)
-    ceilingclip = [-1] * SCREEN_WIDTH
-    floorclip = [SCREEN_HEIGHT] * SCREEN_WIDTH
+    ceilingclip = [-1] * COLUMN_COUNT
+    floorclip = [SCREEN_HEIGHT] * COLUMN_COUNT
     drawsegs: list[DrawsegMetaRecord] = []
     spans: list[WallSpanRecord] = []
     clip_updates: list[ClipUpdateRecord] = []
@@ -304,8 +309,8 @@ def expected_pixel_pass(scene: Scene, state: GameState) -> list[Pixel]:
     contexts = _horizontal_wall_range_contexts(scene, state)
     name_to_id = _build_uv_texture_id_map()
     h_scaled_by_id = _texture_height_by_id()
-    ceilingclip = [-1] * SCREEN_WIDTH
-    floorclip = [SCREEN_HEIGHT] * SCREEN_WIDTH
+    ceilingclip = [-1] * COLUMN_COUNT
+    floorclip = [SCREEN_HEIGHT] * COLUMN_COUNT
     out: list[Pixel] = []
 
     for context in contexts:
@@ -351,8 +356,8 @@ def expected_pixel_color_options(
     contexts = _horizontal_wall_range_contexts(scene, state)
     name_to_id = _build_uv_texture_id_map()
     h_scaled_by_id = _texture_height_by_id()
-    ceilingclip = [-1] * SCREEN_WIDTH
-    floorclip = [SCREEN_HEIGHT] * SCREEN_WIDTH
+    ceilingclip = [-1] * COLUMN_COUNT
+    floorclip = [SCREEN_HEIGHT] * COLUMN_COUNT
     out: list[PixelColorOptions] = []
 
     for context in contexts:
@@ -405,9 +410,9 @@ def expected_pixel_structure_tolerance(
     contexts = _horizontal_wall_range_contexts(scene, state)
     name_to_id = _build_uv_texture_id_map()
     h_scaled_by_id = _texture_height_by_id()
-    ceilingclip = [-1] * SCREEN_WIDTH
-    floorclip = [SCREEN_HEIGHT] * SCREEN_WIDTH
-    edge_trace = _PixelEdgeTrace(SCREEN_WIDTH)
+    ceilingclip = [-1] * COLUMN_COUNT
+    floorclip = [SCREEN_HEIGHT] * COLUMN_COUNT
+    edge_trace = _PixelEdgeTrace(COLUMN_COUNT)
     out: list[None] = []
 
     for context in contexts:
@@ -476,7 +481,7 @@ def expected_flat_pixel_pass(scene: Scene, state: GameState) -> list[Pixel]:
             lit_idx = apply_doom_colormap(COLORMAP_ROWS, colormap_row, raw_idx)
             out.append(
                 Pixel(
-                    x=span.x1 + k,
+                    x=(span.x1 + k) * PIXEL_WIDTH,
                     y=span.y,
                     color=tuple(int(c) for c in PLAYPAL[lit_idx]),
                 )
@@ -578,7 +583,7 @@ def _flat_pixel_color_options(
             }
             out.append(
                 PixelColorOptions(
-                    x=span.x1 + k,
+                    x=(span.x1 + k) * PIXEL_WIDTH,
                     y=span.y,
                     colors=tuple(sorted(colors)),
                 )
@@ -624,7 +629,7 @@ def _map_plane_setup(
     distscale_x1 = 1.0 / max(0.1, math.cos(_xtoviewangle_rad(x1)))
     length = distance * distscale_x1
     angle = view_angle_rad + _xtoviewangle_rad(x1)
-    half_screen = (SCREEN_WIDTH - 1) / 2.0
+    half_screen = (COLUMN_COUNT - 1) / 2.0
     xfrac0_native = view_x + length * math.cos(angle)
     yfrac0_native = -view_y - length * math.sin(angle)
     # Doom steps horizontal flat spans along viewangle - 90deg. Since this
@@ -669,7 +674,7 @@ def _runtime_visplane_columns(
         seen.add(key)
         table = out.setdefault(
             (mark.plane_id, mark.vp),
-            [(SCREEN_HEIGHT, -1) for _ in range(SCREEN_WIDTH)],
+            [(SCREEN_HEIGHT, -1) for _ in range(COLUMN_COUNT)],
         )
         table[mark.x] = (mark.y1, mark.y2)
     return out
@@ -1171,7 +1176,7 @@ def _accumulate_pixel_column(
         v_scaled_mod_h = v_scaled % h_scaled
         palette_idx = tex.pixels[src_x][v_scaled_mod_h]
         lit_idx = apply_doom_colormap(COLORMAP_ROWS, colormap_row, palette_idx)
-        out.append(Pixel(x=x, y=y, color=PLAYPAL[lit_idx]))
+        out.append(Pixel(x=x * PIXEL_WIDTH, y=y, color=PLAYPAL[lit_idx]))
 
 
 def _ignore_pixel_column(*args, **kwargs) -> None:
@@ -1212,7 +1217,7 @@ def _accumulate_pixel_options_column(
             for du in range(-4, 5)
             for dv in range(-4, 5)
         }
-        out.append(PixelColorOptions(x=x, y=y, colors=tuple(sorted(colors))))
+        out.append(PixelColorOptions(x=x * PIXEL_WIDTH, y=y, colors=tuple(sorted(colors))))
 
 
 def _near_pixel_edge(value: float) -> bool:
@@ -1278,8 +1283,8 @@ def expected_wall_plane_mark_pass(scene: Scene, state: GameState) -> WallPlaneMa
     viewz = _state_viewz(state)
     plane_tables = _build_plane_tables(md)
     contexts = _horizontal_wall_range_contexts(scene, state)
-    ceilingclip = [-1] * SCREEN_WIDTH
-    floorclip = [SCREEN_HEIGHT] * SCREEN_WIDTH
+    ceilingclip = [-1] * COLUMN_COUNT
+    floorclip = [SCREEN_HEIGHT] * COLUMN_COUNT
     runtime_visplanes = _RuntimeVisplanes()
     ranges: list[StoreWallRangeRecord] = []
     drawsegs: list[DrawsegMetaRecord] = []
@@ -1361,7 +1366,7 @@ def _horizontal_wall_range_contexts(
     view_angle_bam = state.angle * _FIXTURE_TO_BAM
     solidsegs: list[_ClipRange] = [
         _ClipRange(-(10**9), -1),
-        _ClipRange(SCREEN_WIDTH, 10**9),
+        _ClipRange(COLUMN_COUNT, 10**9),
     ]
     out: list[_StoredRangeContext] = []
 
@@ -2098,9 +2103,9 @@ class _DoomScaleContext:
 
 
 def _xtoviewangle_rad(x: int) -> float:
-    if SCREEN_WIDTH <= 1:
+    if COLUMN_COUNT <= 1:
         return 0.0
-    tangent = _TAN_FOV_HALF * (1.0 - 2.0 * x / (SCREEN_WIDTH - 1))
+    tangent = _TAN_FOV_HALF * (1.0 - 2.0 * x / (COLUMN_COUNT - 1))
     return math.atan(tangent)
 
 
