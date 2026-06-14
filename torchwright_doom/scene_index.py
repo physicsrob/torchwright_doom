@@ -16,8 +16,7 @@ This is the static-scene side. From here the reading path continues onto the
 dynamic/dispatch side: `protocol_tokens` / `protocol_registry` ->
 `render_main.forward` (see CLAUDE.md "Rough layout" for the full reading path).
 
-Ported from ``doom_sandbox/implementation/forward/scene_index.py``. Changes
-from the sandbox source: the import block (``Vec`` -> ``Node``;
+Changes from the original: the import block (``Vec`` -> ``Node``;
 ``Past`` -> ``GraphPast``; ``one_hot`` / ``N_PLANES_MAX`` from the real-side
 shim / vocab) and the ``SceneIndex.build`` ``pos`` annotation. The classmethod
 body, the four ``_publish_*_context`` recency helpers, and the published-field

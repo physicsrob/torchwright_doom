@@ -1,6 +1,6 @@
 """Vendored value objects the Python renderer + drafter read.
 
-These are the pieces of ``doom_sandbox``'s ``types`` / ``api`` that have no
+These are the pieces of the original ``types`` / ``api`` that have no
 ``torchwright_doom`` equivalent: the ``Scene`` wrapper (it carries ``.map_data``
 and ``.test_poses``, which the native scene does not), its ``TextureImage`` and
 ``GameState`` members (the native ``GameState`` drops ``move_speed`` /
@@ -9,11 +9,8 @@ and ``.test_poses``, which the native scene does not), its ``TextureImage`` and
 The heavy map types (``MapData`` / ``Sector`` / ``Seg`` / ``SUBSECTOR_FLAG``)
 are deliberately NOT vendored — they retarget to ``..prompt.types``, a proven
 field-identical mirror (``inference/wad_scene`` already round-trips
-native<->sandbox through ``model_dump``). So one ``MapData`` threads through the
+native<->pydoom through ``model_dump``). So one ``MapData`` threads through the
 renderer, ``bake_segments``, and the BSP scalars.
-
-Copied near-verbatim from ``doom_sandbox`` ``types/scene.py`` /
-``types/game_state.py`` / ``api/forward.py``.
 """
 
 from __future__ import annotations

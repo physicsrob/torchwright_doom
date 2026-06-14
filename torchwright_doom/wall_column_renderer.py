@@ -1,8 +1,7 @@
 """Read-only branch owner for wall-column render transitions (Phase H).
 
-Ported from ``doom_sandbox/implementation/forward/wall_column_renderer.py``:
-``make_token`` -> ``make_token_head``, ``make_value`` -> ``value_scalar``,
-``Vec`` -> ``Node``.
+Changes from the original: ``make_token`` -> ``make_token_head``,
+``make_value`` -> ``value_scalar``, ``Vec`` -> ``Node``.
 
 Branch builders follow the after_<token> convention (see GLOSSARY.md).
 

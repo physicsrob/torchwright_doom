@@ -6,8 +6,7 @@ then marker tokens identify which field the following `VALUE` or `ANGLE_VALUE`
 payload belongs to. This module gives those raw token checks/extractions names
 that match the scene-index story.
 
-Ported from ``doom_sandbox/implementation/forward/scene_tokens.py``. The only
-changes from the sandbox source are the import block (``Vec`` -> ``Node``; the
+The only changes from the original are the import block (``Vec`` -> ``Node``; the
 std helpers + token declarations now come from the real-side shim / vocab) and
 the shared ``input_type_matches`` body (``type_matches``); the
 ``@cached_property`` token accessors are a line-for-line port. Those names are

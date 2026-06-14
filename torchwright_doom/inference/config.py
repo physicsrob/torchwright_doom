@@ -214,13 +214,11 @@ def screen_dims_for_scale(scale: int) -> tuple[int, int]:
 
 
 def apply_screen_env(config: RenderConfig) -> None:
-    """Set renderer + sandbox screen env vars before graph modules import."""
+    """Set the renderer screen env vars before graph modules import."""
     width, height = config.screen
     os.environ["TORCHWRIGHT_DOOM_RENDER_SCALE"] = str(config.model.scale)
     os.environ["TORCHWRIGHT_DOOM_SCREEN_WIDTH"] = str(width)
     os.environ["TORCHWRIGHT_DOOM_SCREEN_HEIGHT"] = str(height)
-    os.environ["DOOM_SANDBOX_SCREEN_WIDTH"] = str(width)
-    os.environ["DOOM_SANDBOX_SCREEN_HEIGHT"] = str(height)
 
 
 def load_render_config(path: str | Path) -> RenderConfig:

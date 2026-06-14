@@ -25,9 +25,7 @@ chains across re-embedding boundaries. Screen-column tokens carry
 per-column one-hot derived columns (``x_oh_*``) for direct
 attention-keyed addressing.
 
-Source of truth: ``doom_sandbox/implementations/spec09__ref/setup.py``
-(this file is the faithful real-side mirror; the umbrella
-``scripts/vocab_diff.py`` pins the contract).
+The umbrella ``scripts/vocab_diff.py`` pins the contract.
 """
 
 from __future__ import annotations
@@ -67,7 +65,7 @@ N_DEPTH_MAX = 16
 N_PLANES_MAX = 32
 N_VP_PER_PLANE_MAX = 8
 # Flattened (plane, vp) instance space and the one-past sentinels the runtime
-# visplane scans use (Phase H ``visplane_state``); sandbox protocol_tokens_decl.
+# visplane scans use (Phase H ``visplane_state``).
 N_VISPLANE_MAX = N_PLANES_MAX * N_VP_PER_PLANE_MAX
 N_PLANE_SENTINEL = N_PLANES_MAX
 N_VP_SENTINEL = N_VP_PER_PLANE_MAX
@@ -251,9 +249,9 @@ VALUE = TokenType(
 
 def prefill_value(range_id: ValueRange, value: float) -> Token:
     """2-arg ``VALUE``-bound wrapper over the ``value_ranges`` 3-arg core:
-    build a ``VALUE`` token carrying the range-encoded float. Mirrors the
-    sandbox ``setup.prefill_value``; the prompt builder uses it so every
-    VALUE payload is encoded into its range's ``[-1, 1]`` space.
+    build a ``VALUE`` token carrying the range-encoded float. The prompt
+    builder uses it so every VALUE payload is encoded into its range's
+    ``[-1, 1]`` space.
     """
     return _prefill_value(VALUE, range_id, value)
 
@@ -261,8 +259,8 @@ def prefill_value(range_id: ValueRange, value: float) -> Token:
 def make_value(range_id: ValueRange, value):
     """2-arg ``VALUE``-bound wrapper over the ``value_ranges`` 3-arg core:
     emit a ``VALUE`` carrier (an emit head) for a computed node, range-encoded.
-    Mirrors the sandbox ``protocol_tokens_decl.make_value``; the forward
-    renderer's projection / drawseg owners call it to emit ``VALUE`` payloads.
+    The forward renderer's projection / drawseg owners call it to emit
+    ``VALUE`` payloads.
     """
     return _make_value(VALUE, range_id, value)
 

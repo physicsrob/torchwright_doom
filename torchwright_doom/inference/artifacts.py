@@ -1,12 +1,12 @@
 """Write the K output artifact: ``token_dump.json`` (the PNGs live in ``compare``).
 
 The dump records the *generated* token stream — the single source of truth for
-what the model rendered. Schema mirrors the ``doom_sandbox`` rollout dumps
+what the model rendered. Schema mirrors the original rollout dumps
 (``rollout_cache.case_json_dump``) closely enough that ``viewer.html`` can
 reconstruct the frame from it: ``predicted_next_tokens`` carries the rollout
 entries (``phase == "rollout"``), each with its palette/cursor slots, and the
 viewer walks them exactly as the host decode does. No precomputed pixel array —
-the tokens are the source of truth (matching the sandbox dump convention).
+the tokens are the source of truth (matching the original dump convention).
 """
 
 from __future__ import annotations

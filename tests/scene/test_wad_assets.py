@@ -1,6 +1,6 @@
 """WAD-backed asset loading — real DOOM1.WAD byte anchors.
 
-Ported from ``doom_sandbox``'s ``test_wad_assets`` and re-pointed at the in-tree
+Pinned against the in-tree
 ``asset_banks.ASSET_BOOK`` (the module-level book the real graph reads, loaded
 from the committed ``doom1.wad`` with the compiled allowlist). After the
 renderer/drafter were vendored, this is the only test that pins absolute WAD

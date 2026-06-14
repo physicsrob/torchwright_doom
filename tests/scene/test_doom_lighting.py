@@ -1,6 +1,6 @@
 """Doom wall-lighting row selection — constant anchors against DOOM's C source.
 
-Ported from ``doom_sandbox``'s ``test_doom_lighting`` and re-pointed at the
+Pinned against the
 in-tree ``torchwright_doom.doom_lighting``. After the renderer/drafter were
 vendored, a compiled-vs-Python-renderer gate can no longer catch a *lighting*
 transcription bug (both descend from the same hand-port). This pins the

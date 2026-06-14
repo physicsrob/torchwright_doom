@@ -5,12 +5,12 @@ The prefill contract is asset-coupled in three places:
 ``N_WALL_TEXTURES + 1``, and ``PIXEL.color`` carries ``pixel_r/g/b``
 derived columns read off the 256-entry ``PLAYPAL`` palette. The prompt
 builder also needs the texture/flat **name -> id** maps to emit the same
-ids the sandbox ``get_prefill`` does.
+ids the reference renderer (pydoom) ``get_prefill`` does.
 
-This module is the **pure** slice of the sandbox ``asset_config`` /
+This module is the **pure** slice of the original ``asset_config`` /
 ``asset_banks`` that those need: the texture/flat name lists, the id maps,
-the counts, and a snapshot of ``PLAYPAL`` (the static DOOM1 palette the
-sandbox loads from the WAD — copied as a literal so the prefill side does
+the counts, and a snapshot of ``PLAYPAL`` (the static DOOM1 palette
+pydoom loads from the WAD — copied as a literal so the prefill side does
 not pull in the WAD-loading machinery). The forward-path pixel and
 dimension banks (wall/flat pixel tables, ``WALL_HEIGHT_BANK`` etc., the
 ``table_lookup`` data) are owned by the lookup track and are NOT here.
@@ -93,7 +93,7 @@ class AssetConfig:
 
 DEFAULT_ASSET_CONFIG = AssetConfig()
 
-# Static DOOM1 PLAYPAL (256 RGB triples) — snapshot of the sandbox's
+# Static DOOM1 PLAYPAL (256 RGB triples) — snapshot of pydoom's
 # WAD-loaded palette (asset_banks.PLAYPAL; checksum sum-of-channels =
 # 83712). Used by PIXEL.color's pixel_r/g/b derived columns.
 PLAYPAL: tuple[tuple[int, int, int], ...] = (

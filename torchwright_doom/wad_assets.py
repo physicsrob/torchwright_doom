@@ -1,16 +1,16 @@
 """Load DOOM WAD assets the texture read-surface compiles into weights.
 
-Real-side port of ``doom_sandbox/implementation/wad_assets.py`` (data-source
-**B**: a self-contained real-side WAD loader rather than reusing the
-sandbox's compiled banks). Narrowed to the asset payloads the forward path
+Data-source **B**: a self-contained real-side WAD loader rather than reusing
+compiled banks. Narrowed to the asset payloads the forward path
 needs: PLAYPAL, COLORMAP, TEXTURE1/TEXTURE2 wall textures, patch pictures, and
-flats. The composite must byte-match the sandbox's ``ASSET_BOOK``
+flats. The composite must byte-match the reference renderer (pydoom)'s
+``ASSET_BOOK``
 (column-major ``pixels[u][v]``, missing-texture handling, 64x64 flats).
 
 This is the WAD-loading machinery the prefill-side ``asset_config`` deliberately
 omits (it snapshots PLAYPAL as a literal). ``prompt/wad.py`` parses map
 *geometry* from the same WAD and states textures are out of scope; this module
-is the texture/flat counterpart, kept separate exactly as the sandbox split
+is the texture/flat counterpart, kept separate exactly as the original split
 geometry (``prompt/wad.py``) from assets (``wad_assets.py``).
 """
 
@@ -23,7 +23,8 @@ from typing import Iterable
 
 from .asset_config import FLAT_NAMES, WALL_TEXTURE_NAMES
 
-# The DOOM1 IWAD lives at the submodule root (same file the sandbox loads).
+# The DOOM1 IWAD lives at the submodule root (same file the reference
+# renderer (pydoom) loads).
 DOOM1_WAD_PATH = Path(__file__).resolve().parent.parent / "doom1.wad"
 
 # DOOM asset dimensions.
@@ -35,7 +36,7 @@ FLAT_SIZE = 64  # a flat (floor/ceiling texture) is FLAT_SIZE x FLAT_SIZE pixels
 class TextureImage:
     """A native-size texture/flat: column-major ``pixels[u][v]`` palette indices.
 
-    Real-side stand-in for the sandbox ``doom_sandbox.types.TextureImage`` —
+    Real-side stand-in for the original ``TextureImage`` type —
     only the fields the loader and bank builder touch (``name``/``width``/
     ``height``/``pixels``), as a plain frozen dataclass (no pydantic dep).
     """

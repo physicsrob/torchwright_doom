@@ -78,7 +78,7 @@ numerical follow-up.
 ## ★ SYNTHESIS (validated, overnight 2026-06-02)
 1. **Depth was the dispatch fold, not geometry.** `type_switch(max_fanout=2)` builds a
    ~35-layer SERIAL Linear→Concat accumulator. Raising max_fanout: 67→44 (=4), →37 (=8),
-   →32 (flat). **True min depth = 32 layers, BELOW the sandbox's 51.** Lever: raise
+   →32 (flat). **True min depth = 32 layers, BELOW the original's 51.** Lever: raise
    max_fanout in render_main.dispatch_next_token (graph-side, ~free: +7% width). The
    compiler CANNOT collapse it today: fuse_consecutive_linears isn't wired into any compile
    path (tests-only), skips Concatenate inputs, and DEADLOCKS this graph when run manually.
@@ -192,7 +192,7 @@ Unconstrained (d=12000, no width pressure):
 - The `type_switch(max_fanout=2)` serial fold is ~35 REMOVABLE layers (67→32).
 - Flat/tree dispatch cuts depth 52% for +7% width — my earlier "flat balloons width"
   fear was WRONG; width is geometry+digit-quad (live regardless of fanout), heads are thin.
-- **True min depth = 32 layers — BELOW the sandbox's 51.** Confirms the user: the bloat
+- **True min depth = 32 layers — BELOW the original's 51.** Confirms the user: the bloat
   was the dispatch fold, not geometry. After the fold, the 32-layer critical path is
   select/dispatch (cond_gate) + affine + digit-quad (inherent renderer logic).
 - H1 (optimize_graph) NOT TESTABLE as-is: running fuse_consecutive_linears manually

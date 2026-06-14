@@ -1,7 +1,6 @@
 """R_CheckBBox-style pruning for back-side BSP traversal.
 
-Ported from ``doom_sandbox/implementation/forward/bbox_pruning.py``. Owns the
-``TRAVERSE_BETWEEN`` bbox sub-protocol: classify the player against the back
+Owns the ``TRAVERSE_BETWEEN`` bbox sub-protocol: classify the player against the back
 child's bounding box into one of DOOM's nine regions (``R_CheckBBox`` ``boxx`` /
 ``boxy``), project the two extreme corners to screen columns through the same
 atan2 octant + view-relative-theta chain the seg projection uses, then scan that
@@ -9,7 +8,7 @@ screen span against the now-populated :class:`SolidIntervals`. A bbox entirely
 beyond the last visible column or fully covered by solid walls prunes its
 subtree (``TRAVERSE_RETURN``); otherwise traversal descends into the back child.
 
-Changes from the sandbox source:
+Changes from the original:
 
 * ``Vec`` -> ``Node``; ``...api`` helpers come from the real-side ``std`` /
   ``render_ops`` shim; the token declarations / ``ValueRange`` / ``make_value``
@@ -18,7 +17,7 @@ Changes from the sandbox source:
   *heads* and stamps one shared derived tail after selecting the winning branch,
   so every owner ``after_*`` emitter returns a head (the convention the
   ``bsp_traversal`` / ``seg_scanner`` owners established).
-* The sandbox kept a near-duplicate octant builder here
+* The original kept a near-duplicate octant builder here
   (``_signed_world_angle_bbox``, clamp 3072) alongside ``ops.signed_world_angle``
   (clamp 2048). The real ``render_ops.signed_world_angle`` is already unified on
   the wider 3072 clamp, so this port calls it directly and the duplicate (plus

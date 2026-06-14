@@ -11,8 +11,7 @@ rollout descend from". This implementation records the edge actually taken,
 keyed by `(child entity, child depth)`, and stores the parent plus whether that
 child was visited as the first or second child.
 
-Ported from ``doom_sandbox/implementation/forward/traversal_edges.py``. The
-only changes from the sandbox source are the import block (``Vec`` -> ``Node``;
+The only changes from the original are the import block (``Vec`` -> ``Node``;
 ``Past`` -> ``GraphPast``; std helpers from the real-side shim; ``make_token``
 -> ``emit_token``; ``add_const``/``DEPTH_NONZERO`` from ``render_ops``).
 """

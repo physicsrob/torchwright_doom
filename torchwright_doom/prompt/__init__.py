@@ -19,7 +19,7 @@ Dataflow (one direction, top to bottom):
   stable visplane list and tag each subsector with its floor/ceiling plane id.
 - ``build`` — :func:`build_prompt`: emit the flat ``list[Token]`` prefill
   (player state -> per-node -> per-subsector/seg -> visplane defs -> ``BEGIN``),
-  mirroring the sandbox ``get_prefill`` order.
+  mirroring the original ``get_prefill`` order.
 - ``scenes`` — a :class:`Scene` (WAD path, subset box, initial pose) and
   :func:`load`, which opens the WAD, subsets it, and shifts the pose into the
   subset frame. The test-fixture entry point.

@@ -1,7 +1,6 @@
 """Past-published solid wall fragments used as horizontal occlusion state.
 
-Ported from ``doom_sandbox/implementation/forward/solid_intervals.py``. The
-seg scan fills this channel at ``R_STORE_WALL_RANGE`` and queries it at
+The seg scan fills this channel at ``R_STORE_WALL_RANGE`` and queries it at
 ``FIND_RUN`` to decide which screen columns a later seg may still draw —
 DOOM's ``solidsegs`` horizontal occlusion, expressed as a queryable union of
 prior one-sided drawseg fragments.
@@ -13,7 +12,7 @@ columns instead of ``width``. The answer is the next occupied column in the same
 bucket, or — if that bucket is exhausted — the lowest in the next non-empty
 higher bucket (a *carry*). See ``GLOSSARY.md``.
 
-Changes from the sandbox source: ``Vec`` -> ``Node``; the sandbox-``api``
+Changes from the original: ``Vec`` -> ``Node``; the original ``api``
 imports map to the real ``std`` / ``past`` / ``render_ops`` shims.
 
 Sentinel/constant nodes are built inside the publish methods, not at module

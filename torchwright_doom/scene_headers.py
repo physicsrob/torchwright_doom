@@ -12,8 +12,7 @@ defs, from ``scene_index``):
 - `subsector`: current id is the most recent `SS(s=...)`.
 - `seg`: current id is the most recent `SEG(i=...)`.
 
-Ported from ``doom_sandbox/implementation/forward/scene_headers.py``. Changes
-from the sandbox source: the import block (``Vec`` -> ``Node``; ``Past`` ->
+Changes from the original: the import block (``Vec`` -> ``Node``; ``Past`` ->
 ``GraphPast``; std/constants from the real-side shim) and ``Vec.shape`` ->
 ``len(node)`` in the ``split`` sizes. ``HeaderContext.publish`` packs
 ``concat(id_value, key_value)`` into the residual; ``pick_most_recent`` recovers

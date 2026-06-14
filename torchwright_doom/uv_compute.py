@@ -1,7 +1,6 @@
 """Per-pixel v coordinate decode for texture sampling.
 
-Real-side port of ``doom_sandbox/implementation/forward/uv_compute.py``. The
-chain mirrors DOOM ``R_DrawColumn`` texture stepping (r_draw.c:132-145)::
+The chain mirrors DOOM ``R_DrawColumn`` texture stepping (r_draw.c:132-145)::
 
     v_native = dc_texturemid + (y - centery) * dc_iscale
     v_floor  = floor(v_native)
@@ -10,7 +9,7 @@ chain mirrors DOOM ``R_DrawColumn`` texture stepping (r_draw.c:132-145)::
 ``SAWTOOTH_BANK`` is one ``mod H`` PWL per ``WALL_HEIGHT_BANK`` height;
 ``h_idx_oh`` selects which mod to return via ``pick_by_one_hot``.
 
-Changes from the sandbox: ``Vec`` -> ``Node``; the module-level ``multiply`` /
+Changes from the original: ``Vec`` -> ``Node``; the module-level ``multiply`` /
 ``floor_int`` / ``constant(CENTER_Y)`` nodes become the ``render_ops`` shims
 (``mul_pixel_dc_iscale`` / ``FLOOR_NATIVE`` / ``add_const``) applied inside the
 functions (no import-time graph nodes). The dead ``compute_v_at_screen_y`` (the

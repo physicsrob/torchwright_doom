@@ -1,7 +1,7 @@
 """Read-only branch owner for R_DrawPlanes / R_MakeSpans transitions.
 
-Real-side port of ``doom_sandbox/implementation/forward/flat_pass_renderer.py``:
-the flat-pass control spine that runs *after* the BSP walk completes
+Real-side port of the flat-pass control spine that runs *after* the BSP walk
+completes
 (``DRAW_PLANES_BEGIN``), walking planes -> visplanes -> R_MakeSpans columns ->
 SPAN_ROWs -> SET_CURSOR_Y (which flips ``flat_span_seen`` so the shared
 pixel/cursor branches route the flat arm), terminating at ``DONE`` when the
@@ -43,7 +43,7 @@ degenerate to the wall arm. The visplane regions this pass walks were recorded
 earlier by ``VisplaneMarker`` (one SCREEN_RANGE per marked wall seg) while the
 BSP/wall walk was still running.
 
-Changes from the sandbox: ``make_token`` -> ``make_token_head``; ``Vec`` ->
+Changes from the original: ``make_token`` -> ``make_token_head``; ``Vec`` ->
 ``Node``; the module-level sentinel ``constant``\\ s relocated inside the methods
 (no import-time graph nodes).
 """

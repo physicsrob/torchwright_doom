@@ -1,6 +1,6 @@
 """SEG-keyed wall-range facts.
 
-Ported from ``doom_sandbox/implementation/forward/wall_range_state.py``. Defines
+Ported from DOOM's R_StoreWallRange. Defines
 two records. :class:`RecentDrawsegState` holds the cached drawseg values (seg
 id, range start/stop, scale1) that the seg-scan loop and the drawseg-scalar
 chain reuse within one ``R_STORE_WALL_RANGE`` cycle.

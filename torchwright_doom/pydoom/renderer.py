@@ -48,10 +48,10 @@ def _screen_dim_from_env(name: str, default: int, *, minimum: int) -> int:
 # launching a fresh Python process with these env vars set before the implementation is
 # imported. Normal tests use the defaults above.
 SCREEN_WIDTH = _screen_dim_from_env(
-    "DOOM_SANDBOX_SCREEN_WIDTH", _DEFAULT_SCREEN_WIDTH, minimum=2
+    "TORCHWRIGHT_DOOM_SCREEN_WIDTH", _DEFAULT_SCREEN_WIDTH, minimum=2
 )
 SCREEN_HEIGHT = _screen_dim_from_env(
-    "DOOM_SANDBOX_SCREEN_HEIGHT", _DEFAULT_SCREEN_HEIGHT, minimum=2
+    "TORCHWRIGHT_DOOM_SCREEN_HEIGHT", _DEFAULT_SCREEN_HEIGHT, minimum=2
 )
 CENTER_Y = SCREEN_HEIGHT / 2.0
 DEFAULT_VIEW_Z = 41.0

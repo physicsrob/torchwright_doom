@@ -16,8 +16,7 @@ The keyed lookups use *lifted* id keys: an integer id is encoded as
 ``[id, -id^2, 1]`` so one attention dot-product peaks at exact id equality (see
 :func:`lifted_id_query` and ``GLOSSARY.md``), instead of a width-N one-hot.
 
-Ported from ``doom_sandbox/implementation/forward/attention_handles.py``.
-The only changes from the sandbox source are the import
+The only changes from the original are the import
 block (``Vec`` -> ``Node``; ``Past`` -> ``GraphPast``; the std helpers and
 constants now come from the real-side shim) — the dataclasses, the lifted-id
 key scheme, and the publish/pick structure are a line-for-line port.

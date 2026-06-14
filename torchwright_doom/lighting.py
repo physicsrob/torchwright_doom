@@ -1,12 +1,11 @@
 """Runtime helpers for DOOM wall COLORMAP application.
 
-Real-side port of ``doom_sandbox/implementation/forward/lighting.py``: the
-in-graph ``256x32`` ``COLORMAP[row][palette_index]`` indirection (r_data.c
+The in-graph ``256x32`` ``COLORMAP[row][palette_index]`` indirection (r_data.c
 colormaps, r_main.c, r_draw.c). The COLORMAP-row *selection* math
 (``doom_wall_colormap_row`` / scalelight / ``NUMCOLORMAPS``) is the already-ported
 :mod:`.doom_lighting`; this is the in-graph *application* of a chosen row.
 
-``Vec`` -> ``Node`` and the sandbox ``...api`` imports become ``.std``. The 32
+``Vec`` -> ``Node`` and the original ``...api`` imports become ``.std``. The 32
 per-row PWLs are built from ``pwl_def`` closures, so this tuple holds no graph
 node at import (``global_node_id`` stays ``0``).
 """

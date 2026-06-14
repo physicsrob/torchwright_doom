@@ -1,6 +1,6 @@
 """Numeric range bank for the shared ``VALUE`` carrier.
 
-Ported from ``doom_sandbox/implementation/value_ranges.py``. The range id
+The range id
 is Python/control-flow metadata only — it is never embedded as a token
 slot; the marker/context around a ``VALUE`` token chooses which range
 interprets ``VALUE.v``.
@@ -18,10 +18,9 @@ Scope and layering:
 * The **prefill** encoder (:func:`encode_float` / :func:`prefill_value`)
   produces the encoded float directly. The autoregressive **emit** path
   additionally quantizes onto the slot grid — that lives in ``emit.py``
-  (``emit_float_slot_token``), the real analog of the sandbox
-  ``reference_drafter._emit_value`` / ``_quantize_value``; it is not
-  re-implemented here.
-* The graph-construction helpers the sandbox keeps here (``encode_vec``
+  (``emit_float_slot_token``), matching the reference renderer (pydoom)
+  drafter's value-emit quantization; it is not re-implemented here.
+* The graph-construction helpers kept here (``encode_vec``
   building a graph ``Node`` via ``linear``; ``make_value`` via
   ``make_token``) are the forward-path runtime ``VALUE`` emitter. They turn
   a *computed* node — not an embed-time derived column — into
@@ -141,7 +140,7 @@ def prefill_value(value_type: TokenType, range_id: ValueRange, value: float) -> 
 
 def encode_vec(range_id: ValueRange, value: "Node") -> "Node":
     """Runtime encoder: affine-map a computed node into the range's [-1, 1]
-    space (sandbox ``encode_vec``).
+    space.
 
     ``encoded = scale·value + bias`` as one fused ``Linear`` over
     ``concat(value, 1)`` — the producer-side mirror of :func:`encode_float`.
@@ -156,7 +155,7 @@ def encode_vec(range_id: ValueRange, value: "Node") -> "Node":
 
 def make_value(value_type: TokenType, range_id: ValueRange, value: "Node") -> "Node":
     """3-arg core: emit a ``value_type`` ``VALUE`` token carrying ``value``,
-    range-encoded (sandbox ``make_value``).
+    range-encoded.
 
     Returns an emit **head** (``make_token_head``): the renderer's dispatch
     folds over heads and stamps one shared derived-zero tail after selecting

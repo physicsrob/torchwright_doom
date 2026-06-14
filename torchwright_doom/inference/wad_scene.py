@@ -87,7 +87,7 @@ def pydoom_scene_for(scene: LoadedRenderScene, pose: GameState):
     from ..pydoom import Scene as PyScene
 
     # model_validate over a plain dict: pydantic coerces map_data / textures /
-    # palette into the typed pydoom models (the native<->sandbox-shape round-trip
+    # palette into the typed pydoom models (the native<->pydoom-shape round-trip
     # the adapter has always relied on).
     py_scene = PyScene.model_validate(
         {

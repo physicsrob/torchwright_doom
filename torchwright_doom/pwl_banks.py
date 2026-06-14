@@ -1,6 +1,6 @@
 """Module-level PWL banks for the pixel pass.
 
-Real-side port of ``doom_sandbox/implementation/pwl_banks.py`` — the two PWL
+The two PWL
 banks the wall texel pass and the flat span pass read:
 
 * ``SAWTOOTH_BANK`` — one ``v mod H`` sawtooth per distinct wall-texture height
@@ -16,7 +16,7 @@ row); the two share the ``pwl_def`` machinery but serve unrelated purposes.
 ``pwl_def`` returns a *closure* (it builds no graph node until the closure is
 called), so these module-level tuples are node-free at import — ``global_node_id``
 stays ``0`` — exactly like ``assets._U_MOD_BY_BANK`` /
-``lighting._COLORMAP_ROW_PWLS``. The sandbox's ``INV_COS_PWL`` is **not** ported:
+``lighting._COLORMAP_ROW_PWLS``. The original ``INV_COS_PWL`` is **not** ported:
 ``u_native`` rides the already-landed ``u_tan_by_column`` derived column, not
 an in-graph inverse-cosine.
 """
@@ -56,7 +56,7 @@ def build_sawtooth_bank(wall_height_bank: tuple[int, ...]) -> tuple:
 
 
 # Per-H sawtooth PWLs for ``v_scaled mod H``. Bank entries are aligned to
-# ``WALL_HEIGHT_BANK`` (= the sandbox ``H_BANK``, the sorted distinct wall-texture
+# ``WALL_HEIGHT_BANK`` (the sorted distinct wall-texture
 # heights; (16, 56, 72, 128) for the committed wad), so a ``pick_by_one_hot`` over
 # the per-texture ``h_idx_oh`` selects the matching height's mod.
 SAWTOOTH_BANK = build_sawtooth_bank(WALL_HEIGHT_BANK)

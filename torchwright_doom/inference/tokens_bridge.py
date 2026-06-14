@@ -11,7 +11,7 @@ via ``TOKEN_VOCAB.row_to_token``.
 
 The vendored drafter (``torchwright_doom.pydoom``) emits NATIVE ``Token``s, so the
 speculative-decode crossings (:func:`token_to_row`, :func:`row_to_token`) are a
-direct round-trip with no sandbox name bridge.
+direct round-trip with no name bridge.
 """
 
 from __future__ import annotations

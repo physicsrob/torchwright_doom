@@ -9,7 +9,7 @@ decisions were made inside the transformer.
 
 Generalizes ``tests/scene/test_flat_pixel_oracle.py::_decode_pixel_xy`` (+ its
 ``row - pixel_start`` color step) to consume ``W_EMBED`` row ids rather than
-sandbox ``Token``s. Walls advance the cursor in Y (the default); flats advance
+``Token``s. Walls advance the cursor in Y (the default); flats advance
 in X after a ``setCursorDirectionX``.
 """
 
@@ -29,7 +29,7 @@ def _walk_pixels(rows):
     """The cursor state machine shared by both decoders: yield
     ``(stream_index, row, (x, y))`` for every ``pixel`` token with an
     established cursor, advancing per the direction marks.  Pixels emitted
-    before a cursor is established are dropped (matches the sandbox host
+    before a cursor is established are dropped (matches the original host
     decode).  Cursor bookkeeping only — the dumb-host contract.
 
     Shared so the render decode and the teacher-forced diagnostic

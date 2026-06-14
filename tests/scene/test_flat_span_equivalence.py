@@ -1,6 +1,6 @@
 """Phase J2 — R_MakeSpans open/close equivalence (DIVERGENCE #1).
 
-``flat_state.py`` ports the **sandbox** R_MakeSpans formulation, which uses the
+``flat_state.py`` ports the **original** R_MakeSpans formulation, which uses the
 RAW ``t1/b1/t2/b2`` in all four close/open sub-steps and compensates with two
 ``*_non_empty`` guards — *not* the reference's ``t1_after``/``b1_after`` chaining
 (``reference._make_spans``). That is an algebraic equivalence claim that holds
@@ -29,7 +29,7 @@ def _make_spans_raw(
     """Pure-Python mirror of ``flat_state``'s graph open/close arithmetic.
 
     Uses the RAW ``t1/b1/t2/b2`` in all four sub-steps with the
-    ``cur_non_empty`` / ``prev_non_empty`` guards (the sandbox form), the
+    ``cur_non_empty`` / ``prev_non_empty`` guards (the original form), the
     ``slot0 = close_top`` / ``slot1 = close_bottom`` packing, ``x_close = x - 1``,
     and ``x_open = x`` with per-row open-x recovery (the ``pick_most_recent`` x1
     recovery)."""

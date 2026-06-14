@@ -37,7 +37,7 @@ here.
   `*_state` modules note this; the canonical statement is here.
 
 - **Phase letters (Phase H, Phase J, …)** — port-history milestone tags
-  from the sandbox→graph port, kept in some module docstrings. They mark
+  from the original-to-graph port, kept in some module docstrings. They mark
   *when* a module was ported, not a runtime ordering: Phase H is the
   wall-column + visplane rasterization milestone (`wall_column_*`,
   `visplane_*`, `range_dispatcher`), Phase J the flat/floor-ceiling pass

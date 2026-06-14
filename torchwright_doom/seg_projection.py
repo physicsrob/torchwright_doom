@@ -9,7 +9,6 @@ owns the local seg-scanning protocol::
     ANGLE_VALUE(theta_b) -> EMIT_X2               or advance/return
     EMIT_X2 -> R_STORE_WALL_RANGE -> ... drawseg scalars ... -> DRAWSEG_U_PHASE
 
-Ported from ``doom_sandbox/implementation/forward/seg_projection.py``.
 ``SegProjection.publish`` builds the whole per-position projection context as a
 sequence of numbered publish phases (the ``# Phase N —`` comments in its body):
 the input side channels and seg-scan recovery (phases 1-6), the per-column clip
@@ -18,7 +17,7 @@ visplane occupancy, seg facts, wall-span draft, and flat pass (phases 8-13). The
 ``wall`` / ``planes`` / ``flats`` subcontexts on the returned record carry those
 later subsystems.
 
-Changes from the sandbox source: ``Vec`` -> ``Node``; sandbox-``api`` / ``.ops``
+Changes from the original: ``Vec`` -> ``Node``; the original ``api`` / ``.ops``
 imports map to the real ``std`` / ``render_ops`` shims; the module-level
 ``constant`` sentinel is built inside ``publish()`` (no import-time nodes).
 """

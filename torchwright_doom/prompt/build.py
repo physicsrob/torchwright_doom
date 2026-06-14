@@ -2,7 +2,7 @@
 
 The prompt is what the transformer sees: a flat sequence of typed tokens
 encoding the scene's geometry and the player's per-frame state. Section
-order mirrors the sandbox ``get_prefill``: player state -> per-node block
+order mirrors the original ``get_prefill``: player state -> per-node block
 -> per-subsector + per-seg block -> visplane defs + per-subsector plane
 refs -> ``BEGIN`` marker.
 

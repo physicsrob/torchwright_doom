@@ -1,7 +1,6 @@
 """Forward/render constants.
 
-Real-side mirror of the read-side subset of
-``doom_sandbox/implementation/forward/constants.py``. Kept separate from
+Real-side mirror of the read-side render-constant subset. Kept separate from
 :mod:`.constants` (which holds the vocab-scale ``SCREEN_WIDTH`` /
 ``SCREEN_HEIGHT`` and must stay dependency-free): the values here are
 render-domain magnitudes, wrapped by :func:`.std.constant` at their call
@@ -48,7 +47,7 @@ OPEN_CLIP_CEILING = -1.0
 # this threshold separates the two in the radix-successor presence checks.
 PRESENT_THRESHOLD = 0.9
 
-# NOTE: the sandbox keeps ``ONE``/``ZERO``/``FALSE`` as module-level
+# NOTE: the original keeps ``ONE``/``ZERO``/``FALSE`` as module-level
 # ``constant`` Vecs. On the real side a ``constant`` is a graph ``Node`` with a
 # global auto-incrementing id; creating one at import time gives it a fixed low
 # id that collides with test-built nodes after the test harness resets the id

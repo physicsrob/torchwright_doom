@@ -168,8 +168,8 @@ def _is_type_pm1(input_vec: Node, token_type: TokenType) -> Node:
 def is_type(input_vec: Node, token_type: TokenType) -> Node:
     """1-wide 0/1 indicator that the active token has type ``token_type``.
 
-    Mirrors the sandbox ``is_type(input_vec, T)``: 1.0 when the active
-    token's type matches ``T``, 0.0 otherwise. Depth: 1 MLP sublayer
+    1.0 when the active token's type matches ``token_type``, 0.0
+    otherwise. Depth: 1 MLP sublayer
     (the ``compare`` op); the surrounding affines (the E8 dot ``Linear``
     on the way in, the ±1 → 0/1 fold on the way out) fuse into their
     consumers / producers.
@@ -240,8 +240,7 @@ def extract_type_slot(input_vec: Node, token_type: TokenType, slot_name: str) ->
     """Auto-masked single-``(type, slot)`` read.
 
     Returns the slot value when the active token has type
-    ``token_type``, else 0 — matches the sandbox
-    ``T.extract(input_vec, name)`` semantic exactly. Depth: 2 MLP
+    ``token_type``, else 0. Depth: 2 MLP
     sublayers (the ``compare`` in :func:`_is_type_pm1` and the
     ``cond_gate``); the raw-extract ``Linear`` folds into one of them.
     """
@@ -274,8 +273,7 @@ def extract_int_slot(input_vec: Node, slot_name: str) -> Node:
     """Auto-masked flat-namespace IntSlot read.
 
     Same as :func:`extract_int_slot_raw`, but returns 0 when no
-    declaring type is active (instead of ``lo``). Matches the
-    sandbox ``extract_int_slot`` semantic.
+    declaring type is active (instead of ``lo``).
     """
     return _extract_flat_auto_masked(input_vec, slot_name, IntSlot)
 
@@ -298,7 +296,7 @@ def extract_derived(input_vec: Node, derived_name: str) -> Node:
 
     Derived spans carry ``fn(slot_value)`` baked in at embed time for any
     row of a declaring type, and 0 elsewhere. No inverse / auto-mask is
-    needed — a 0 read on a non-declaring type is the correct sandbox
+    needed — a 0 read on a non-declaring type is the correct
     semantic.
 
     Returns a ``width``-wide ``Node`` (1-wide for scalar derivations).

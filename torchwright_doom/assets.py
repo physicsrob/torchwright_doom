@@ -1,15 +1,15 @@
 """Compiled texture and flat lookup helpers.
 
-Real-side port of ``doom_sandbox/implementation/forward/assets.py``: the
+The
 ``WallAssets`` / ``FlatAssets`` metadata accessors and full-resolution
 ``palette_index`` lookups, wired onto the zero-``past.publish`` ``AssetIndex``
 shell that ``scene_index.py`` constructs.
 
-``Vec`` -> ``Node`` and the sandbox ``...api`` imports become ``.std``; the
+``Vec`` -> ``Node`` and the original ``...api`` imports become ``.std``; the
 compiled banks come from :mod:`.asset_banks` (data-source **B**). Per the
 no-import-time-nodes rule, module-level state is **raw data only** — numpy
 ``table`` reshapes, row-address lists, and ``pwl_def`` closures (which build no
-node until called). The sandbox's module-level ``constant(...)`` selection
+node until called). The original module-level ``constant(...)`` selection
 tables are instead wrapped *inside* the accessor methods, so ``global_node_id``
 stays ``0`` after import.
 """
@@ -61,7 +61,7 @@ _U_MOD_BY_BANK = tuple(
 def _snap_index(index: Node, n: int, values: list[float]) -> Node:
     """Round ``index`` to its exact integer value via ``one_hot`` -> pick.
 
-    ``values`` is raw data (the sandbox passes a ``constant(...)`` node); the
+    ``values`` is raw data (the original passes a ``constant(...)`` node); the
     ``constant`` is built here, inside the call, not at module level.
     """
     return pick_by_one_hot(one_hot(index, n), constant(values))

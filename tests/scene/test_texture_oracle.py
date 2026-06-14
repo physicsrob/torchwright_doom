@@ -6,7 +6,7 @@ asset accessors with literal query inputs, ``reference_eval`` the channel, and
 compare to the WAD-loaded ``ASSET_BOOK`` pixels / ``COLORMAP_ROWS`` within
 ``1e-3``. No compile, no GPU, no rollout, no geometry.
 
-Mirrors ``doom_sandbox/implementation/test_texture_prefill.py``. Covers the
+Covers the
 floors named in plan_i.md: a wall lookup that exercises the ``u``-wrap, one that
 hits the missing-texture bank 0, a flat, and a non-zero ``colormap_row``; plus
 the de-stubbed ``WallAssets.height`` / ``h_idx_oh`` metadata and the

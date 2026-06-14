@@ -1,8 +1,8 @@
 # Port target (Plan A: vocab alignment)
 
 **Screen scale: 160×100 (shipped).** The spec09 port ran the whole way
-at the sandbox fixture default of 60×50 (exact token-by-token prompt
-parity with the sandbox fixtures); the retarget to the real **160×100**
+at the original fixture default of 60×50 (exact token-by-token prompt
+parity with the original fixtures); the retarget to the real **160×100**
 has since shipped. The mechanism is config-driven, not a constants
 edit: `configs/e1m1.yaml` sets `model.scale: 2` and
 `apply_screen_env` (`inference/config.py`) exports the screen dims
@@ -16,13 +16,12 @@ re-port.
 **Vocab contract.** `torchwright_doom.embedding.TOKEN_VOCAB` is the single
 source of truth for the token vocabulary (108 types; cardinality 93,114 at the
 60×50 fixture scale). It was proven token-for-token identical to the original
-`doom_sandbox` vocab before the sandbox was removed. The vendored drafter and
+plain-Python vocab before that implementation was removed. The vendored drafter and
 the compiled model both derive their tokens from this one vocab, so they stay
 token-identical by construction; the end-to-end guard is the whole-frame
 routing gate (`tests/scene/test_flat_pixel_oracle.py`).
 
 **Baseline SHAs (Plan A landing):**
-- `doom_sandbox`: `23ca589` (main) — the contract reference.
 - `torchwright_doom`: the Plan A commit series (`A0`…`A8`).
 - umbrella: `9c0ec42` + the Plan A pointer bump (deferred; working
   locally per the current task — not yet pushed).

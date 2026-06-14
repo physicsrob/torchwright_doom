@@ -364,7 +364,7 @@ class Layout:
 
 # ---------------------------------------------------------------------------
 # TokenVocab — owns the ordered row table and the layout, with a
-# cardinality budget that mirrors the sandbox's TokenVocab.
+# cardinality budget that mirrors the original TokenVocab.
 # ---------------------------------------------------------------------------
 
 
@@ -439,7 +439,7 @@ def _type_cardinality(t: TokenType) -> int:
 
 
 def _slot_value_for_index(slot: IntSlot | FloatSlot, idx: int) -> int | float:
-    """Slot value at the ``idx``-th step (matches the sandbox encoder)."""
+    """Slot value at the ``idx``-th step (matches the original encoder)."""
     if isinstance(slot, IntSlot):
         return slot.lo + idx
     span = slot.hi - slot.lo

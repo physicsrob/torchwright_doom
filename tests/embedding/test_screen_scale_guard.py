@@ -1,7 +1,7 @@
 """Anti-toy-scale guard: no bare screen-dimension literals.
 
 The production config renders at 160x100 (``configs/e1m1.yaml``
-``model.scale: 2`` via ``apply_screen_env``); the 60x50 sandbox fixture
+``model.scale: 2`` via ``apply_screen_env``); the 60x50 fixture
 scale remains the bare-import default in ``constants.py``. The scale
 stays a config swap (not a re-port) only if every screen-derived
 width/range references ``SCREEN_WIDTH`` / ``SCREEN_HEIGHT`` symbolically

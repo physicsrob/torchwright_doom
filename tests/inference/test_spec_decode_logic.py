@@ -96,7 +96,7 @@ class _MockCompiled(TokenRuntime):
 
 
 def _ident_argmax(out: torch.Tensor) -> list[int]:
-    """Identity argmax over plain int 'logits' (no W_EMBED, no doom_sandbox)."""
+    """Identity argmax over plain int 'logits' (no W_EMBED, no pydoom)."""
     return [int(round(float(x))) for x in out[:, 0]]
 
 

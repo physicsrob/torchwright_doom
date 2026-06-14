@@ -14,7 +14,7 @@ test in ``protocol_tokens.py`` and ``scene_tokens.py`` (both import it as
 ``_input_type_matches``): each phase test calls it to compare the previous
 position's input type against the marker that gates that phase.
 
-The sandbox built a one-hot ``linear`` over ``VOCAB.types``; the real side
+The original built a one-hot ``linear`` over ``VOCAB.types``; the real side
 repoints the body at :func:`torchwright_doom.extract.type_matches`,
 which does the E8 dot-product plus ``compare`` directly on the 8-wide code.
 """

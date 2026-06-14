@@ -9,9 +9,9 @@ Mirrors the four checks called out in the embedding-port plan:
 3. Derived-column round-trip: for a sample of tokens spanning each
    type that declares ``derived`` columns, the values in W_EMBED match
    the declared functions evaluated on the same slot values.
-4. Cross-check against ``doom_sandbox`` embed: for a parallel ANGLE_VALUE
-   built through the sandbox API, the derived columns the sandbox writes
-   match what W_EMBED holds for the same angle.
+4. Cross-check the derived columns: for an ANGLE_VALUE row, the derived
+   columns W_EMBED holds match the declared derived functions evaluated
+   on the same angle.
 """
 
 from __future__ import annotations

@@ -18,8 +18,7 @@ DOOM's `R_RenderBSPNode` tree walk:
 The lower-level dynamic stack record is still in `traversal_edges.py`; this
 file decides which edges are taken and what each traversal token emits next.
 
-Ported from ``doom_sandbox/implementation/forward/bsp_traversal.py``. Changes
-from the sandbox source: the import block (``Vec`` -> ``Node``; ``Past`` ->
+Changes from the original: the import block (``Vec`` -> ``Node``; ``Past`` ->
 ``GraphPast``; std helpers / ``make_token`` -> ``make_token_head`` / the side ops
 from the real-side shim); ``ZERO`` is created inline as ``constant(0.0)`` (no
 import-time nodes). The R_CheckBBox coupling: ``publish`` builds
@@ -249,7 +248,7 @@ def _think_side_compute(scene: SceneIndex, node: Node) -> Node:
 
     DOOM's `R_PointOnSide` stores a BSP partition as `(x, y, dx, dy)` and uses
     the sign of `(dy * (viewx - x)) - (dx * (viewy - y))` to choose which child
-    is front for the current viewpoint. The sandbox computes the same general
+    is front for the current viewpoint. The original computes the same general
     cross-product form, without DOOM's integer/XOR fast paths.
 
     The result is emitted through SIDE_RECORD rather than directly published

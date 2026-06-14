@@ -1,8 +1,8 @@
-"""Vendored BSP plane scalars (``doom_sandbox`` ``bsp.py``).
+"""Vendored BSP plane scalars.
 
 ``decode_child`` / ``make_plane`` / ``side_P`` plus the ``BspPlane`` tuple — the
 handful of pure-scalar helpers the Python renderer and drafter call. The rest of
-the sandbox ``bsp`` module (path coefficients, traversal ordering) became the
+the original ``bsp`` module (path coefficients, traversal ordering) became the
 compiled BSP graph and has no counterpart here. Copied verbatim.
 """
 

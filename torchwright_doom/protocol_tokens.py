@@ -13,10 +13,9 @@ immediately preceding marker says whether that number is scene data, projection
 state, or some future AR thinking payload. This is why carrier rows are kept out
 of the broad "inert prefill" branch below and routed separately.
 
-Ported from ``doom_sandbox/implementation/forward/protocol_tokens.py``. Changes
-from the sandbox source: the import block (``Vec`` -> ``Node``; the std helpers,
-token declarations, registry exports, and value-range surface now come from the
-real-side shim / vocab / registry). The one-token dispatch predicates are
+Changes from the original: the import block (``Vec`` -> ``Node``; the std
+helpers, token declarations, registry exports, and value-range surface now come
+from the real-side shim / vocab / registry). The one-token dispatch predicates are
 installed from the registry by ``_install_registry_token_checks()`` (an
 import-time side effect that mutates the class); the context-sensitive
 cached properties, the ``value_derived(input_vec, range_id[, kind])`` direct

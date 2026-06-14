@@ -29,13 +29,12 @@ Channel contract used below:
 - `*_marker` is the same-row presence bit used by optional lookups to
   distinguish a real match from a no-match fallback.
 
-Ported from ``doom_sandbox/implementation/forward/scene_facts.py``. Changes
-from the sandbox source: the import block (``Vec`` -> ``Node``; ``Past`` ->
+Changes from the original: the import block (``Vec`` -> ``Node``; ``Past`` ->
 ``GraphPast``; ``one_hot`` from the real-side shim, token declarations from
 ``vocab``, constants/ops from the real-side render shim). The five index
 dataclasses, their ``publish`` classmethods, the 13 module-level lookup
 helpers, and ``SegIndex.is_portal`` are a line-for-line port -- except that
-the node and seg VALUE-backed lookups, which the sandbox kept as separate
+the node and seg VALUE-backed lookups, which the original kept as separate
 helpers, are merged here into the single ``_keyed_value_lookup`` (it differs
 only in which header context supplies the key).
 """

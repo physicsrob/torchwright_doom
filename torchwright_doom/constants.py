@@ -11,9 +11,9 @@ Porting scale: the production config renders at 160×100
 (``configs/e1m1.yaml`` ``model.scale: 2``); ``apply_screen_env``
 (``inference/config.py``) exports the screen dims via the env vars read
 below before graph modules import. The 60×50 defaults here are the
-bare-import fallback — the sandbox fixture scale, which is what tests
-that import the graph without a config see (it gives exact
-token-by-token prompt parity with the sandbox fixtures). Every
+bare-import fallback — the reference renderer (pydoom) fixture scale,
+which is what tests that import the graph without a config see (it gives
+exact token-by-token prompt parity with the pydoom fixtures). Every
 screen-derived width must reference these names, never a literal 60/50
 (guarded by a test), so the scale stays a config swap.
 """
@@ -71,5 +71,5 @@ SCREEN_WIDTH = _screen_dim_from_env(
 SCREEN_HEIGHT = _screen_dim_from_env(
     "TORCHWRIGHT_DOOM_SCREEN_HEIGHT", _default_height, minimum=2
 )
-# Screen vertical centre (the projection horizon); sandbox ``reference.CENTER_Y``.
+# Screen vertical centre (the projection horizon).
 CENTER_Y = SCREEN_HEIGHT / 2.0

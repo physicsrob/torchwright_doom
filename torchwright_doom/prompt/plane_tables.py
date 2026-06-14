@@ -75,7 +75,7 @@ def _subsector_front_sector(md: MapData, s: int) -> Sector | None:
 def build_plane_tables(
     md: MapData, flat_ids: dict[str, int] | None = None
 ) -> PlaneTables:
-    # Global asset flat numbering (matches the sandbox), so PLANE_DEF.flat_id
+    # Global asset flat numbering (matches the original), so PLANE_DEF.flat_id
     # *and* plane ordering (sorted by flat_id) align with get_prefill. Assumes
     # the map's flats are compiled into asset_config.FLAT_ID_BY_NAME.
     flat_ids = FLAT_ID_BY_NAME if flat_ids is None else flat_ids

@@ -1,4 +1,4 @@
-"""Graph-construction facade for sandbox-style ``Past`` reads.
+"""Graph-construction facade for the original's ``Past``-style reads.
 
 ``GraphPast`` stores graph ``Node`` references in lightweight handles and
 lowers each read to an existing torchwright attention primitive. It does
@@ -93,7 +93,7 @@ class GraphPast:
             "GraphPast.input_slot is intentionally deferred. Use typed "
             "TOKEN.extract(input_vec, slot) / extract_derived(...) at the "
             "call site; full input_slot parity also needs an explicit "
-            "validity handle to preserve sandbox published-bit semantics."
+            "validity handle to preserve the original published-bit semantics."
         )
 
     def pick_argmax(

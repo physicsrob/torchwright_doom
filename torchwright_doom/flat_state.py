@@ -6,8 +6,7 @@ terms used here: ``subcontext`` (the named ``SegProjection`` slice this state
 hangs off), ``span`` (a horizontal run of floor/ceiling pixels at one screen
 row), and ``visplane`` / ``marker``.
 
-Real-side port of ``doom_sandbox/implementation/forward/flat_state.py`` — the
-``FlatPassState`` that owns two things:
+Real-side port of the ``FlatPassState`` that owns two things:
 
 1. **R_MakeSpans span open/close** (``r_plane.c:338-359``). Iterating columns
    ``minx..maxx+1``, it compares the previous column's coverage (``t1/b1``)
@@ -25,8 +24,8 @@ Real-side port of ``doom_sandbox/implementation/forward/flat_state.py`` — the
 The flat-pass control flow that drives the tokens this state feeds is mapped in
 ``flat_pass_renderer.py``.
 
-Changes from the sandbox: ``Vec`` -> ``Node``; ``...api`` -> ``.std``; the
-sandbox ``.ops`` shims -> ``.render_ops``; module-level ``constant`` / ``floor``
+Changes from the original: ``Vec`` -> ``Node``; ``...api`` -> ``.std``; the
+``.ops`` shims -> ``.render_ops``; module-level ``constant`` / ``floor``
 / ``multiply`` / ``clamp`` nodes relocated inside ``publish()`` (no import-time
 graph nodes); plain-list ``linear`` weight matrices stay at module level.
 """

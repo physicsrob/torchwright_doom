@@ -4,8 +4,7 @@ The graph still builds branch nodes in the owner modules. This registry owns the
 cross-cutting metadata that otherwise drifts: vocab phase, inert/replay policy,
 payload-marker groups, and current-token dispatch wiring.
 
-Ported from ``doom_sandbox/implementation/protocol_registry.py``. The only
-changes from the sandbox source are the import block (``TokenType`` from the
+The only changes from the original are the import block (``TokenType`` from the
 real ``tokens``; the token declarations from ``vocab``) and a whitespace-clean
 ``render_protocol_table`` (empty payload rows no longer end in a trailing
 ``| ``). The entries, builders, and exports are a line-for-line port.

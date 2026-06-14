@@ -15,7 +15,7 @@ compilation, so a successful ``compile_to_onnx`` + ``onnx.checker`` == a
 structurally correct artifact. The forward's *graph math* is validated separately
 by the ``reference_eval`` oracle gates (``test_{projection,bbox,traversal}_oracle``).
 
-It is also the regression guard for the dispatch output head: the literal sandbox
+It is also the regression guard for the dispatch output head: the literal
 ``type_switch`` (one full ``d_embed`` row per branch) needs a ~53k-wide residual;
 the head-gated ``max_fanout`` reduction here compiles at a modest ``d``.
 

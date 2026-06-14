@@ -1,11 +1,11 @@
 """Autoregressive renderer dispatch: the per-token forward pass.
 
-Mirrors ``doom_sandbox/implementation/forward/main.py``: ``forward()`` builds
-the read-side ``SceneIndex`` + ``ProtocolTokenView``, publishes the runtime
-protocol owners (BSP traversal, seg projection, and the payload router), builds
-each branch's next-token, then dispatches by the current input token's type.
+``forward()`` builds the read-side ``SceneIndex`` + ``ProtocolTokenView``,
+publishes the runtime protocol owners (BSP traversal, seg projection, and the
+payload router), builds each branch's next-token, then dispatches by the
+current input token's type.
 
-**The output head (the fan-out fix).** The sandbox dispatch sums one type-gated
+**The output head (the fan-out fix).** The original dispatch sums one type-gated
 *full* ``d_embed`` row per transition; at ~64 transitions that needs a huge
 residual and will not compile. The port replaces it (see ``dispatch_next_token``):
 branches are built as emit *heads* (``head_width()`` — the constant derived tail
@@ -16,10 +16,10 @@ shared ``emit_derived_zero`` is concatenated at the end. The full row is
 byte-identical to a per-transition ``make_token`` row, so the teacher-forced
 oracle is unchanged, and the dispatch width barely grows with the token count.
 
-Changes from the sandbox source: ``Vec`` -> ``Node``; ``Past`` -> ``GraphPast``
+Changes from the original: ``Vec`` -> ``Node``; ``Past`` -> ``GraphPast``
 / ``PastHandleScope``; ``make_token`` -> ``make_token_head`` + a shared derived
 tail; ``ForwardOutput`` -> the next-token ``Node`` returned directly. The
-sandbox's prefill-replay ``select`` is not ported (see ``dispatch_next_token``).
+original's prefill-replay ``select`` is not ported (see ``dispatch_next_token``).
 """
 
 from __future__ import annotations
@@ -139,7 +139,7 @@ def dispatch_next_token(
 ) -> Node:
     """Select the one branch's next-token that matches the current input token.
 
-    This is the transformer's output head. The sandbox's ``type_switch`` sums
+    This is the transformer's output head. The original's ``type_switch`` sums
     one type-gated *full* ``d_embed`` row **per transition** — at ~64
     transitions that needs a huge residual to compile. Two changes shrink it to
     a handful of narrow columns while staying a single flat sum (no deep
@@ -159,7 +159,7 @@ def dispatch_next_token(
        next-token head (~8 this phase) rather than 64. Because exactly one
        transition predicate is +1, exactly one grouped predicate is +1.
 
-    **Not ported:** the sandbox also wraps dispatch in a prefill-replay
+    **Not ported:** the original also wraps dispatch in a prefill-replay
     ``select`` so prefill rows re-emit their input verbatim (a render-trace
     nicety; those emissions are discarded and ``BEGIN`` — the AR seed — is not
     replayed). That replay is **deferred** (which is why this function takes no
@@ -251,7 +251,7 @@ def forward(
         )
 
     # The projection texel path (Phase J) reads the position as a *scalar* value
-    # (sandbox ``pos`` is a 1-Vec): pixel_index = pos - span_v0.pos - 1, and the
+    # (the original's ``pos`` is a 1-Vec): pixel_index = pos - span_v0.pos - 1, and the
     # span-v0 / flat-cursor publishes stamp it. Extract the raw integer counter
     # column from the PosEncoding (``SceneIndex.build``'s ``pos`` is unused).
     with annotate("dispatch"):

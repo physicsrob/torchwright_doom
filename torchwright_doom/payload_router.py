@@ -10,8 +10,7 @@ built in ``render_main.publish_runtime_protocols`` (held on
 branches route their carriers through ``after_value`` / ``after_angle_value``
 here.
 
-Ported from ``doom_sandbox/implementation/forward/payload_router.py``. The
-``BBoxPruner`` (published by ``BspTraversal``) is the VALUE fallback for the
+The ``BBoxPruner`` (published by ``BspTraversal``) is the VALUE fallback for the
 bbox corner rows and owns the ``is_bbox_angle`` ANGLE_VALUE arm.
 """
 

@@ -1,7 +1,5 @@
 """Read-only mixed branch owner for wall/flat pixel transitions.
 
-Ported from ``doom_sandbox/implementation/forward/pixel_dispatcher.py``.
-
 The three shared pixel/cursor branches (``after_wall_column`` on SET_CURSOR_X,
 ``after_set_cursor_y`` on SET_CURSOR_Y, ``after_pixel_color`` on PIXEL) are
 **shared** between the wall and flat passes; each forks on the runtime boolean
@@ -11,7 +9,7 @@ so before the flat pass ``flat_span_seen`` is structurally false and every fork
 degenerates to the wall arm. The full flat-pass token sequence (where these
 shared branches sit in it) is mapped in ``flat_pass_renderer.py``.
 
-Changes from the sandbox: ``Vec`` -> ``Node``; ``make_token`` ->
+Changes from the original: ``Vec`` -> ``Node``; ``make_token`` ->
 ``make_token_head``; ``make_value`` -> the eager R3 VALUE head (so the
 ``after_set_cursor_y`` ``select`` chooses between two head ``Node``\\ s, not a head
 vs. a ``ScalarEmit``); ``ONE`` -> ``add_const(., -1.0)``; the module-level

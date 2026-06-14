@@ -5,7 +5,7 @@ full ``emit_token`` row — it selects over 236-col *heads* and concatenates one
 shared ``emit_derived_zero`` tail at the end. That is only correct if
 ``concat(emit_token_head(t, **s), emit_derived_zero())`` is value-identical to
 ``emit_token(t, **s)`` for every token, so the teacher-forced oracle and the
-free-run argmax see exactly the sandbox row. The whole-forward compile tests
+free-run argmax see exactly the reference row. The whole-forward compile tests
 exercise this end-to-end but are heavy; this pins the equivalence directly and
 cheaply (exact math, no compile), for slotless, one-slot, and two-slot tokens.
 """

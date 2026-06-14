@@ -1,7 +1,5 @@
 """Wall-column runtime state for the SegProjection ``wall`` subcontext (Phase H).
 
-Ported from ``doom_sandbox/implementation/forward/wall_column_state.py``.
-
 Sentinel/constant nodes are built inside the publish methods, not at module
 scope — see GLOSSARY.md 'the import-time-node rule'.
 """

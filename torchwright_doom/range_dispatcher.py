@@ -6,7 +6,6 @@ host-visible clip/visplane merge token): that builder constructs a
 ``RangeDispatcher`` and wires its ``after_screen_range`` head to the
 ``"screen_range"`` dispatch branch.
 
-Ported from ``doom_sandbox/implementation/forward/range_dispatcher.py``;
 ``type_switch`` exists real-side (``std``), so the two-arm wall/visplane merge
 ports directly.
 """

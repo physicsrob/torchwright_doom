@@ -14,10 +14,10 @@ returned so the local entrypoint mirrors them to ``out/<run>/`` on disk —
 ``make modal-run`` only captures stdout, which is exactly why this dedicated
 entrypoint exists (the one sanctioned new root ``modal_*.py``).
 
-The shared image includes ``numba`` for the ``doom_sandbox`` runtime;
-``modal_image.ASSETS_IMAGE`` adds the sibling ``doom_sandbox`` checkout (code +
-fixture JSONs + WAD) at ``/root/doom_sandbox`` so the reference renderer and
-drafter import there.
+The shared image includes ``numba`` for the reference renderer (pydoom)
+runtime; ``modal_image.ASSETS_IMAGE`` mounts the ``torchwright_doom`` package
+(which vendors pydoom) plus the WAD so the reference renderer and drafter
+import there.
 """
 
 from __future__ import annotations
@@ -167,7 +167,7 @@ def render_remote(
     import sys
 
     if "/root" not in sys.path:
-        sys.path.insert(0, "/root")  # make /root/doom_sandbox importable
+        sys.path.insert(0, "/root")  # make the /root-mounted packages importable
 
     from torchwright_doom.inference.cli import run_config
 

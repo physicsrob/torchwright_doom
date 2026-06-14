@@ -1,4 +1,4 @@
-"""Doom wall-lighting helpers (ported verbatim from the sandbox).
+"""Doom wall-lighting helpers.
 
 These functions mirror the integer row-selection logic used by Doom's
 ``scalelight`` / ``zlight`` tables for textured walls and flats. They do
@@ -8,11 +8,9 @@ index after COLORMAP indirection).
 Pure integer/float math with no project dependencies — ported as the
 source of truth for the ``wall_scale_diminish`` VALUE-derived column
 (see :func:`value_ranges.value_derived_columns`) and for the forward
-renderer's lighting. Kept faithful to the sandbox so the
-translation table maps 1:1.
+renderer's lighting.
 
-Ported from ``doom_sandbox/implementation/doom_lighting.py`` (the sandbox's
-top-level lighting math, not the ``forward/`` graph port).
+Ported from DOOM's scalelight/zlight lighting math (r_main.c / r_segs.c).
 """
 
 from __future__ import annotations
@@ -82,10 +80,10 @@ def doom_wall_scale_index_from_fixed(rw_scale_fixed: int) -> int:
 
 
 def doom_wall_scale_index(scale: float) -> int:
-    """Return the light-scale index for a real-valued sandbox wall scale.
+    """Return the light-scale index for a real-valued wall scale.
 
-    The sandbox reference stores Doom fixed-point scales as real values where
-    ``1.0`` corresponds to ``FRACUNIT``.
+    The reference renderer (pydoom) stores Doom fixed-point scales as real
+    values where ``1.0`` corresponds to ``FRACUNIT``.
     """
 
     scale = float(scale)
@@ -243,7 +241,7 @@ def doom_flat_distance_index(distance: float) -> int:
     """Return the clamped ``zlight`` distance bucket for a real distance.
 
     DOOM does ``distance_fixed >> LIGHTZSHIFT`` on a fixed-point distance;
-    the real-valued sandbox equivalent is ``int(distance) >> 4``.
+    the real-valued equivalent is ``int(distance) >> 4``.
     """
 
     if distance < 0.0:

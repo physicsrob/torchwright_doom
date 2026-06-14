@@ -1,8 +1,7 @@
 """Read-side std/helper shim.
 
-Mirrors the sandbox ``...api`` std surface the ported renderer read-side
-imports, lowering each to an existing torchwright op per
-``docs/sandbox/translation_table.md``. The helpers fall into these categories:
+The std surface the ported renderer files import from, lowering each to an
+existing torchwright op. The helpers fall into these categories:
 
 - Column plumbing (residual-column reshaping): ``concat``, ``split``,
   ``linear``, ``reduce_sum``.
@@ -24,11 +23,9 @@ dispatch is built from: ``render_main.dispatch_next_token`` uses
 to pick a numeric carrier / world-angle scalar float-exact from its
 candidates.
 
-The two helpers the sandbox also imports from ``...api`` but which already
-exist on the real side — ``extract_derived`` and ``indicator_to_bool`` (in
-:mod:`.extract`) — are re-exported here so a ported file has a single
-sandbox-api-equivalent import source, exactly as the sandbox imported them
-all from ``...api``.
+Two helpers that already exist on the real side — ``extract_derived`` and
+``indicator_to_bool`` (in :mod:`.extract`) — are re-exported here so a ported
+file has a single import source for the whole std surface.
 
 These are graph-construction helpers: each returns a torchwright
 ``Node``. There is no runtime state.
@@ -102,7 +99,7 @@ __all__ = [
 
 
 def concat(*nodes: Node) -> Node:
-    """Join node column ranges end to end (sandbox ``concat``).
+    """Join node column ranges end to end.
 
     Lowers to :class:`Concatenate`. A single argument passes through
     unchanged (``Concatenate`` of one node would be a no-op anyway).
@@ -125,7 +122,7 @@ def _column_selector(d_in: int, start: int, width: int) -> torch.Tensor:
 def split(node: Node, sizes: list[int]) -> list[Node]:
     """Slice ``node`` into consecutive sub-ranges of the given ``sizes``.
 
-    The sandbox ``split`` is free metadata; on the real graph each piece
+    The original ``split`` is free metadata; on the real graph each piece
     is a fused identity ``Linear`` reading exactly its column range (the
     same column-select pattern :mod:`.extract` uses), which folds into
     its consumer.
@@ -148,17 +145,17 @@ def split(node: Node, sizes: list[int]) -> list[Node]:
 
 
 def linear(node: Node, output_matrix: list[list[float]]) -> Node:
-    """Fixed ``(d_input, d_output)`` projection (sandbox ``linear``).
+    """Fixed ``(d_input, d_output)`` projection.
 
     ``output_matrix`` is plain numpy/list weight data, not a node — the
-    real-graph weight analog — matching the sandbox contract exactly.
+    real-graph weight analog — matching the original contract exactly.
     """
     weights = torch.tensor(output_matrix, dtype=torch.float32)
     return Linear(node, weights)
 
 
 def constant(value: float | int | list[float]) -> Node:
-    """Module-level fixed value (sandbox ``constant``).
+    """Module-level fixed value.
 
     Scalars become 1-wide literals; lists become width-N literals.
     """
@@ -186,7 +183,7 @@ def one_hot(scalar: Node, n: int) -> Node:
     marks position ``i`` true when ``scalar <= i + 0.5 < scalar + 1`` —
     i.e. ``i - 0.5 < scalar <= i + 0.5`` — so an integer ``scalar = k``
     selects index ``k`` cleanly, with the same ``1/step_sharpness``
-    half-integer blend zones as the sandbox's trapezoidal kernel.
+    half-integer blend zones as the original's trapezoidal kernel.
     """
     if len(scalar) != 1:
         raise ValueError(f"one_hot expects a scalar node, got width {len(scalar)}")
@@ -194,7 +191,7 @@ def one_hot(scalar: Node, n: int) -> Node:
 
 
 def gate(cond: Node, value: Node) -> Node:
-    """Zero-false value masking (sandbox ``gate`` -> ``cond_gate``).
+    """Zero-false value masking (lowers to ``cond_gate``).
 
     ``cond`` is a width-1 ±1 boolean; ``value`` passes through when
     ``cond`` is +1 and is zeroed when ``cond`` is -1.
@@ -203,31 +200,30 @@ def gate(cond: Node, value: Node) -> Node:
 
 
 def bool_and(*conds: Node) -> Node:
-    """Boolean conjunction over ±1 predicates (sandbox ``bool_and``)."""
+    """Boolean conjunction over ±1 predicates."""
     return bool_all_true(list(conds))
 
 
 def bool_or(*conds: Node) -> Node:
-    """Boolean disjunction over ±1 predicates (sandbox ``bool_or``)."""
+    """Boolean disjunction over ±1 predicates."""
     return bool_any_true(list(conds))
 
 
-def sum(*nodes: Node) -> Node:  # noqa: A001 - intentional sandbox-api shadow
-    """Pointwise N-ary sum of same-width nodes (sandbox ``sum``).
+def sum(*nodes: Node) -> Node:  # noqa: A001 - intentional std-surface shadow
+    """Pointwise N-ary sum of same-width nodes.
 
-    Shadows ``builtins.sum`` for callers that ``from .std import sum``,
-    exactly as the sandbox ``...api`` ``sum`` does.
+    Shadows ``builtins.sum`` for callers that ``from .std import sum``.
     """
     return sum_nodes(list(nodes))
 
 
 def select(cond: Node, true_value: Node, false_value: Node) -> Node:
-    """Two-way ±1-boolean branch (sandbox ``select``)."""
+    """Two-way ±1-boolean branch."""
     return _select(cond, true_value, false_value)
 
 
 def type_switch(*pairs: tuple[Node, Node], max_fanout: int | None = None) -> Node:
-    """Mutually-exclusive branch selection (sandbox ``type_switch``).
+    """Mutually-exclusive branch selection.
 
     Each argument is a ``(condition, value)`` pair; exactly one condition is
     +1. Lowers to a sum of type-gated values (``cond_gate``). ``max_fanout``
@@ -245,7 +241,7 @@ def type_switch(*pairs: tuple[Node, Node], max_fanout: int | None = None) -> Nod
 
 
 def reduce_sum(node: Node) -> Node:
-    """Sum across a node's components to a 1-wide node (sandbox ``reduce_sum``).
+    """Sum across a node's components to a 1-wide node.
 
     A single ``Linear`` with an all-ones column vector.
     """
@@ -254,14 +250,12 @@ def reduce_sum(node: Node) -> Node:
 
 
 def pick_by_one_hot(mask: Node, table: Node, d_fill: int = 1) -> Node:
-    """Select slot value(s) from a slot-major runtime table by a one-hot mask
-    (sandbox ``pick_by_one_hot``).
+    """Select slot value(s) from a slot-major runtime table by a one-hot mask.
 
     ``mask`` is a width-``n_slots`` 0/1 one-hot; ``table`` is width
     ``n_slots * d_fill`` (slot-major). Lowers to ``broadcast_select`` (each
     slot picks its ``table`` value where the ±1 mask is +1, else 0) followed by
-    a fixed ``Linear`` that sums across slots — the porting target named in
-    ``docs/sandbox/translation_table.md``. Result width is ``d_fill``.
+    a fixed ``Linear`` that sums across slots. Result width is ``d_fill``.
     """
     n_slots = len(mask)
     if len(table) != n_slots * d_fill:
@@ -288,13 +282,11 @@ def pick_by_one_hot(mask: Node, table: Node, d_fill: int = 1) -> Node:
 
 
 def pick_by_index(index: Node, table: Node, n_slots: int, d_fill: int = 1) -> Node:
-    """Select slot value(s) from a slot-major runtime table by a scalar index
-    (sandbox ``pick_by_index``).
+    """Select slot value(s) from a slot-major runtime table by a scalar index.
 
     ``index`` is a width-1 scalar carrying an integer in ``[0, n_slots)``;
     ``table`` is width ``n_slots * d_fill`` (slot-major). Lowers directly to
-    torchwright ``dynamic_extract`` (the porting target named in
-    ``docs/sandbox/translation_table.md``), which is itself
+    torchwright ``dynamic_extract``, which is itself
     ``in_range`` -> ``broadcast_select`` -> fixed ``Linear`` sum. Result width
     is ``d_fill``.
     """
@@ -304,14 +296,14 @@ def pick_by_index(index: Node, table: Node, n_slots: int, d_fill: int = 1) -> No
 def pwl_def(
     fn, breakpoints: int, input_range: tuple[float, float], *, name: str = "pwl"
 ) -> Callable[[Node], Node]:
-    """Build a reusable 1D piecewise-linear function (sandbox ``pwl_def``).
+    """Build a reusable 1D piecewise-linear function.
 
     Returns a callable that applies the PWL to a scalar node, mirroring the
-    sandbox ``PWLDef`` pattern: construct once at module level, apply many times
+    original ``PWLDef`` pattern: construct once at module level, apply many times
     inside the graph builders. ``breakpoints`` is the grid resolution (an int);
     the grid spans ``input_range`` uniformly. ``fn`` is sampled at each
     breakpoint and the result linearly interpolates between them, lowering to
-    torchwright ``piecewise_linear`` (translation_table row ``pwl_def``).
+    torchwright ``piecewise_linear``.
 
     The returned callable — not this factory — is what builds a graph node, so
     the tuple-of-PWLs module-level pattern (``_U_MOD_BY_BANK``,
@@ -332,11 +324,10 @@ def pwl_def(
 def table_lookup_2d(
     i: Node, j: Node, table, *, index_scale: float = 1.0, sharpness: float = 100.0
 ) -> Node:
-    """Compile-time constant 2D table lookup by scaled integer indices (sandbox
-    ``table_lookup_2d``).
+    """Compile-time constant 2D table lookup by scaled integer indices.
 
     Thin re-export of torchwright core ``table_lookup_2d`` so a ported renderer
-    file reaches it through the same sandbox-api-equivalent ``std`` surface as
+    file reaches it through the same ``std`` surface as
     its other ops. ``table`` is plain numpy/array weight data (not a node), the
     real-graph weight analog — torchwright's builder accepts the raw array.
     Inputs near integer ``k`` select index ``k``; out-of-range indices clamp to
@@ -347,13 +338,13 @@ def table_lookup_2d(
 
 
 def make_token(token_type: TokenType, **slot_value_nodes: Node) -> Node:
-    """Build a next-token residual row (sandbox ``make_token`` -> ``emit_token``).
+    """Build a next-token residual row (lowers to ``emit_token``).
 
     The renderer builds every branch's next-token eagerly at every position and
     masks by token type in ``dispatch``, so a branch's slot inputs are only
     valid at the rows that branch actually fires on; elsewhere a computed slot
     (e.g. ``child_u - N_NODES_MAX`` for a node child, or ``last_node + 1``) goes
-    out of the slot's range. The sandbox ``make_token`` tolerates that via the
+    out of the slot's range. The original ``make_token`` tolerates that via the
     clamping one-hot encoder; the real ``emit_token``'s digit-quad payload does
     not, and an out-of-range value blows up the row (and the downstream
     ``select`` / ``type_switch`` value-range guards). Clamping each slot value
@@ -384,7 +375,7 @@ def clamp(node: Node, lo: float, hi: float) -> Node:
     """Clamp a 1-wide scalar to ``[lo, hi]`` in one MLP sublayer.
 
     A thin re-export of :func:`torchwright.ops.arithmetic_ops.clamp`, so a
-    ported renderer file reaches its clamp through the same sandbox-api-equivalent
+    ported renderer file reaches its clamp through the same
     ``std`` surface as its other ops instead of importing ``torchwright.ops``
     directly. Used by the dispatch's world-angle collapse to pin each candidate
     ``(dx, dy)`` to the atan square before the float-exact pick."""

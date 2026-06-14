@@ -3,8 +3,8 @@
 ``signed_world_angle`` is the chunk's single biggest numeric risk (Plan E
 deferred it as E5): a ray-threshold *count* approximating ``atan2`` whose
 ``compare(sharpness=32000)`` deadband and ±3072 coordinate clamp both have to
-hold for the projected angle to argmax to the exact BAM value the sandbox
-emits. This isolates it — no forward graph, no compile — and checks the
+hold for the projected angle to argmax to the exact BAM value the reference
+renderer emits. This isolates it — no forward graph, no compile — and checks the
 real-graph build against the exact golden BAM angle:
 
 1. a dense angle sweep at radii up to the clamp, covering every octant; and

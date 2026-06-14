@@ -1,6 +1,7 @@
 """Plan E (folded-in): compiled read-side fidelity probe.
 
-Plan D validated the read-side *graph math* (graph oracle vs sandbox/map data)
+Plan D validated the read-side *graph math* (graph oracle vs the reference renderer
+(pydoom) / map data)
 but never ran the SceneIndex *composition* through an actual compile — only the
 Plan A primitives (is_type / extract / emit) had compiled coverage. This test
 closes that gap: it compiles a representative ``SceneIndex`` channel set into a
@@ -9,7 +10,7 @@ compiled module matches the graph oracle (recursive ``node.compute``) at every
 node within tolerance.
 
 This is the *compile-fidelity* half of the two-comparison story (the other half
-— port-correctness, graph oracle vs sandbox — is the Plan D ``test_scene_oracle``
+— port-correctness, graph oracle vs pydoom — is the Plan D ``test_scene_oracle``
 gate). A small hand-built prefill keeps the compile tractable; the point is to
 exercise the read-side *composition* (the ``pick_most_recent`` header contexts,
 the lifted-key lookups, ``mean_where``) through the compiler, not map scale.

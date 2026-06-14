@@ -5,13 +5,13 @@ ceiling/floor regions share the same height, texture, and light level, and
 manages per-visplane column coverage (top[]/bottom[]) to detect conflicts when
 new column ranges must be merged.
 
-Ported from ``doom_sandbox/implementation/forward/visplane_state.py``. The
-sandbox keeps several module-level ``constant(...)`` / ``compare_const(...)``
+The original plain-Python implementation keeps several module-level
+``constant(...)`` / ``compare_const(...)``
 nodes; on the real side a ``constant`` is a graph ``Node`` with a global id, so
 every node-building literal is relocated inside the function that uses it (the
 no-import-time-nodes rule). The plain-list ``linear`` matrices (raw arrays) stay
 at module level. ``compare_const(c, sharpness)`` becomes the real ``compare(node,
-c, sharpness)`` (the sandbox ``input_range`` has no real counterpart).
+c, sharpness)``.
 
 Layout (top to bottom):
 

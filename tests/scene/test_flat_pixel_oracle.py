@@ -51,8 +51,8 @@ _ANGLE_BAM_TOL = 2
 _VALUE_ENC_TOL = 5.0e-3
 # wallColU.u_idx is floor(-(rw_distance·tan)) via a float32 PWL product; near an
 # integer boundary it differs ±1 from the float64 reference's int(). The texel
-# takes it mod texture width and the ±4 UV option set absorbs ±1 (the sandbox
-# forward uses the identical multiply+floor). So wallColU is a ±1-tolerant marker.
+# takes it mod texture width and the ±4 UV option set absorbs ±1 (the original
+# uses the identical multiply+floor). So wallColU is a ±1-tolerant marker.
 _WALLCOL_U_NAME = "wallColU"
 _WALLCOL_U_TOL = 1
 
@@ -76,7 +76,7 @@ def _predicted_rows(emitted_slice: torch.Tensor) -> list[int]:
 
 
 def _decode_pixel_xy(full) -> dict[int, tuple[int, int]]:
-    """Host pixel decode (mirrors sandbox ``extract.extract_pixel_pass``): walk the
+    """Host pixel decode (mirrors the original ``extract.extract_pixel_pass``): walk the
     token stream tracking cursor + direction, recording each PIXEL's ``(x, y)``.
     Walls advance Y (default); flats advance X (after SET_CURSOR_DIRECTION_X)."""
     cursor_dx, cursor_dy = 0, 1
@@ -191,7 +191,7 @@ def flat_pixel_scan(flat_pixel_eval) -> dict:
         expected_row = row_index(*real_pairs[i + 1])
         desc = (
             f"pos {i} (in {full[i].type.name} {dict(full[i].values)}): emitted row "
-            f"{predicted_row} != sandbox {next_name} "
+            f"{predicted_row} != reference {next_name} "
             f"{dict(full[i + 1].values)} (row {expected_row})"
         )
         if next_name == _PIXEL_NAME:

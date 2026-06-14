@@ -1,6 +1,6 @@
 """BBOX derived columns + the ``_CHECKCOORD`` table — anchored to DOOM's source.
 
-Ported from ``doom_sandbox``'s ``test_bbox_derived`` and re-pointed at the in-tree
+Pinned against the in-tree
 protocol tokens. ``torchwright_doom.vocab`` carries its own hand-transcribed
 ``_CHECKCOORD`` table (DOOM's ``R_CheckBBox`` corner-selection table); after the
 renderer/drafter were vendored, nothing else pins it. This anchors that table —

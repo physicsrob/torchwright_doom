@@ -4,7 +4,7 @@ and compare against the reference render.
 
 Submodules (the import graph runs one direction, top to bottom):
 
-- ``tokens_bridge`` — token <-> W_EMBED-row encode/decode + sandbox name bridge.
+- ``tokens_bridge`` — token <-> W_EMBED-row encode/decode.
 - ``kv_cache`` — the runtime-owned static :class:`KVCache` + the windowed
   permanent/expiring slot-placement policy (the HF-StaticCache analog).
 - ``generation`` — :class:`TokenRuntime`, the ABC every generation loop runs

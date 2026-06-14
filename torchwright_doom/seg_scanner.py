@@ -5,14 +5,13 @@ Branch builders follow the ``after_<token>`` convention (see GLOSSARY.md):
 ``X`` token, and ``render_main.build_branch_outputs`` selects exactly one per
 AR step by the current input token's type.
 
-Ported from ``doom_sandbox/implementation/forward/seg_scanner.py``. Owns the
-``R_Subsector`` / ``R_AddLine`` scan-cycle transitions: start a subsector's seg
+Owns the ``R_Subsector`` / ``R_AddLine`` scan-cycle transitions: start a subsector's seg
 loop, backface-cull each seg, run the per-endpoint atan2 / theta-wrap chain
 through the marker→ANGLE_VALUE sequence, then the solidsegs clip loop that
 queries :class:`SolidIntervals` and emits visible screen ranges via
 ``EMIT_X2`` → ``R_STORE_WALL_RANGE``.
 
-Changes from the sandbox source: ``Vec`` -> ``Node``; the sandbox-``api``
+Changes from the original: ``Vec`` -> ``Node``; the original ``api``
 ``make_token`` becomes the real ``make_token_head`` — the renderer's dispatch
 folds over emit *heads* and stamps one shared derived tail after selecting the
 winning branch, so every owner ``after_*`` returns a head (the convention the

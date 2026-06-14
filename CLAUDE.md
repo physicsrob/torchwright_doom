@@ -107,8 +107,8 @@ the tokens the model reads before autoregression) is `prompt/wad.py` →
 `prompt/subset.py` → `prompt/build.py` → `inference/tokens_bridge.py`;
 `README.md` spells out both chains with file:function references.
 
-Each renderer module is ported from a `doom_sandbox` counterpart; many
-docstrings note that provenance and the sandbox path.
+Each renderer module is ported from an original plain-Python counterpart;
+many docstrings note that provenance.
 
 See `GLOSSARY.md` for the coined vocabulary (carrier, head, lifted key,
 radix, digit-quad, flat, visplane, …).

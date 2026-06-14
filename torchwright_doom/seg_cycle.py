@@ -1,11 +1,10 @@
 """Projection seg-cycle state records for the SegProjection ``seg`` subcontext.
 
-Ported from ``doom_sandbox/implementation/forward/seg_cycle.py``. Each record
-is a frozen dataclass with a ``publish()`` classmethod that publishes the
+Each record is a frozen dataclass with a ``publish()`` classmethod that publishes the
 cross-position channels DOOM's ``R_Subsector`` / ``R_AddLine`` inner loop reads
 back at the current row, then recovers the value(s) the branch owner needs.
 
-Changes from the sandbox source: ``Vec`` -> ``Node``; the sandbox-``api`` /
+Changes from the original: ``Vec`` -> ``Node``; the original ``api`` /
 ``.ops`` imports map to the real ``std`` / ``past`` / ``render_ops`` shims.
 """
 

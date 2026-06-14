@@ -34,9 +34,9 @@ The branches, in the order one wall seg flows through them:
     predicate) to record this seg's screen range into the chosen visplane
     instance, so the flat pass can read the region's coverage later.
 
-Ported from ``doom_sandbox/implementation/forward/visplane_marker.py``:
-``make_token`` -> ``make_token_head``, ``Vec`` -> ``Node``; module-level
-``constant`` nodes relocated inside methods. The sandbox ``_VP_AT_CAP`` overflow
+Changes from the original: ``make_token`` -> ``make_token_head``,
+``Vec`` -> ``Node``; module-level
+``constant`` nodes relocated inside methods. The original ``_VP_AT_CAP`` overflow
 ``assert_`` (a never-fires safety check on e1m1 — no two coplanar runs exhaust
 ``N_VP_PER_PLANE_MAX``) has no real-side predicate-assert counterpart and is
 dropped; the gate verifies the actual conflict behaviour instead.
