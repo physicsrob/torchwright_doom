@@ -25,6 +25,13 @@ class ModelConfig:
     d: int = 4096
     d_head: int = 32
     scale: int = 4
+    # Pixel paint detail: "high" = 1 screen column per rendered column (today),
+    # "low" = 2 (DOOM low-detail; the host blits W=2). The 3D view renders
+    # SCREEN_WIDTH // pixel_width columns either way. Default "high" preserves
+    # today's render for any config that doesn't opt in (a "low" default would
+    # silently halve the column count of the scale-2 config). Rides the
+    # compile-cache key via asdict(config.model) (busts every key once).
+    detail: str = "high"
     d_hidden: int | None = None
     max_layers: int = 200
     trim_heads: bool = True
@@ -208,8 +215,8 @@ def resolve_run_args(
 
 
 def screen_dims_for_scale(scale: int) -> tuple[int, int]:
-    if scale not in (2, 4):
-        raise ValueError("scale must be 4 (80x50) or 2 (160x100); scale=1 is deferred")
+    if scale not in (1, 2, 4):
+        raise ValueError("scale must be 1 (320x200), 2 (160x100), or 4 (80x50)")
     return 320 // scale, 200 // scale
 
 
@@ -219,6 +226,7 @@ def apply_screen_env(config: RenderConfig) -> None:
     os.environ["TORCHWRIGHT_DOOM_RENDER_SCALE"] = str(config.model.scale)
     os.environ["TORCHWRIGHT_DOOM_SCREEN_WIDTH"] = str(width)
     os.environ["TORCHWRIGHT_DOOM_SCREEN_HEIGHT"] = str(height)
+    os.environ["TORCHWRIGHT_DOOM_DETAIL"] = config.model.detail
 
 
 def load_render_config(path: str | Path) -> RenderConfig:
@@ -240,6 +248,7 @@ def load_render_config(path: str | Path) -> RenderConfig:
             d=int(model.get("d", 4096)),
             d_head=int(model.get("d_head", 32)),
             scale=int(model.get("scale", 4)),
+            detail=str(model.get("detail", "high")),
             d_hidden=_optional_int(model.get("d_hidden")),
             max_layers=int(model.get("max_layers", 200)),
             trim_heads=bool(model.get("trim_heads", True)),
@@ -357,6 +366,8 @@ def canonical_compile_payload(
 
 def _validate_config(config: RenderConfig) -> None:
     screen_dims_for_scale(config.model.scale)
+    if config.model.detail not in ("low", "high"):
+        raise ValueError(f"model.detail {config.model.detail!r} must be 'low' or 'high'")
     if config.run.mode not in ("spec_decode", "pure_ar", "both"):
         raise ValueError(
             f"run.mode {config.run.mode!r} must be spec_decode | pure_ar | both"

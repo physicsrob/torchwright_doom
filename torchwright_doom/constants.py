@@ -24,7 +24,7 @@ import os
 
 _DEFAULT_SCREEN_WIDTH = 60
 _DEFAULT_SCREEN_HEIGHT = 50
-_SUPPORTED_RENDER_SCALES = {2, 4}
+_SUPPORTED_RENDER_SCALES = {1, 2, 4}
 
 
 def _screen_dim_from_env(name: str, default: int, *, minimum: int = 2) -> int:
@@ -73,3 +73,20 @@ SCREEN_HEIGHT = _screen_dim_from_env(
 )
 # Screen vertical centre (the projection horizon).
 CENTER_Y = SCREEN_HEIGHT / 2.0
+
+# Pixel paint width (DOOM detail mode): low-detail paints 2 screen columns per
+# rendered column, high-detail 1. Read directly from the env (like the screen
+# dims) so it is fixed before the graph modules import; defaults to high so a
+# bare import / unset config renders at today's full horizontal detail.
+_DETAIL = os.environ.get("TORCHWRIGHT_DOOM_DETAIL", "high")
+if _DETAIL not in ("low", "high"):
+    raise ValueError(
+        f"TORCHWRIGHT_DOOM_DETAIL must be 'low' or 'high', got {_DETAIL!r}"
+    )
+PIXEL_WIDTH = 2 if _DETAIL == "low" else 1
+# COLUMN_COUNT sizes every per-column structure (rays, the column one-hots, the
+# column-index radix, ...). SCREEN_WIDTH stays the screen-coordinate range and
+# host buffer width; the projection focal also stays SCREEN_WIDTH-based. They
+# are equal except in low-detail, where the view still renders
+# COLUMN_COUNT = SCREEN_WIDTH // 2 columns, each painted 2 px wide.
+COLUMN_COUNT = SCREEN_WIDTH // PIXEL_WIDTH
