@@ -368,7 +368,15 @@ class Layout:
 # ---------------------------------------------------------------------------
 
 
-DEFAULT_MAX_CARDINALITY: int = 1 << 17
+# Total-row guard only (W_EMBED sizes to the actual row count; per-type rows
+# already stay under the per-block limit BASE**2). Raised 1<<17 -> 1<<18 for the
+# full-res scale-1 build: screenRange's per-column clip y-range is
+# (SCREEN_HEIGHT+2)**2 (40,804 at 320x200), which tips the 1<<17 ceiling. The
+# principled fix is to size screenRange's clip-y by VIEW_HEIGHT (the clip is
+# view-only) rather than the full SCREEN_HEIGHT — landing with the Step-3
+# vertical view-carve; this guard bump unblocks the scale-1 build/measurement
+# until then.
+DEFAULT_MAX_CARDINALITY: int = 1 << 18
 
 
 class TokenVocab:
