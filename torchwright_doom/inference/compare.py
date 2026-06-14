@@ -18,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ..constants import SCREEN_HEIGHT, SCREEN_WIDTH
+from ..constants import PIXEL_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH
 
 Rgb = tuple[int, int, int]
 PixelBuf = dict[tuple[int, int], Rgb]
@@ -28,25 +28,35 @@ PixelBuf = dict[tuple[int, int], Rgb]
 
 
 def reference_pixels(scene, pose) -> PixelBuf:
-    """Reference frame as ``{(x, y): rgb}`` (first emission at each pixel wins)."""
+    """Reference frame as ``{(x, y): rgb}`` (first emission at each pixel wins).
+
+    Low-detail: ``expected_pixel_pass`` emits one sample per rendered column at
+    its left-edge screen x (``col * PIXEL_WIDTH``). Mirror the host blit
+    (:func:`..decode.decode_rows_to_pixels`, which paints ``w`` cells in +X) by
+    filling all ``PIXEL_WIDTH`` cells, so the reference is the true 320-wide
+    frame, not a 1-wide comb. No-op at high-detail (``PIXEL_WIDTH == 1``)."""
     from ..pydoom import expected_pixel_pass
 
     out: PixelBuf = {}
     for p in expected_pixel_pass(scene, pose):
-        r, g, b = p.color
-        out.setdefault((int(p.x), int(p.y)), (int(r), int(g), int(b)))
+        rgb = (int(p.color[0]), int(p.color[1]), int(p.color[2]))
+        for k in range(PIXEL_WIDTH):
+            out.setdefault((int(p.x) + k, int(p.y)), rgb)
     return out
 
 
 def reference_options(scene, pose) -> dict[tuple[int, int], set[Rgb]]:
-    """Per-pixel accepted-color option sets (texture-neighborhood + lighting tol)."""
+    """Per-pixel accepted-color option sets (texture-neighborhood + lighting tol).
+
+    Width-expanded ``PIXEL_WIDTH`` cells wide to match the host blit (see
+    :func:`reference_pixels`); no-op at high-detail."""
     from ..pydoom import expected_pixel_color_options
 
     opts: dict[tuple[int, int], set[Rgb]] = {}
     for o in expected_pixel_color_options(scene, pose):
-        opts.setdefault((int(o.x), int(o.y)), set()).update(
-            (int(r), int(g), int(b)) for r, g, b in o.colors
-        )
+        colors = {(int(r), int(g), int(b)) for r, g, b in o.colors}
+        for k in range(PIXEL_WIDTH):
+            opts.setdefault((int(o.x) + k, int(o.y)), set()).update(colors)
     return opts
 
 

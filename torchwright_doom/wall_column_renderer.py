@@ -25,6 +25,7 @@ from .render_ops import (
     SCALE_CLAMP,
     add_const,
     and_,
+    column_from_screen_x,
     gt_height,
     gt_screen,
     le_span_y,
@@ -85,8 +86,14 @@ class WallColumnRenderer:
         projection = self.projection
         # delta_pos=-1 assumes WALL_COL_U sits exactly one row after SET_CURSOR_X
         # in protocol order, so the SET_CURSOR_X screen-x is one position back.
-        wall_col_x = projection.core.past.attend_to_offset(
-            projection.inputs.x_or_zero, delta_pos=-1
+        # That x carries the SCREEN coordinate (col * PIXEL_WIDTH); recover the
+        # column (// PIXEL_WIDTH) before the column-space scale interpolation in
+        # wall_column_scale. Identity in high-detail; mirrors the sibling recover
+        # at seg_projection.cursor_x_scalar.
+        wall_col_x = column_from_screen_x(
+            projection.core.past.attend_to_offset(
+                projection.inputs.x_or_zero, delta_pos=-1
+            )
         )
         return value_scalar(ValueRange.R5, self.wall_column_scale(wall_col_x))
 

@@ -50,7 +50,14 @@ from typing import TYPE_CHECKING
 from torchwright.graph import annotated
 
 from .render_constants import PLANE_KIND_CEILING, PLANE_KIND_FLOOR
-from .render_ops import add_const, and_, gt_height, one_minus, same_int
+from .render_ops import (
+    add_const,
+    and_,
+    gt_height,
+    one_minus,
+    same_int,
+    screen_x_from_column,
+)
 from .std import constant, make_token_head, select
 from .vocab import (
     R_CHECK_PLANE,
@@ -134,9 +141,14 @@ class VisplaneMarker:
         )
 
     def start_wall_columns(self):
+        # store_x1 is a column; SET_CURSOR_X.x carries the SCREEN coordinate
+        # (col * PIXEL_WIDTH). Emit through screen_x_from_column so the dumb host
+        # paints at the right place. Identity in high-detail; mirrors the other
+        # SET_CURSOR_X emits (wall_column_renderer.advance_after_column,
+        # pixel_dispatcher flat-span start).
         return make_token_head(
             SET_CURSOR_X,
-            x=self.projection.drawseg.store_x1,
+            x=screen_x_from_column(self.projection.drawseg.store_x1),
         )
 
     def plane_id_for_kind(self, kind):

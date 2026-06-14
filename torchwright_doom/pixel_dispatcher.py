@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 from torchwright.graph import annotated
 
-from .constants import COLUMN_COUNT
+from .constants import COLUMN_COUNT, PIXEL_WIDTH
 from .flat_pass_renderer import FlatPassRenderer
 from .lighting import apply_colormap_row
 from .pwl_banks import MOD64_PWL
@@ -136,7 +136,12 @@ class PixelDispatcher:
         return make_token_head(
             PIXEL,
             color=self.pixel_lit_palette_index(pixel_index_vec),
-            w=constant(1.0),
+            # Wall column painted PIXEL_WIDTH screen cells wide (R_DrawColumnLow):
+            # the host blits w cells horizontally per row (decode.py), so a 2-wide
+            # column needs w=2 at low-detail. Matches the pydoom drafter's
+            # Token(PIXEL, w=PIXEL_WIDTH); identity at high-detail. (The flat sites
+            # stay w=1 — their span already fills every screen column.)
+            w=constant(float(PIXEL_WIDTH)),
         )
 
     @annotated("pix/R_DrawColumn")

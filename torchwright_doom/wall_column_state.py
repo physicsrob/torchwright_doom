@@ -28,6 +28,7 @@ from .render_ops import (
     SPAN_Y_CLAMP,
     add_const,
     and_,
+    column_from_screen_x,
     gt_height,
     gt_screen,
     gt_y_ceil_boundary,
@@ -254,15 +255,19 @@ class WallColumnState:
             inp.screen_y_after_wall_column_scale,
         )
         seg_i = range_seg_i
-        # Clamp to legal screen-x: input_x_or_zero can carry sentinel x=160
-        # from FIND_RUN (whose slot is IntSlot(0, SCREEN_WIDTH+1)).
-        # Speculative draft-decode rows can dispatch through column-scoped
-        # paths with current_x picked from such a sentinel; clamp so downstream
-        # make_token calls with screen-x slots stay in range.
         # WallColumnState publishes at the SCREEN_Y_VALUE row that follows
         # SET_CURSOR_X -> WALL_COL_U -> VALUE(scale R5); the SET_CURSOR_X row is
-        # at delta_pos=-3.
-        x = SCREEN_X_CLAMP(past.attend_to_offset(input_x_or_zero, delta_pos=-3))
+        # at delta_pos=-3. Its x carries the SCREEN coordinate (col * PIXEL_WIDTH),
+        # so recover the column (// PIXEL_WIDTH) BEFORE clamping to [0, COLUMN_COUNT):
+        # this x becomes wall_column.x / current_x, which the column advance
+        # increments and re-emits through screen_x_from_column, so it must be a
+        # column. Identity in high-detail; mirrors seg_projection.cursor_x_scalar.
+        # (On off-path speculative draft rows the picked value can be a FIND_RUN
+        # column sentinel rather than a screen-x; // PIXEL_WIDTH halves it but it
+        # stays in-range and off-path.)
+        x = SCREEN_X_CLAMP(
+            column_from_screen_x(past.attend_to_offset(input_x_or_zero, delta_pos=-3))
+        )
         x_key = past.attend_to_offset(input_x_key_or_zero, delta_pos=-3)
         scale = SCALE_CLAMP(
             past.attend_to_offset(
