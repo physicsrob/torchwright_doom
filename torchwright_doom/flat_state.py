@@ -49,6 +49,7 @@ from .render_ops import (
     _abs_coord,
     add_const,
     and_,
+    column_from_screen_x,
     le_span_y,
     max_screen,
     min_screen,
@@ -74,7 +75,7 @@ from .std import (
     split,
 )
 from .std import sum as vec_sum
-from .constants import SCREEN_HEIGHT, SCREEN_WIDTH
+from .constants import COLUMN_COUNT, SCREEN_HEIGHT, SCREEN_WIDTH
 
 from torchwright.graph import Node
 
@@ -95,7 +96,10 @@ _GE_Y_MATRIX = [
     for idx in range(SCREEN_HEIGHT + 2)
 ]
 _NEG1_LINEAR = [[-1.0]]
-_FLAT_HALF_SCREEN_INV_X = [[1.0 / ((SCREEN_WIDTH - 1) / 2.0)]]
+# Flat texture-step focal: DOOM's centerxfrac = viewwidth/2 = COLUMN_COUNT/2 (80
+# in low-detail), the COLUMN-count half-width — NOT the lighting term just below,
+# which keeps the full SCREEN_WIDTH (the §3 "evil twin" pair).
+_FLAT_HALF_SCREEN_INV_X = [[1.0 / ((COLUMN_COUNT - 1) / 2.0)]]
 _FLAT_DIST_DIV16_LINEAR = [[1.0 / 16.0]]
 # DOOM: planezlight distance light terms (r_plane.c). Raw data; wrapped in
 # constant() inside publish() for the pick_by_index table.
@@ -440,7 +444,7 @@ class FlatPassState:
             distance_value,
             inp.cursor_x_distscale,
         )
-        cursor_x_oh = one_hot(inp.cursor_x, SCREEN_WIDTH)
+        cursor_x_oh = one_hot(column_from_screen_x(inp.cursor_x), COLUMN_COUNT)
         cos_angle_value = pick_by_one_hot(
             cursor_x_oh,
             scene.view.ray_x_by_screen,

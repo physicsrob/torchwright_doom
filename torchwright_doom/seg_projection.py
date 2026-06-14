@@ -32,7 +32,7 @@ from torchwright.graph import annotated
 from .attention_handles import RecentMarkerHandle
 from .past import PastHandle, PastHandleScope
 from .protocol_tokens import ProtocolTokenView, screen_column_one_hot
-from .render_ops import SCREEN_X_CLAMP, or_
+from .render_ops import SCREEN_X_CLAMP, column_from_screen_x, or_
 from .scene_index import SceneIndex
 from .seg_cycle import (
     PlaneIdLookup,
@@ -393,7 +393,10 @@ class SegProjection:
         )
         # ClipMemory now keys on the column SCALAR (lifted scalar-id equality),
         # not the screen-x one-hot, so recover/publish the cursor column scalar.
-        cursor_x_scalar = cursor_x_row.pick(past, input_x_or_zero)
+        # setCursorX.x carries the SCREEN coordinate; convert it back to a column
+        # (// PIXEL_WIDTH) here so every downstream clip/visplane read is column-
+        # space (identity in high-detail).
+        cursor_x_scalar = column_from_screen_x(cursor_x_row.pick(past, input_x_or_zero))
         cursor_x_scalar_pub = past.publish("cursor_x_scalar_value", cursor_x_scalar)
         # Late input sidecar (emitted after cursor_x in protocol order).
         input_xtova_cos_or_zero = past.publish(

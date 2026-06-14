@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from enum import IntEnum
 from typing import TYPE_CHECKING
 
-from .constants import SCREEN_WIDTH
+from .constants import COLUMN_COUNT, SCREEN_WIDTH
 from .doom_lighting import doom_wall_scale_diminish
 from .tokens import Derived, Token, TokenType
 
@@ -105,8 +105,8 @@ VALUE_RANGES: dict[ValueRange, ValueRangeSpec] = {
     ValueRange.R5: ValueRangeSpec(0.0, 2.5 * _PROJ_RATIO),
     # R6: scale denominator (rw_distance x cosine; resolution-independent).
     ValueRange.R6: ValueRangeSpec(0.0, 1500.0),
-    # R7: drawseg width in screen columns (<= SCREEN_WIDTH; 64.0 at width 60).
-    ValueRange.R7: ValueRangeSpec(0.0, float(SCREEN_WIDTH + 4)),
+    # R7: drawseg width in rendered columns (<= COLUMN_COUNT; 64.0 at width 60).
+    ValueRange.R7: ValueRangeSpec(0.0, float(COLUMN_COUNT + 4)),
     # R8: per-column scale step.
     ValueRange.R8: ValueRangeSpec(-0.0625, 0.0625),
     # R9: finite silheight values use this range directly. ±sentinel values

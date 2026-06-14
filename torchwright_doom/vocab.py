@@ -33,7 +33,7 @@ from __future__ import annotations
 import math
 
 from .asset_config import N_FLATS, N_WALL_TEXTURES, PLAYPAL
-from .constants import SCREEN_HEIGHT, SCREEN_WIDTH
+from .constants import COLUMN_COUNT, PIXEL_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH
 from .doom_lighting import doom_flat_startmap
 from .tokens import Derived, FloatSlot, IntSlot, Token, TokenType
 from .value_ranges import (
@@ -76,13 +76,13 @@ _TAN_FOV_HALF = math.tan(FOV_HALF_BAM * 2 * math.pi / ANGLE_BAM)
 
 
 def viewangletox(theta_bam: int) -> int:
-    """Map a signed BAM view angle to an integer screen column."""
+    """Map a signed BAM view angle to an integer rendered column."""
     if theta_bam >= FOV_HALF_BAM:
         return 0
     if theta_bam <= -FOV_HALF_BAM:
-        return SCREEN_WIDTH - 1
+        return COLUMN_COUNT - 1
     t = math.tan(theta_bam * 2 * math.pi / ANGLE_BAM)
-    return round((SCREEN_WIDTH - 1) * (1 - t / _TAN_FOV_HALF) / 2)
+    return round((COLUMN_COUNT - 1) * (1 - t / _TAN_FOV_HALF) / 2)
 
 
 # ---------------------------------------------------------------------------
@@ -91,11 +91,11 @@ def viewangletox(theta_bam: int) -> int:
 
 
 def _xtoviewangle_rad(x: int) -> float:
-    """Fixed Doom-style xtoviewangle table entry for a screen column."""
-    if SCREEN_WIDTH <= 1:
+    """Fixed Doom-style xtoviewangle table entry for a rendered column."""
+    if COLUMN_COUNT <= 1:
         return 0.0
     tan_fov_half = math.tan((ANGLE_BAM // 8) * 2 * math.pi / ANGLE_BAM)
-    tangent = tan_fov_half * (1.0 - 2.0 * x / (SCREEN_WIDTH - 1))
+    tangent = tan_fov_half * (1.0 - 2.0 * x / (COLUMN_COUNT - 1))
     return math.atan(tangent)
 
 
@@ -123,7 +123,7 @@ def _u_tan_by_column(a: int) -> list[float]:
     """tan((view_angle - rw_normalangle) + xtoviewangle[column]) per column."""
     base = int(a) * 2 * math.pi / ANGLE_BAM
     values: list[float] = []
-    for column in range(SCREEN_WIDTH):
+    for column in range(COLUMN_COUNT):
         value = math.tan(base + _xtoviewangle_rad(column))
         values.append(max(-10.5, min(10.5, value)))
     return values
@@ -150,9 +150,9 @@ def _tex_id_present(tid: int) -> float:
     return 1.0 if int(tid) != 0 else 0.0
 
 
-SCREEN_X_ONE_HOT_DERIVED_NAMES = tuple(f"x_oh_{x:03d}" for x in range(SCREEN_WIDTH))
-ANGLE_RAY_X_DERIVED_NAMES = tuple(f"ray_x_{x:03d}" for x in range(SCREEN_WIDTH))
-ANGLE_RAY_Y_DERIVED_NAMES = tuple(f"ray_y_{x:03d}" for x in range(SCREEN_WIDTH))
+SCREEN_X_ONE_HOT_DERIVED_NAMES = tuple(f"x_oh_{x:03d}" for x in range(COLUMN_COUNT))
+ANGLE_RAY_X_DERIVED_NAMES = tuple(f"ray_x_{x:03d}" for x in range(COLUMN_COUNT))
+ANGLE_RAY_Y_DERIVED_NAMES = tuple(f"ray_y_{x:03d}" for x in range(COLUMN_COUNT))
 
 _SCREEN_X_ONE_HOT_DERIVED = {
     name: (lambda value, column=column: 1.0 if int(value) == column else 0.0)
@@ -172,6 +172,25 @@ _SCREEN_X_DERIVED = {
 _SCAN_X_DERIVED = {
     **_SCREEN_X_DERIVED,
     "x_square": (lambda x: float(x * x)),
+}
+
+# setCursorX carries the SCREEN coordinate (the host reads it literally to paint),
+# not the column index — so its derived one-hots / angle entries map the screen
+# coord to its column (value // PIXEL_WIDTH) first. Identical to the column-direct
+# dict above at PIXEL_WIDTH=1 (high-detail), where screen coord == column.
+_CURSOR_X_ONE_HOT_DERIVED = {
+    name: (
+        lambda value, column=column: 1.0
+        if int(value) // PIXEL_WIDTH == column
+        else 0.0
+    )
+    for column, name in enumerate(SCREEN_X_ONE_HOT_DERIVED_NAMES)
+}
+_CURSOR_X_DERIVED = {
+    "xtova_sin": lambda v: _xtova_sin(int(v) // PIXEL_WIDTH),
+    "xtova_cos": lambda v: _xtova_cos(int(v) // PIXEL_WIDTH),
+    "distscale": lambda v: _distscale(int(v) // PIXEL_WIDTH),
+    **_CURSOR_X_ONE_HOT_DERIVED,
 }
 
 # Public name of the lifted scalar-id key derived column (producer key
@@ -277,7 +296,7 @@ ANGLE_VALUE = TokenType(
                 "vatx": lambda a: float(viewangletox(a)),
                 "theta_le_neg_fov_half": _theta_le_neg_fov_half,
                 "theta_ge_pos_fov_half": _theta_ge_pos_fov_half,
-                "u_tan_by_column": Derived(_u_tan_by_column, width=SCREEN_WIDTH),
+                "u_tan_by_column": Derived(_u_tan_by_column, width=COLUMN_COUNT),
                 **{
                     name: (
                         lambda a, column=column: math.cos(
@@ -554,14 +573,14 @@ VISIT_SUBSECTOR = TokenType(
 # columns, advance to the next seg, and emit the run's right edge.
 PROCESS_SEG = TokenType("R_AddLine", slots={"i": IntSlot(0, N_SEGS_MAX)})
 FIND_RUN = TokenType(
-    "clipScan", slots={"x": IntSlot(0, SCREEN_WIDTH + 1, derived=_SCAN_X_DERIVED)}
+    "clipScan", slots={"x": IntSlot(0, COLUMN_COUNT + 1, derived=_SCAN_X_DERIVED)}
 )
 BBOX_SCAN = TokenType(
-    "bboxClipScan", slots={"x": IntSlot(0, SCREEN_WIDTH + 1, derived=_SCAN_X_DERIVED)}
+    "bboxClipScan", slots={"x": IntSlot(0, COLUMN_COUNT + 1, derived=_SCAN_X_DERIVED)}
 )
 ADVANCE_SEG = TokenType("nextSeg", slots={"i": IntSlot(0, N_SEGS_MAX)})
 EMIT_X2 = TokenType(
-    "drawseg.x2", slots={"x": IntSlot(0, SCREEN_WIDTH, derived=_SCREEN_X_DERIVED)}
+    "drawseg.x2", slots={"x": IntSlot(0, COLUMN_COUNT, derived=_SCREEN_X_DERIVED)}
 )
 # --- Phase: wall-range store (R_StoreWallRange + drawseg state) ---
 # Record the drawseg for a visible wall range: which parts exist, the
@@ -621,7 +640,7 @@ R_CHECK_PLANE_RESULT = TokenType(
     slots={"kind": IntSlot(0, 2), "vp": IntSlot(0, N_VP_PER_PLANE_MAX)},
 )
 SET_CURSOR_X = TokenType(
-    "setCursorX", slots={"x": IntSlot(0, SCREEN_WIDTH, derived=_SCREEN_X_DERIVED)}
+    "setCursorX", slots={"x": IntSlot(0, SCREEN_WIDTH, derived=_CURSOR_X_DERIVED)}
 )
 WALL_COL_U = TokenType("wallColU", slots={"u_idx": IntSlot(-1024, 1024)})
 WALL_SPAN_META = TokenType(
@@ -674,7 +693,7 @@ FLAT_VISPLANE_BEGIN = TokenType(
 )
 MAKE_SPANS_COL = TokenType(
     "R_MakeSpans.col",
-    slots={"x": IntSlot(0, SCREEN_WIDTH + 1, derived=_SCAN_X_DERIVED)},
+    slots={"x": IntSlot(0, COLUMN_COUNT + 1, derived=_SCAN_X_DERIVED)},
 )
 SPAN_CLOSE_SLOT = TokenType("R_MakeSpans.closeSlot", slots={"slot": IntSlot(0, 2)})
 SPAN_ROW = TokenType(

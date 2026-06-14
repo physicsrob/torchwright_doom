@@ -83,7 +83,7 @@ from .vocab import (
 )
 from torchwright.graph import Node
 
-from .constants import SCREEN_HEIGHT, SCREEN_WIDTH
+from .constants import SCREEN_HEIGHT, COLUMN_COUNT
 from .render_constants import PRESENT_THRESHOLD
 
 if TYPE_CHECKING:
@@ -111,7 +111,7 @@ _USED_VP_THRESHOLD_SCALE = _scale_matrix(N_VP_PER_PLANE_MAX + 1, 16.0)
 # --- R_CheckPlane overlap test: instance-filtered radix successor -------------
 #
 # ``check_conflict`` asks: does visplane instance ``(plane, vp)`` already occupy a
-# screen column in ``[x1, x2]``? The old form dotted a width-``SCREEN_WIDTH``
+# screen column in ``[x1, x2]``? The old form dotted a width-``COLUMN_COUNT``
 # per-column one-hot (``occupied_key`` 63 cols fixture, 163 real) — the binding
 # ``d_head`` driver. This radixes the column the way the solid successor does
 # (``solid_intervals.next_start_after``), so the screen column collapses to a
@@ -349,7 +349,7 @@ class RuntimeVisplaneState:
         # Radix the plane equality (was one_hot(plane, 32), the d_qk driver) into
         # a (bucket, digit) pair; the vp one-hot (width 8) stays. Both query and
         # key scale by 128, so a matched digit/vp column contributes 128*128 to
-        # the dot, dominating the +/-occupied_x term (<= SCREEN_WIDTH) so the
+        # the dot, dominating the +/-occupied_x term (<= COLUMN_COUNT) so the
         # (plane, vp) equality wins; among matches, +/-occupied_x picks min/max x.
         bounds_min_key = past.publish(
             "visplane_bounds_min_key",
@@ -385,7 +385,7 @@ class RuntimeVisplaneState:
         # the column is unoccupied).
         # column_range key: lift the (plane, vp) instance to a width-3 scalar-id
         # equality (the same form OccupancyRadix uses) and radix the screen column
-        # (was a width-(SCREEN_WIDTH+1) one_hot), so a (plane, vp, x) lookup needs
+        # (was a width-(COLUMN_COUNT+1) one_hot), so a (plane, vp, x) lookup needs
         # 3 + 16 + 1 cols (was 101). The dot of a full match is
         #   (1) instance + (2) col(hi+lo) - 2.5 (sentinel bias) = 0.5 > 0;
         # any partial match is <= -0.5 and an inactive (gated-zero) row is 0, so a
@@ -488,8 +488,8 @@ class RuntimeVisplaneState:
         query_instance_oh = one_hot(query_instance_idx, N_VISPLANE_MAX)
         query_instance_lift = _lifted_instance_query(query_instance_idx)
 
-        hi1 = thermometer_floor_div(x1, _RADIX_BASE, SCREEN_WIDTH)
-        lo1 = mod_const(x1, _RADIX_BASE, SCREEN_WIDTH)
+        hi1 = thermometer_floor_div(x1, _RADIX_BASE, COLUMN_COUNT)
+        lo1 = mod_const(x1, _RADIX_BASE, COLUMN_COUNT)
         hi1_bucket_oh = one_hot(hi1, _N_BUCKETS)
         lo1_threshold = one_hot(lo1, _RADIX_BASE)  # reads I(lo >= lo1) from lo_ge
         hi1_threshold = one_hot(hi1, _N_BUCKETS)  # reads I(hi > hi1) from hi_above
@@ -727,8 +727,8 @@ def _publish_occupancy_radix(
     ``cond_gate`` is involved. ``thermometer_floor_div`` / ``mod_const`` are exact
     on integer columns (the radix-successor derisk showed ``floor_int(v/B +
     0.5/B)`` is wrong at B=13; these place transitions at ``k*B - 0.5``)."""
-    col_hi = thermometer_floor_div(occupied_x_value, _RADIX_BASE, SCREEN_WIDTH)
-    col_lo = mod_const(occupied_x_value, _RADIX_BASE, SCREEN_WIDTH)
+    col_hi = thermometer_floor_div(occupied_x_value, _RADIX_BASE, COLUMN_COUNT)
+    col_lo = mod_const(occupied_x_value, _RADIX_BASE, COLUMN_COUNT)
     col_bucket_onehot = one_hot(col_hi, _N_BUCKETS)
     lo_ge = linear(one_hot(col_lo, _RADIX_BASE), _LO_GE_TABLE)
     hi_above = linear(one_hot(col_hi, _N_BUCKETS), _HI_ABOVE_TABLE)

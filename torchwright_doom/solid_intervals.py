@@ -5,7 +5,7 @@ The seg scan fills this channel at ``R_STORE_WALL_RANGE`` and queries it at
 DOOM's ``solidsegs`` horizontal occlusion, expressed as a queryable union of
 prior one-sided drawseg fragments.
 
-The query is a *radix successor* search: screen columns in ``[0, SCREEN_WIDTH]``
+The query is a *radix successor* search: screen columns in ``[0, COLUMN_COUNT]``
 are split into a high *bucket* digit and a low digit (``_RADIX_BASE =
 ceil(sqrt(width))``), so a "next occupied column after X" key fits ~``2*sqrt``
 columns instead of ``width``. The answer is the next occupied column in the same
@@ -28,7 +28,7 @@ from torchwright.graph import annotated
 from torchwright.ops.arithmetic_ops import compare, mod_const, thermometer_floor_div
 
 from .attention_handles import RecentMarkerHandle
-from .constants import SCREEN_WIDTH
+from .constants import COLUMN_COUNT
 from .render_constants import PRESENT_THRESHOLD
 from .past import PastHandle, PastHandleScope
 from .protocol_tokens import ProtocolTokenView
@@ -120,7 +120,7 @@ class SolidIntervals:
         solid_emit = and_(inp.is_store_wall_range, one_minus(is_open_portal))
 
         sentinel_key = constant([0.0, 0.0, 1.0])
-        sentinel_start = constant(float(SCREEN_WIDTH))
+        sentinel_start = constant(float(COLUMN_COUNT))
 
         interval_key = _interval_key(x1, x2)
         key = past.publish(
@@ -185,8 +185,8 @@ class SolidIntervals:
     @annotated("stor")
     def next_start_after(self, column: Node) -> Node:
         """Return the nearest solid interval start strictly after `column`."""
-        query_hi = thermometer_floor_div(column, _RADIX_BASE, SCREEN_WIDTH)
-        query_lo = mod_const(column, _RADIX_BASE, SCREEN_WIDTH)
+        query_hi = thermometer_floor_div(column, _RADIX_BASE, COLUMN_COUNT)
+        query_lo = mod_const(column, _RADIX_BASE, COLUMN_COUNT)
         query_bucket_onehot = one_hot(query_hi, _N_BUCKETS)
         query_lo_threshold = one_hot(query_lo, _RADIX_BASE)
 
@@ -242,7 +242,7 @@ class SolidIntervals:
         return select(
             same_present,
             same_s,
-            select(carry_present, carry_s, constant(float(SCREEN_WIDTH))),
+            select(carry_present, carry_s, constant(float(COLUMN_COUNT))),
         )
 
 
@@ -269,8 +269,8 @@ def _publish_successor_fields(
     solid_emit_h = past.publish("solid_interval_solid_emit", solid_emit)
     start_s_h = past.publish("solid_interval_start", start_s)
 
-    start_hi = thermometer_floor_div(start_s, _RADIX_BASE, SCREEN_WIDTH)
-    start_lo = mod_const(start_s, _RADIX_BASE, SCREEN_WIDTH)
+    start_hi = thermometer_floor_div(start_s, _RADIX_BASE, COLUMN_COUNT)
+    start_lo = mod_const(start_s, _RADIX_BASE, COLUMN_COUNT)
     start_bucket_onehot = one_hot(start_hi, _N_BUCKETS)
     start_above_lo = linear(one_hot(start_lo, _RADIX_BASE), _LO_ABOVE_TABLE)
 

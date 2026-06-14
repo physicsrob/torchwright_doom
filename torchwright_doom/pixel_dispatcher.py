@@ -24,16 +24,18 @@ from typing import TYPE_CHECKING
 
 from torchwright.graph import annotated
 
-from .constants import SCREEN_WIDTH
+from .constants import COLUMN_COUNT
 from .flat_pass_renderer import FlatPassRenderer
 from .lighting import apply_colormap_row
 from .pwl_banks import MOD64_PWL
 from .render_ops import (
     FLOOR_NATIVE,
     add_const,
+    column_from_screen_x,
     gt_screen,
     mul_k_step,
     mul_u_native,
+    screen_x_from_column,
     sub,
 )
 from .std import constant, linear, make_token_head, pick_by_index, select
@@ -80,7 +82,7 @@ class PixelDispatcher:
         flat_span = projection.flats.flat_pass.flat_span_values(projection.core.past)
         return select(
             projection.flats.flat_pass.flat_span_seen,
-            make_token_head(SET_CURSOR_X, x=flat_span.x1),
+            make_token_head(SET_CURSOR_X, x=screen_x_from_column(flat_span.x1)),
             make_value(ValueRange.R3, self.span_v0_at_top()),
         )
 
@@ -101,9 +103,9 @@ class PixelDispatcher:
         seg_i_active = projection.drawseg.store_i
         u_tan_by_column = projection.rows.pick_u_tan_by_column()
         tan_rel = pick_by_index(
-            projection.core.inp.cursor_x,
+            column_from_screen_x(projection.core.inp.cursor_x),
             u_tan_by_column,
-            SCREEN_WIDTH,
+            COLUMN_COUNT,
         )
         rw_distance_active = projection.wall.seg_facts.rw_distance(seg_i_active)
         mul_dist_tan = mul_u_native(rw_distance_active, tan_rel)

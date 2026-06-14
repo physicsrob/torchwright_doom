@@ -33,6 +33,7 @@ from .render_ops import (
     one_minus,
     or_,
     same_int,
+    screen_x_from_column,
     sub,
 )
 from .seg_scanner import SegScanner
@@ -284,7 +285,7 @@ class WallColumnRenderer:
         return select(
             gt_screen(next_x, projection.drawseg.stop_x),
             self.continue_after_range(),
-            make_token_head(SET_CURSOR_X, x=next_x),
+            make_token_head(SET_CURSOR_X, x=screen_x_from_column(next_x)),
         )
 
     @annotated("paint")

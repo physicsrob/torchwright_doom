@@ -50,7 +50,7 @@ from torchwright.ops.arithmetic_ops import (
 from torchwright.ops.linear_relu_linear import linear_relu_linear
 from torchwright.ops.logic_ops import bool_all_true, bool_any_true, bool_not
 
-from .constants import SCREEN_HEIGHT, SCREEN_WIDTH
+from .constants import COLUMN_COUNT, PIXEL_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH
 from .std import concat, constant, linear, one_hot, select
 from .value_ranges import _PROJ_RATIO
 from .vocab import _TAN_FOV_HALF, ANGLE_BAM, N_NODES_MAX
@@ -97,12 +97,32 @@ def snap_bool(x: Node) -> Node:
 
 
 def SCREEN_X_CLAMP(x: Node) -> Node:
-    """Clamp a screen column into ``[0, SCREEN_WIDTH-1]``.
+    """Clamp a rendered column into ``[0, COLUMN_COUNT-1]``.
 
-    Guards an ``IntSlot(0, SCREEN_WIDTH)`` deembed when a pick falls through to
+    Guards an ``IntSlot(0, COLUMN_COUNT)`` deembed when a pick falls through to
     pure recency (no FIND_RUN match in past) and would otherwise return the
-    SCREEN_WIDTH sentinel."""
-    return clamp(x, 0.0, float(SCREEN_WIDTH - 1))
+    COLUMN_COUNT sentinel."""
+    return clamp(x, 0.0, float(COLUMN_COUNT - 1))
+
+
+def screen_x_from_column(col: Node) -> Node:
+    """Column index (0..COLUMN_COUNT-1) -> screen paint coordinate
+    (col * PIXEL_WIDTH). The ONE place the graph maps internal column space to
+    the host's screen coordinate (emitted into ``setCursorX.x``, read literally
+    by the dumb host). Identity in high-detail (PIXEL_WIDTH=1), adding no op."""
+    if PIXEL_WIDTH == 1:
+        return col
+    return linear(col, [[float(PIXEL_WIDTH)]])
+
+
+def column_from_screen_x(screen_x: Node) -> Node:
+    """Screen coordinate (a multiple of PIXEL_WIDTH) -> column index
+    (screen_x / PIXEL_WIDTH). Used where a recovered/extracted ``setCursorX``
+    value indexes a per-column table. Exact (no floor) because the graph only
+    ever emits col*PIXEL_WIDTH. Identity in high-detail, adding no op."""
+    if PIXEL_WIDTH == 1:
+        return screen_x
+    return linear(screen_x, [[1.0 / float(PIXEL_WIDTH)]])
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +324,7 @@ def MUL_SCREEN(a: Node, b: Node) -> Node:
     ``multiply_2d`` extrapolates out-of-grid, so sizing to the full operand
     range is the safe choice — same extrapolation-trap note as ``mul_side``).
     """
-    bound = float(SCREEN_WIDTH + 2)
+    bound = float(COLUMN_COUNT + 2)
     return multiply_2d(
         a, b, max_abs1=bound, max_abs2=bound, step1=1.0, step2=1.0, name="mul_screen"
     )
@@ -602,17 +622,17 @@ def mul_height_scale(height: Node, scale: Node) -> Node:
 
 
 def mul_column_scalestep(x_offset: Node, scalestep: Node) -> Node:
-    """Column offset × per-column scale step (``((0, SCREEN_WIDTH), (-1, 1))``,
-    ``SCREEN_WIDTH+1`` bp). The offset axis is an integer column, so
-    ``SCREEN_WIDTH+1`` breakpoints land each column exactly on a grid line."""
+    """Column offset × per-column scale step (``((0, COLUMN_COUNT), (-1, 1))``,
+    ``COLUMN_COUNT+1`` bp). The offset axis is an integer column, so
+    ``COLUMN_COUNT+1`` breakpoints land each column exactly on a grid line."""
     return _mul_grid(
         x_offset,
         scalestep,
         lo1=0.0,
-        hi1=float(SCREEN_WIDTH),
+        hi1=float(COLUMN_COUNT),
         lo2=-1.0,
         hi2=1.0,
-        n=SCREEN_WIDTH + 1,
+        n=COLUMN_COUNT + 1,
         name="mul_column_scalestep",
     )
 
@@ -875,8 +895,8 @@ def mul_dist_base(distance: Node, basescale: Node) -> Node:
 # Columns split into a high *bucket* digit and a low digit so a column-
 # equality key is two one-hots of total width N_COL_BUCKETS + COL_RADIX_BASE
 # (16 at SCREEN_WIDTH=60, 26 at 160) instead of a width-SCREEN_WIDTH one-hot.
-COL_RADIX_BASE = math.ceil(math.sqrt(SCREEN_WIDTH + 1))  # 8 at SW=60, 13 at 160
-N_COL_BUCKETS = SCREEN_WIDTH // COL_RADIX_BASE + 1
+COL_RADIX_BASE = math.ceil(math.sqrt(COLUMN_COUNT + 1))  # 8 at CC=60, 13 at 160
+N_COL_BUCKETS = COLUMN_COUNT // COL_RADIX_BASE + 1
 
 
 def radix_col_key(col_scalar: Node) -> Node:
@@ -890,6 +910,6 @@ def radix_col_key(col_scalar: Node) -> Node:
     bucket-consistent ``mod_const`` keep the leaked value on the right digit,
     and ``one_hot`` rounds it to a clean integer one-hot — so no pre-snap is
     needed and a matched key's dot is exactly 2."""
-    hi = thermometer_floor_div(col_scalar, COL_RADIX_BASE, SCREEN_WIDTH)
-    lo = mod_const(col_scalar, COL_RADIX_BASE, SCREEN_WIDTH)
+    hi = thermometer_floor_div(col_scalar, COL_RADIX_BASE, COLUMN_COUNT)
+    lo = mod_const(col_scalar, COL_RADIX_BASE, COLUMN_COUNT)
     return concat(one_hot(hi, N_COL_BUCKETS), one_hot(lo, COL_RADIX_BASE))
