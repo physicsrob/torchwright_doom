@@ -1,0 +1,24 @@
+# FAST preview config — 160x100 low-detail (the 3D view is computed at 80
+# columns; the host paints each column 2 screen pixels wide).  One of the
+# two committed, maintained configs (see CLAUDE.md, "Configurations");
+# the PRODUCTION default is configs/e1m1.yaml (320x200).  Run with:
+#
+#     make run CONFIG=configs/e1m1_lowres.yaml
+#
+# Half the columns of production (80 vs 160) -> fewer tokens -> faster
+# rollout, at coarser horizontal resolution.  Same low-detail code path as
+# the 320x200 production (just SCREEN_WIDTH=160); keep the shared model /
+# scene / run fields in lockstep with e1m1.yaml.  Only `scale` differs.
+wad: doom1.wad
+model: {d: 8192, d_head: 32, scale: 2, detail: low, d_hidden: 16384, optimize: 2, cache_window: 12288}
+region: {x1: 627.2, y1: -3760.0, x2: 1395.2, y2: -2800.0}
+textures:
+  wall: [BROWN1, BROWN144, COMPUTE2, DOOR3, DOORSTOP, LITE3, STARTAN3, STEP6, SUPPORT2]
+  flat: [CEIL3_5, FLAT14, FLAT5_5, FLOOR4_8, FLOOR7_1, F_SKY1]
+expiring_types: [pixel, setCursorX, setCursorY, setCursorDirectionX, setCursorDirectionY, wallColU, screenY, wallSpanMeta, clipUpdate, R_MapPlane.row]
+run:
+  mode: spec_decode
+  max_positions: 61440
+  draft_window: 8
+  prefill_chunk_size: 128
+  pose: {x: 1056.0, y: -3616.0, angle: 64, viewz: 41.0}

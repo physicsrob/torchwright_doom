@@ -140,20 +140,26 @@ discover existing code that violates this principle — host-side logic
 that does anything beyond token I/O and pixel blitting — flag it to
 the user immediately and stop other work until resolved.
 
-# One configuration
+# Configurations
 
-There is exactly ONE committed render config: `configs/e1m1.yaml`.
-`make run`, the Makefile default, and every doc reference point at it.
-When parameters change, **update that file in place** — never add a
-sibling.
+There are exactly TWO committed render configs, both maintained:
+
+- `configs/e1m1.yaml` — PRODUCTION, full-resolution 320x200 low-detail.
+  `make run`, the Makefile default, and every doc reference point here.
+- `configs/e1m1_lowres.yaml` — a faster 160x100 low-detail preview (80
+  rendered columns), run with `make run CONFIG=configs/e1m1_lowres.yaml`.
+
+When parameters change, **update these files in place** and keep their
+shared model / scene / run fields in lockstep — only `scale` differs.
+Do NOT add a third committed config.
 
 Config proliferation was a recurring failure mode (wrong-config runs,
 stale variants, an umbrella-proxy OOM from drifted defaults). The rule
-that prevents it: an experiment or gate that needs a variant **copies
-the one config to /tmp, edits the field, and runs with
+that still holds beyond those two: an experiment or gate that needs a
+variant **copies a config to /tmp, edits the field, and runs with
 `--config /tmp/<name>.yaml`**. Variants are ephemeral by construction;
-if you find yourself about to commit a second YAML under `configs/`,
-stop and update `e1m1.yaml` instead (or keep the variant in /tmp).
+if you find yourself about to commit a third YAML under `configs/`,
+stop and use a /tmp variant instead.
 
 The umbrella Makefile proxies these defaults — change them in lockstep
 or the stale copy bites (it has).

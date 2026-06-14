@@ -1,41 +1,41 @@
-# THE renderer configuration — the single committed config (one map, one
-# config).  `make run` and every doc reference point here; when parameters
-# change, update this file in place.  Variant configs are NEVER committed:
-# an experiment or gate that needs a tweak copies this file to /tmp,
-# edits the field, and runs with --config /tmp/<name>.yaml (see CLAUDE.md,
-# "One configuration").
+# THE PRODUCTION renderer configuration — full-resolution 320x200 via DOOM
+# low-detail (the 3D view is computed at 160 columns; the host paints each
+# column 2 screen pixels wide).  `make run`, the Makefile default, and
+# every doc reference point here; update this file in place.
 #
-# Current state: full resolution (scale 2 = 160x100), d=8192 with a
-# decoupled 16k MLP width, CP-SAT-optimized schedule (optimize: 2), and
-# the WINDOWED KV cache with TIER-1 EXPIRY (see ModelConfig.cache_window
-# and plan_tier1_expiry.md): expiring_types below = pixel + the nine
-# census-certified raster-scratch types, gated TOKEN-IDENTICAL against
-# pixel-only at this config on B200 (2026-06-12).  77% of the
-# 25,350-token rollout recycles its slots.  Permanent-row demand
-# measured 9,454 (3,613 prefill + 5,841 protocol rows); the 12,288
-# window leaves a ~2.8k recycle pool against a worst certified read
-# scope of 619 positions.
+# TWO configs are committed and maintained (see CLAUDE.md,
+# "Configurations"): this PRODUCTION one and configs/e1m1_lowres.yaml (a
+# faster 160x100 low-detail preview).  Everything else is a /tmp variant.
+#
+# State: scale 1 = 320x200 low-detail, d=8192 / decoupled 16k MLP,
+# CP-SAT schedule (optimize: 2), 57 compiled layers.  WINDOWED KV cache
+# with TIER-1 EXPIRY (cache_window + plan_tier1_expiry.md): expiring_types
+# = pixel + nine raster-scratch types.  Certified against the pydoom
+# reference at 320x200 (2026-06-14): 100% pixel coverage, 100%
+# within-option color, 9.16 GB static KV, ~42,249-token rollout.
+# NOTE: the expiring-set read-scope census was certified at 160x100; the
+# 320x200 render holds empirically (no expired-read corruption) but a
+# formal re-cert of those bounds at this taller frame is still open.
 wad: doom1.wad
-model: {d: 8192, d_head: 32, scale: 2, d_hidden: 16384, optimize: 2, cache_window: 12288}
+model: {d: 8192, d_head: 32, scale: 1, detail: low, d_hidden: 16384, optimize: 2, cache_window: 12288}
 region: {x1: 627.2, y1: -3760.0, x2: 1395.2, y2: -2800.0}
 textures:
   wall: [BROWN1, BROWN144, COMPUTE2, DOOR3, DOORSTOP, LITE3, STARTAN3, STEP6, SUPPORT2]
   flat: [CEIL3_5, FLAT14, FLAT5_5, FLOOR4_8, FLOOR7_1, F_SKY1]
 expiring_types: [pixel, setCursorX, setCursorY, setCursorDirectionX, setCursorDirectionY, wallColU, screenY, wallSpanMeta, clipUpdate, R_MapPlane.row]
 # Render-job runtime defaults — THE single source (CLI flags override
-# field-by-field; the Makefiles hold no copies).  Runtime knobs only:
-# none of these enter the compile-cache key.
+# field-by-field).  Runtime knobs only: none enter the compile-cache key.
 run:
   mode: spec_decode
-  # Covers the full 160x100 frame (25,350 tokens measured) with ample
-  # headroom; the windowed cache bounds SLOTS, not positions, so the cap
-  # is the pos-encoding table (max_seq_len 65536), and an oversized
-  # demand makes empty_past() reject before prefill.
+  # Covers the full 320x200 low-detail frame (~42,249 tokens) with headroom;
+  # the windowed cache bounds SLOTS, not positions, so the cap is the
+  # pos-encoding table, and an oversized demand makes empty_past() reject
+  # before prefill.
   max_positions: 61440
   draft_window: 8
   # 128-row chunks keep the per-layer (n_heads, chunk, S) prefill logits
-  # transient small on an 80 GB A100 even at 64k stride; a few extra
-  # seconds of prefill, semantically identical to a single pass.
+  # transient small even at 64k stride; a few extra seconds of prefill,
+  # semantically identical to a single pass.
   prefill_chunk_size: 128
   # E1M1 start room, world coordinates (map data, like region:).
   pose: {x: 1056.0, y: -3616.0, angle: 64, viewz: 41.0}
