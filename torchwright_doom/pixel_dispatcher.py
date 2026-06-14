@@ -68,7 +68,13 @@ class PixelDispatcher:
         flat_first_pixel = make_token_head(
             PIXEL,
             color=self.flat_pixel_atlas_color(constant(0.0)),
-            w=constant(1.0),
+            # Flat span painted PIXEL_WIDTH cells wide at low-detail: the span
+            # emits (x2-x1+1) column samples and the host blits each w cells in
+            # +X so they tile the full screen extent [x1*PW, (x2+1)*PW). With
+            # w=1 the span covered only its left half (screen-x < ~COLUMN_COUNT)
+            # -- the missing center/right flats. Matches the pydoom drafter
+            # (Token(PIXEL, w=PIXEL_WIDTH)); identity at high-detail.
+            w=constant(float(PIXEL_WIDTH)),
         )
         return select(
             projection.flats.flat_pass.flat_span_seen,
@@ -139,8 +145,7 @@ class PixelDispatcher:
             # Wall column painted PIXEL_WIDTH screen cells wide (R_DrawColumnLow):
             # the host blits w cells horizontally per row (decode.py), so a 2-wide
             # column needs w=2 at low-detail. Matches the pydoom drafter's
-            # Token(PIXEL, w=PIXEL_WIDTH); identity at high-detail. (The flat sites
-            # stay w=1 — their span already fills every screen column.)
+            # Token(PIXEL, w=PIXEL_WIDTH); identity at high-detail.
             w=constant(float(PIXEL_WIDTH)),
         )
 
@@ -190,7 +195,8 @@ class PixelDispatcher:
             make_token_head(
                 PIXEL,
                 color=self.flat_pixel_atlas_color(next_pixel_index),
-                w=constant(1.0),
+                # PIXEL_WIDTH-wide flat-span cell (see after_wall_column).
+                w=constant(float(PIXEL_WIDTH)),
             ),
             FlatPassRenderer(projection).after_completed_flat_span_row(),
         )
