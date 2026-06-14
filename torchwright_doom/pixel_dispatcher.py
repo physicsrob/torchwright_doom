@@ -24,6 +24,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from torchwright.graph import annotated
+
 from .constants import SCREEN_WIDTH
 from .flat_pass_renderer import FlatPassRenderer
 from .lighting import apply_colormap_row
@@ -60,6 +62,7 @@ class PixelDispatcher:
 
     # --- The three shared pixel/cursor branches (forked on flat_span_seen) ----
 
+    @annotated("pix")
     def after_wall_column(self) -> "Node":
         projection = self.projection
         flat_first_pixel = make_token_head(
@@ -72,6 +75,7 @@ class PixelDispatcher:
             self.wall_column_output(),
         )
 
+    @annotated("pix")
     def after_set_cursor_y(self) -> "Node":
         projection = self.projection
         flat_span = projection.flats.flat_pass.flat_span_values(projection.core.past)
@@ -81,6 +85,7 @@ class PixelDispatcher:
             make_value(ValueRange.R3, self.span_v0_at_top()),
         )
 
+    @annotated("pix")
     def after_pixel_color(self) -> "Node":
         projection = self.projection
         return select(
@@ -91,6 +96,7 @@ class PixelDispatcher:
 
     # --- Wall texel pass -----------------------------------------------------
 
+    @annotated("pix/R_DrawColumn")
     def wall_column_output(self) -> "Node":
         projection = self.projection
         seg_i_active = projection.drawseg.store_i
@@ -106,6 +112,7 @@ class PixelDispatcher:
         u_floor = FLOOR_NATIVE(u_native)
         return make_token_head(WALL_COL_U, u_idx=u_floor)
 
+    @annotated("pix/R_DrawColumn")
     def after_wall_pixel_color(self) -> "Node":
         projection = self.projection
         span = projection.wall.wall_span_runtime.span_start_values(projection.core.past)
@@ -119,14 +126,17 @@ class PixelDispatcher:
             WallColumnRenderer(projection).after_completed_span(),
         )
 
+    @annotated("pix/R_DrawColumn")
     def make_first_pixel_color(self) -> "Node":
         return self.make_pixel_color(constant(0.0))
 
+    @annotated("pix/R_DrawColumn")
     def make_pixel_color(self, pixel_index_vec: "Node") -> "Node":
         return make_token_head(
             PIXEL, color=self.pixel_lit_palette_index(pixel_index_vec)
         )
 
+    @annotated("pix/R_DrawColumn")
     def span_v0_at_top(self) -> "Node":
         span = self.projection.wall.wall_span_runtime.span_start_values(
             self.projection.core.past
@@ -137,6 +147,7 @@ class PixelDispatcher:
             dc_texturemid=span.dc_texturemid,
         )
 
+    @annotated("pix/R_DrawColumn")
     def pixel_lit_palette_index(self, pixel_index_vec: "Node") -> "Node":
         projection = self.projection
         span = projection.wall.wall_span_runtime.span_start_values(projection.core.past)
@@ -157,6 +168,7 @@ class PixelDispatcher:
 
     # --- Flat span pass ------------------------------------------------------
 
+    @annotated("pix/R_DrawSpan")
     def after_flat_pixel_color(self) -> "Node":
         projection = self.projection
         cursor = projection.flats.flat_pass.flat_cursor_values(projection.core.past)
@@ -174,6 +186,7 @@ class PixelDispatcher:
             FlatPassRenderer(projection).after_completed_flat_span_row(),
         )
 
+    @annotated("pix/R_DrawSpan")
     def flat_pixel_atlas_color(self, pixel_index_vec: "Node") -> "Node":
         projection = self.projection
         cursor = projection.flats.flat_pass.flat_cursor_values(projection.core.past)

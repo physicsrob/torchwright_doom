@@ -29,6 +29,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from torchwright.graph import Node, PosEncoding
+from torchwright.graph import annotate, annotated
 
 from .bsp_traversal import BspTraversal
 from .emit import emit_derived_zero
@@ -65,6 +66,15 @@ from .wall_range_builder import WallRangeBuilder
 BranchOutputs = Mapping[str, Node]
 
 
+def _dispatch_head(token_type) -> Node:
+    """A dispatch-owned (registry owner "main") inert/begin/done emit head,
+    annotated ``dispatch`` so its emit nodes carry the router's provenance."""
+    with annotate("dispatch"):
+        from .std import make_token_head as _make_token_head
+
+        return _make_token_head(token_type)
+
+
 @dataclass(frozen=True)
 class RuntimeProtocols:
     """Published protocol owners needed by branch construction: the BSP traversal
@@ -91,10 +101,11 @@ def publish_runtime_protocols(
     ``BspTraversal.publish`` so its ``BBoxPruner`` can scan the occlusion state,
     and the payload router is built with the bbox arm
     (``is_bbox_angle`` -> ``BBoxPruner.after_bbox_angle_value``)."""
-    input_angle_or_zero = past.publish(
-        "input_angle_or_zero",
-        ANGLE_VALUE.extract(input_vec, "angle"),
-    )
+    with annotate("input"):
+        input_angle_or_zero = past.publish(
+            "input_angle_or_zero",
+            ANGLE_VALUE.extract(input_vec, "angle"),
+        )
     solids = SolidIntervals.publish(past, inp, scene)
     traversal = BspTraversal.publish(
         past,
@@ -121,6 +132,7 @@ def publish_runtime_protocols(
     )
 
 
+@annotated("dispatch")
 def dispatch_next_token(
     inp: ProtocolTokenView,
     branches: BranchOutputs,
@@ -170,6 +182,7 @@ def dispatch_next_token(
     return concat(head, emit_derived_zero())
 
 
+@annotated("dispatch")
 def _group_by_value(pairs: list[tuple[Node, Node]]) -> list[tuple[Node, Node]]:
     """Collapse ``(value, ±1-predicate)`` pairs sharing the SAME value node into
     one ``(value, predicate)`` entry per distinct value — first-seen order, the
@@ -195,6 +208,7 @@ def _group_by_value(pairs: list[tuple[Node, Node]]) -> list[tuple[Node, Node]]:
     ]
 
 
+@annotated("dispatch")
 def _distinct_head_pairs(
     inp: ProtocolTokenView,
     branches: BranchOutputs,
@@ -212,25 +226,36 @@ def _distinct_head_pairs(
 def forward(
     input_vec: Node, past: GraphPast, pos: PosEncoding, asset_index=None
 ) -> Node:
+    # Provenance: each subsystem call below re-annotates to its own TOP-LEVEL code
+    # (SceneIndex.build -> `scene`, the publish/branch builders -> their owners,
+    # dispatch_next_token -> `dispatch`). forward() therefore does NOT wrap the
+    # whole body in one label (that would nest every subsystem under it); it only
+    # labels its own glue: the current-token decode block (`input`) and the bare
+    # wiring node (the position scalar -> `dispatch`).
+    #
     # `SceneIndex.build` publishes scene channels through the bare `GraphPast`;
     # the `PastHandleScope` wrap below is intentional and must follow it. It is a
     # distinct local (`scope`) rather than a rebind of `past` so the two types
     # stay separable.
     scene = SceneIndex.build(input_vec, past, pos, assets=asset_index)
-    scope = PastHandleScope(past)
-    prev_input_type = scope.attend_to_offset(scope.input_type(), delta_pos=-1)
-    prev_prev_input_type = scope.attend_to_offset(scope.input_type(), delta_pos=-2)
-    inp = ProtocolTokenView(
-        input_vec,
-        prev_input_type,
-        prev_prev_input_type,
-    )
+    # Current-token decode + memory-fetch handles (the `input` subsystem): the
+    # input-type code, the two previous-type reads, and the typed token view.
+    with annotate("input"):
+        scope = PastHandleScope(past)
+        prev_input_type = scope.attend_to_offset(scope.input_type(), delta_pos=-1)
+        prev_prev_input_type = scope.attend_to_offset(scope.input_type(), delta_pos=-2)
+        inp = ProtocolTokenView(
+            input_vec,
+            prev_input_type,
+            prev_prev_input_type,
+        )
 
     # The projection texel path (Phase J) reads the position as a *scalar* value
     # (sandbox ``pos`` is a 1-Vec): pixel_index = pos - span_v0.pos - 1, and the
     # span-v0 / flat-cursor publishes stamp it. Extract the raw integer counter
     # column from the PosEncoding (``SceneIndex.build``'s ``pos`` is unused).
-    pos_scalar = pos.get_position_scalar()
+    with annotate("dispatch"):
+        pos_scalar = pos.get_position_scalar()
     protocols = publish_runtime_protocols(input_vec, scope, inp, scene, pos_scalar)
     branches = build_branch_outputs(inp, protocols)
     return dispatch_next_token(inp, branches)
@@ -263,7 +288,9 @@ def build_branch_outputs(
     ``ScalarEmit``), then :func:`_collapse_scalar_emits` folds every carrier's
     branches into ONE shared digit-quad head.
     """
-    no_op_out = make_token_head(NO_OP)
+    # The inert / begin / done heads are dispatch-owned (registry owner "main").
+    with annotate("dispatch"):
+        no_op_out = make_token_head(NO_OP)
     traversal = protocols.traversal
     projection = protocols.projection
     payload_router = protocols.payload_router
@@ -275,10 +302,10 @@ def build_branch_outputs(
     visplanes = VisplaneMarker(projection)
     ranges = RangeDispatcher(projection)
     branches: dict[str, "Node | ScalarEmit | AngleInputEmit"] = {
-        # Inert / begin.
+        # Inert / begin (dispatch-owned, registry owner "main").
         "no_op": no_op_out,
-        "done": make_token_head(DONE),
-        "begin": make_token_head(SET_CURSOR_DIRECTION_Y),
+        "done": _dispatch_head(DONE),
+        "begin": _dispatch_head(SET_CURSOR_DIRECTION_Y),
         # BSP traversal (BspTraversal).
         "think": traversal.after_think_side(),
         "side_record": traversal.after_side_record(),
@@ -362,6 +389,7 @@ def build_branch_outputs(
     return _collapse_scalar_emits(inp, collapsed)
 
 
+@annotated("dispatch")
 def _branch_predicates(inp: ProtocolTokenView) -> dict[str, list[Node]]:
     """Map each dispatch branch to its transition predicate node(s), read off
     ``inp`` exactly as :func:`_distinct_head_pairs` does.
@@ -376,6 +404,7 @@ def _branch_predicates(inp: ProtocolTokenView) -> dict[str, list[Node]]:
     return branch_preds
 
 
+@annotated("dispatch")
 def _one_hot_predicate(branch_preds: Mapping[str, list[Node]], name: str) -> Node:
     """The single ±1 dispatch predicate for branch ``name`` — the OR of every
     transition that selects it. Exactly one branch's predicate is +1 per
@@ -417,31 +446,49 @@ def _collapse_world_angle_inputs(
     if not members:
         return dict(branches)
 
-    branch_preds = _branch_predicates(inp)
-    mask = concat(
-        *[bool_to_01(_one_hot_predicate(branch_preds, name)) for name, _e in members]
-    )
+    # Branch-selection glue (mask + per-candidate clamp + the float-exact pick of
+    # the active branch's (dx, dy)) is dispatch work.
+    with annotate("dispatch"):
+        branch_preds = _branch_predicates(inp)
+        mask = concat(
+            *[
+                bool_to_01(_one_hot_predicate(branch_preds, name))
+                for name, _e in members
+            ]
+        )
 
-    # Clamp each candidate (dx, dy) to the atan's ±3072 square BEFORE the pick.
-    # The raw `dx = sub(vertex, view)` carries a tracked value_range wider than
-    # 3072, which would blow `broadcast_select`'s additive offset past its sanity
-    # bound. Byte-identical at the active row: `signed_world_angle` re-clamps to
-    # the same ±3072 internally via `_abs_coord`, so the clamp is idempotent there.
-    dxs = [clamp(emit.dx, -_ATAN_ABS_RANGE, _ATAN_ABS_RANGE) for _n, emit in members]
-    dys = [clamp(emit.dy, -_ATAN_ABS_RANGE, _ATAN_ABS_RANGE) for _n, emit in members]
-    # Two d_fill=1 picks sharing the SAME mask — simpler than one d_fill=2 pick +
-    # split (no slot-major interleave), and the second pick's cost is negligible
-    # against the 1024-wide atan. Both are float-exact at the active row.
-    picked_dx = pick_by_one_hot(mask, concat(*dxs), d_fill=1)
-    picked_dy = pick_by_one_hot(mask, concat(*dys), d_fill=1)
+        # Clamp each candidate (dx, dy) to the atan's ±3072 square BEFORE the pick.
+        # The raw `dx = sub(vertex, view)` carries a tracked value_range wider than
+        # 3072, which would blow `broadcast_select`'s additive offset past its
+        # sanity bound. Byte-identical at the active row: `signed_world_angle`
+        # re-clamps to the same ±3072 internally via `_abs_coord`, so the clamp is
+        # idempotent there.
+        dxs = [
+            clamp(emit.dx, -_ATAN_ABS_RANGE, _ATAN_ABS_RANGE) for _n, emit in members
+        ]
+        dys = [
+            clamp(emit.dy, -_ATAN_ABS_RANGE, _ATAN_ABS_RANGE) for _n, emit in members
+        ]
+        # Two d_fill=1 picks sharing the SAME mask — simpler than one d_fill=2 pick
+        # + split (no slot-major interleave), and the second pick's cost is
+        # negligible against the 1024-wide atan. Both are float-exact at the active
+        # row.
+        picked_dx = pick_by_one_hot(mask, concat(*dxs), d_fill=1)
+        picked_dy = pick_by_one_hot(mask, concat(*dys), d_fill=1)
 
-    shared = angle_scalar(signed_world_angle(picked_dx, picked_dy))
+    # The deferred world-angle atan2 is projection work (the seg/bbox
+    # R_PointToAngle), even though it is structurally invoked here at dispatch
+    # time after the 4-atans-to-1 collapse. Annotate it `proj` so its (wide)
+    # nodes carry their true provenance rather than the dispatch glue's.
+    with annotate("proj"):
+        shared = angle_scalar(signed_world_angle(picked_dx, picked_dy))
     return {
         name: (shared if isinstance(out, AngleInputEmit) else out)
         for name, out in branches.items()
     }
 
 
+@annotated("dispatch")
 def _collapse_scalar_emits(
     inp: ProtocolTokenView,
     branches: Mapping[str, "Node | ScalarEmit"],

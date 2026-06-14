@@ -53,6 +53,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from torchwright.graph import annotated
+
 from .render_ops import add_const, and_, gt_screen, one_minus, same_int
 from .std import constant, make_token_head, select
 from .vocab import (
@@ -81,12 +83,15 @@ class FlatPassRenderer:
 
     projection: "SegProjection"
 
+    @annotated("plan/R_DrawPlanes")
     def after_draw_planes_begin(self) -> "Node":
         return make_token_head(SET_CURSOR_DIRECTION_X)
 
+    @annotated("plan/R_DrawPlanes")
     def after_set_cursor_direction_x(self) -> "Node":
         return make_token_head(FLAT_NEXT_PLANE, p=constant(-1.0))
 
+    @annotated("plan/R_DrawPlanes")
     def after_flat_next_plane(self) -> "Node":
         projection = self.projection
         next_plane = projection.planes.runtime_visplanes.next_plane_after(
@@ -99,6 +104,7 @@ class FlatPassRenderer:
             make_token_head(FLAT_NEXT_VP, p=next_plane, vp=constant(-1.0)),
         )
 
+    @annotated("plan/R_DrawPlanes")
     def after_flat_next_vp(self) -> "Node":
         projection = self.projection
         next_vp = projection.planes.runtime_visplanes.next_vp_after(
@@ -119,6 +125,7 @@ class FlatPassRenderer:
     # DOOM: R_DrawPlanes sky special-case (r_plane.c:396-420) vs. regular flat
     # path — sky visplanes are skipped (no span pass); a column-drawn sky is
     # a separate future phase.
+    @annotated("plan/R_DrawPlanes")
     def after_flat_visplane_begin(self) -> "Node":
         projection = self.projection
         flat = projection.flats.flat_pass.flat_visplane_values(projection.core.past)
@@ -136,6 +143,7 @@ class FlatPassRenderer:
             make_token_head(MAKE_SPANS_COL, x=flat.minx),
         )
 
+    @annotated("plan/R_MakeSpans")
     def after_make_spans_col(self) -> "Node":
         projection = self.projection
         return select(
@@ -148,6 +156,7 @@ class FlatPassRenderer:
             ),
         )
 
+    @annotated("plan/R_MakeSpans")
     def after_span_close_slot(self) -> "Node":
         projection = self.projection
         slot1 = same_int(projection.core.inp.span_close_slot, constant(1.0))
@@ -175,6 +184,7 @@ class FlatPassRenderer:
             ),
         )
 
+    @annotated("plan/R_MakeSpans")
     def after_span_row(self) -> "Node":
         return make_token_head(SET_CURSOR_Y, y=self.projection.core.inp.span_row_y)
 
@@ -184,6 +194,7 @@ class FlatPassRenderer:
     # opens no close slots; after_completed_flat_span_row is a hidden re-entry
     # reached only from PixelDispatcher.after_flat_pixel_color when a flat span's
     # pixel run finishes ---
+    @annotated("plan/R_MakeSpans")
     def after_make_spans_without_close(self) -> "Node":
         projection = self.projection
         flat = projection.flats.flat_pass.flat_visplane_values(projection.core.past)
@@ -194,6 +205,7 @@ class FlatPassRenderer:
             make_token_head(MAKE_SPANS_COL, x=add_const(make_spans.x, 1.0)),
         )
 
+    @annotated("plan/R_MakeSpans")
     def after_completed_flat_span_row(self) -> "Node":
         projection = self.projection
         flat_span = projection.flats.flat_pass.flat_span_values(projection.core.past)

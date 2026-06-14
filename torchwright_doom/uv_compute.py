@@ -24,6 +24,7 @@ the grid's unit step and the dc_iscale axis cell precision does not matter.
 from __future__ import annotations
 
 from torchwright.graph import Node
+from torchwright.graph import annotated
 
 from .constants import CENTER_Y
 from .pwl_banks import SAWTOOTH_BANK
@@ -32,6 +33,7 @@ from .std import concat, pick_by_one_hot
 from .std import sum as vec_sum
 
 
+@annotated("paint")
 def compute_v_at_pixel(
     *,
     pixel_index_vec: Node,
@@ -49,6 +51,7 @@ def compute_v_at_pixel(
     return pick_by_one_hot(h_idx_oh, bank)
 
 
+@annotated("paint")
 def compute_v_native_at_screen_y(
     *,
     screen_y: Node,

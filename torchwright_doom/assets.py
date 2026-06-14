@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 import math
 
 from torchwright.graph import Node
+from torchwright.graph import annotated
 
 from .std import (
     concat,
@@ -87,6 +88,7 @@ class WallAssets:
             ),
         )
 
+    @annotated("tex")
     def bank_id(self, tex_id: Node) -> Node:
         return pick_by_index(
             tex_id,
@@ -94,6 +96,7 @@ class WallAssets:
             self.banks.n_wall_textures + 1,
         )
 
+    @annotated("tex")
     def local_id(self, tex_id: Node) -> Node:
         return pick_by_index(
             tex_id,
@@ -101,6 +104,7 @@ class WallAssets:
             self.banks.n_wall_textures + 1,
         )
 
+    @annotated("tex")
     def width(self, tex_id: Node) -> Node:
         return pick_by_index(
             tex_id,
@@ -108,6 +112,7 @@ class WallAssets:
             self.banks.n_wall_textures + 1,
         )
 
+    @annotated("tex")
     def height(self, tex_id: Node) -> Node:
         return pick_by_index(
             tex_id,
@@ -115,6 +120,7 @@ class WallAssets:
             self.banks.n_wall_textures + 1,
         )
 
+    @annotated("tex")
     def h_idx_oh(self, tex_id: Node) -> Node:
         return pick_by_index(
             tex_id,
@@ -123,6 +129,7 @@ class WallAssets:
             d_fill=len(self.banks.wall_height_bank),
         )
 
+    @annotated("tex")
     def palette_index(self, tex_id: Node, u_native: Node, v_mod_h: Node) -> Node:
         bank_id = self.bank_id(tex_id)
         local_id = self.local_id(tex_id)
@@ -157,6 +164,7 @@ class FlatAssets:
 
     banks: AssetBanks = DEFAULT_ASSET_BANKS
 
+    @annotated("tex")
     def is_sky(self, flat_id: Node) -> Node:
         return indicator_to_bool(
             pick_by_index(
@@ -164,6 +172,7 @@ class FlatAssets:
             )
         )
 
+    @annotated("tex")
     def palette_index(self, flat_id: Node, u: Node, v: Node) -> Node:
         row = linear(
             concat(

@@ -16,6 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from torchwright.graph import annotated
+
 from .render_ops import one_minus, or_
 from .std import type_switch
 from .wall_column_renderer import WallColumnRenderer
@@ -30,6 +32,7 @@ class RangeDispatcher:
 
     projection: "SegProjection"
 
+    @annotated("dispatch")
     def after_screen_range(self, fallback_out):
         projection = self.projection
         phase_mask = or_(

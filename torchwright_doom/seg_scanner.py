@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from torchwright.graph import Node
+from torchwright.graph import annotated
 
 from .render_ops import (
     MUL_CROSS,
@@ -71,6 +72,7 @@ class SegScanner:
 
     projection: "SegProjection"
 
+    @annotated("proj/R_AddLine")
     def after_visit_subsector(self) -> Node:
         """Start the R_Subsector-style scan, or return if the leaf is empty."""
         projection = self.projection
@@ -89,6 +91,7 @@ class SegScanner:
             ),
         )
 
+    @annotated("proj/R_AddLine")
     def after_process_seg(self) -> Node:
         """Backface-cull the current seg before starting endpoint projection."""
         projection = self.projection
@@ -103,22 +106,27 @@ class SegScanner:
             self.advance_after_current_process_seg(),
         )
 
+    @annotated("proj/R_AddLine")
     def after_world_angle_mark_a(self) -> AngleInputEmit:
         """Defer the ANGLE_VALUE(world_a) atan2 inputs for endpoint A."""
         return self.world_angle_mark_out(is_b_side=False)
 
+    @annotated("proj/R_AddLine")
     def after_theta_mark_a(self) -> ScalarEmit:
         """Emit ANGLE_VALUE(theta_a) from the previous world angle."""
         return self.theta_mark_out()
 
+    @annotated("proj/R_AddLine")
     def after_world_angle_mark_b(self) -> AngleInputEmit:
         """Defer the ANGLE_VALUE(world_b) atan2 inputs for endpoint B."""
         return self.world_angle_mark_out(is_b_side=True)
 
+    @annotated("proj/R_AddLine")
     def after_theta_mark_b(self) -> ScalarEmit:
         """Emit ANGLE_VALUE(theta_b) from the previous world angle."""
         return self.theta_mark_out()
 
+    @annotated("proj/R_AddLine")
     def after_projection_angle_value(self) -> Node:
         projection = self.projection
         return dispatch_projection_angle_phase(
@@ -130,6 +138,7 @@ class SegScanner:
         )
 
     # DOOM: R_ClipSolidWallSegment / solidsegs scan (r_bsp.c line 98-185)
+    @annotated("proj/R_AddLine")
     def after_find_run(self) -> Node:
         """Find or skip to the next visible run for the current projected seg."""
         projection = self.projection
@@ -150,6 +159,7 @@ class SegScanner:
             select(seg.visible_run.covered_at_x, skip_covered, emit_run),
         )
 
+    @annotated("proj/R_AddLine")
     def after_advance_seg(self) -> Node:
         """Advance to the next seg, or return to BSP traversal."""
         projection = self.projection
@@ -162,6 +172,7 @@ class SegScanner:
         )
 
     # DOOM: R_StoreWallRange (r_segs.c line 376 call from clipping)
+    @annotated("proj/R_AddLine")
     def after_emit_x2(self) -> Node:
         """Hand the horizontally visible fragment to R_StoreWallRange."""
         return make_token_head(
@@ -238,6 +249,7 @@ class SegScanner:
         theta = wrap_signed_angle(sub(world_angle, projection.core.scene.view.angle))
         return angle_scalar(theta)
 
+    @annotated("proj/R_AddLine")
     def advance_after_seg(
         self,
         seg_id: Node,

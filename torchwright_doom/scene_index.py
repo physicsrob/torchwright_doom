@@ -31,6 +31,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from torchwright.graph import Node, PosEncoding
+from torchwright.graph import annotated
 
 from .assets import AssetIndex
 from .past import GraphPast
@@ -64,6 +65,7 @@ class SceneIndex:
     planes: PlaneIndex
 
     @classmethod
+    @annotated("scene")
     def build(
         cls,
         input_vec: Node,

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from torchwright.graph import Node
+from torchwright.graph import annotated
 
 from .attention_handles import (
     LiftedKeyValueHandle,
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
     from .scene_index import SceneIndex
 
 
+@annotated("stor/R_StoreWallRange")
 def rw_distance_for(scene: SceneIndex, seg_i: Node) -> Node:
     """DOOM: rw_distance (r_segs.c:R_StoreWallRange) — perpendicular distance
     from the viewpoint to the seg's line: the view-relative endpoint dotted
@@ -63,6 +65,7 @@ class RecentDrawsegState:
     scale1: Node
 
     @classmethod
+    @annotated("stor")
     def read_from_recent_rows(
         cls,
         past: PastHandleScope,
@@ -116,6 +119,7 @@ class SegLevelFacts:
     h_idx_oh_lower: LiftedKeyValueLookup
 
     @classmethod
+    @annotated("stor/R_StoreWallRange")
     def publish(
         cls,
         past: PastHandleScope,

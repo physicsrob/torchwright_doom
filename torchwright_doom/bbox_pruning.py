@@ -35,6 +35,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from torchwright.graph import Node
+from torchwright.graph import annotated
 
 from .attention_handles import RecentMarkerHandle
 from .past import PastHandle, PastHandleScope
@@ -118,6 +119,7 @@ class BBoxContext:
     right: Node
 
     @classmethod
+    @annotated("bsp")
     def publish(
         cls,
         past: PastHandleScope,
@@ -181,6 +183,7 @@ class BBoxRange:
     has_width: Node
 
     @classmethod
+    @annotated("bsp")
     def publish(
         cls,
         past: PastHandleScope,
@@ -230,6 +233,7 @@ class BBoxPruner:
     bbox_range: BBoxRange
 
     @classmethod
+    @annotated("bsp/R_CheckBBox")
     def publish(
         cls,
         past: PastHandleScope,
@@ -317,9 +321,11 @@ class BBoxPruner:
             bbox_range=bbox_range,
         )
 
+    @annotated("bsp/R_CheckBBox")
     def after_between(self) -> Node:
         return make_token_head(BBOX_BOXPOS, boxpos=self._boxpos())
 
+    @annotated("bsp/R_CheckBBox")
     def after_boxpos(self) -> Node:
         boxpos = self.inp.bbox_boxpos
         return select(
@@ -328,42 +334,51 @@ class BBoxPruner:
             make_token_head(BBOX_CORNER_X_MARK_A, boxpos=boxpos),
         )
 
+    @annotated("bsp/R_CheckBBox")
     def after_corner_x_mark_a(self) -> ScalarEmit:
         return value_scalar(
             ValueRange.R0,
             self._corner_x(self.inp.boxpos_check_a_x_right),
         )
 
+    @annotated("bsp/R_CheckBBox")
     def after_corner_y_mark_a(self) -> ScalarEmit:
         return value_scalar(
             ValueRange.R0,
             self._corner_y(self.inp.boxpos_check_a_y_bottom),
         )
 
+    @annotated("bsp/R_CheckBBox")
     def after_world_angle_mark_a(self) -> AngleInputEmit:
         return self._world_angle_mark_out()
 
+    @annotated("bsp/R_CheckBBox")
     def after_theta_mark_a(self) -> ScalarEmit:
         return self._theta_mark_out()
 
+    @annotated("bsp/R_CheckBBox")
     def after_corner_x_mark_b(self) -> ScalarEmit:
         return value_scalar(
             ValueRange.R0,
             self._corner_x(self.inp.boxpos_check_b_x_right),
         )
 
+    @annotated("bsp/R_CheckBBox")
     def after_corner_y_mark_b(self) -> ScalarEmit:
         return value_scalar(
             ValueRange.R0,
             self._corner_y(self.inp.boxpos_check_b_y_bottom),
         )
 
+    @annotated("bsp/R_CheckBBox")
     def after_world_angle_mark_b(self) -> AngleInputEmit:
         return self._world_angle_mark_out()
 
+    @annotated("bsp/R_CheckBBox")
     def after_theta_mark_b(self) -> ScalarEmit:
         return self._theta_mark_out()
 
+    @annotated("bsp/R_CheckBBox")
     def after_value(self, no_op_out: Node) -> Node:
         boxpos = self._previous_boxpos()
         after_x_a = make_token_head(BBOX_CORNER_Y_MARK_A, boxpos=boxpos)
@@ -388,6 +403,7 @@ class BBoxPruner:
             ),
         )
 
+    @annotated("bsp/R_CheckBBox")
     def after_bbox_angle_value(self) -> Node:
         after_world_a = make_token_head(BBOX_THETA_MARK_A)
         after_theta_a = make_token_head(
@@ -416,6 +432,7 @@ class BBoxPruner:
         return out
 
     # Scan bbox screen-range against solidsegs occlusion (DOOM: R_CheckBBox lines 475-487)
+    @annotated("bsp/R_CheckBBox")
     def after_scan(self) -> Node:
         x = self.inp.bbox_scan_x
         beyond = gt_screen(x, self.bbox_range.last)

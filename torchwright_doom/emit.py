@@ -86,6 +86,7 @@ from typing import Mapping
 import torch
 
 from torchwright.graph import Concatenate, Linear, Node
+from torchwright.graph import annotated
 from torchwright.graph.spherical_codes import index_to_vector
 from torchwright.ops.arithmetic_ops import floor_int
 from torchwright.ops.inout_nodes import create_literal_value
@@ -158,6 +159,7 @@ class ScalarEmit:
     scalar: Node
 
 
+@annotated("emit")
 def value_scalar(range_id, value: Node) -> ScalarEmit:
     """A ``VALUE``-carrier branch's scalar contribution: range-encode ``value``
     into the shared slot's [-1, 1] space and defer the digit-quad.
@@ -239,6 +241,7 @@ def head_width() -> int:
     return layout.d_embed - layout.n_derived_columns
 
 
+@annotated("emit")
 def emit_derived_zero(suffix: str = "") -> Node:
     """The shared trailing derived-region zeros (``n_derived_columns`` wide).
 
@@ -254,6 +257,7 @@ def emit_derived_zero(suffix: str = "") -> Node:
     )
 
 
+@annotated("emit")
 def emit_token_head(
     token_type: TokenType,
     *,
@@ -277,6 +281,7 @@ def emit_token_head(
 # ---------------------------------------------------------------------------
 
 
+@annotated("emit")
 def emit_slotless(
     token_type: TokenType, suffix: str = "", *, include_derived: bool = True
 ) -> Node:
@@ -302,6 +307,7 @@ def emit_slotless(
     return create_literal_value(row, name=f"emit_{token_type.name}{suffix}")
 
 
+@annotated("emit")
 def emit_int_slot_token(
     token_type: TokenType,
     *,
@@ -335,6 +341,7 @@ def emit_int_slot_token(
     )
 
 
+@annotated("emit")
 def emit_float_slot_token(
     token_type: TokenType,
     *,
@@ -369,6 +376,7 @@ def emit_float_slot_token(
     )
 
 
+@annotated("emit")
 def emit_token(
     token_type: TokenType,
     *,

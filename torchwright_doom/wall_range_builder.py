@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from torchwright.graph import Node
+from torchwright.graph import annotated
 
 from .render_ops import (
     DIST_GT_ONE,
@@ -107,6 +108,7 @@ class WallRangeBuilder:
 
     projection: "SegProjection"
 
+    @annotated("stor/R_StoreWallRange")
     def after_store_wall_range(self) -> Node:
         projection = self.projection
         seg_i = projection.drawseg.store_i
@@ -131,6 +133,7 @@ class WallRangeBuilder:
         )
         return make_token_head(SEG_KPART, pat=pat)
 
+    @annotated("stor/R_StoreWallRange")
     def after_seg_kpart(self) -> Node:
         return make_token_head(SEG_DC_TMID_MID)
 
@@ -173,42 +176,51 @@ class WallRangeBuilder:
             )
         raise ValueError(f"unknown dc_tmid part: {part!r}")
 
+    @annotated("stor/R_StoreWallRange")
     def after_seg_dc_tmid_mid(self) -> ScalarEmit:
         return value_scalar(ValueRange.R3, self.dc_tmid_compute("mid"))
 
+    @annotated("stor/R_StoreWallRange")
     def after_seg_dc_tmid_upper(self) -> ScalarEmit:
         return value_scalar(ValueRange.R4, self.dc_tmid_compute("upper"))
 
+    @annotated("stor/R_StoreWallRange")
     def after_seg_dc_tmid_lower(self) -> ScalarEmit:
         return value_scalar(ValueRange.R4, self.dc_tmid_compute("lower"))
 
+    @annotated("stor/R_StoreWallRange")
     def after_drawseg_meta(self) -> Node:
         return make_token_head(DRAWSEG_SCALE1_DEN)
 
+    @annotated("stor/R_StoreWallRange")
     def after_drawseg_scale1_den(self) -> ScalarEmit:
         return value_scalar(
             ValueRange.R6,
             self.scale_denominator_for_inverse(is_stop=False),
         )
 
+    @annotated("stor/R_StoreWallRange")
     def after_drawseg_scale1(self) -> ScalarEmit:
         return value_scalar(
             ValueRange.R5,
             self.scale_from_recent_denominator(is_stop=False),
         )
 
+    @annotated("stor/R_StoreWallRange")
     def after_drawseg_scale2_den(self) -> ScalarEmit:
         return value_scalar(
             ValueRange.R6,
             self.scale_denominator_for_inverse(is_stop=True),
         )
 
+    @annotated("stor/R_StoreWallRange")
     def after_drawseg_scale2(self) -> ScalarEmit:
         return value_scalar(
             ValueRange.R5,
             self.scale_from_recent_denominator(is_stop=True),
         )
 
+    @annotated("stor/R_StoreWallRange")
     def after_drawseg_scalestep_den(self) -> ScalarEmit:
         projection = self.projection
         return value_scalar(
@@ -216,21 +228,25 @@ class WallRangeBuilder:
             sub(projection.drawseg.stop_x, projection.drawseg.store_x1),
         )
 
+    @annotated("stor/R_StoreWallRange")
     def after_drawseg_scalestep(self) -> ScalarEmit:
         return value_scalar(ValueRange.R8, self.scale_step())
 
+    @annotated("stor/R_StoreWallRange")
     def after_drawseg_bsilheight(self) -> ScalarEmit:
         return value_scalar(
             ValueRange.R9,
             self.bsilheight_value(self.projection.drawseg.store_i),
         )
 
+    @annotated("stor/R_StoreWallRange")
     def after_drawseg_tsilheight(self) -> ScalarEmit:
         return value_scalar(
             ValueRange.R9,
             self.tsilheight_value(self.projection.drawseg.store_i),
         )
 
+    @annotated("stor/R_StoreWallRange")
     def after_drawseg_u_phase(self) -> ScalarEmit:
         projection = self.projection
         scene = projection.core.scene
@@ -238,6 +254,7 @@ class WallRangeBuilder:
         u_phase_angle = wrap_signed_angle(sub(scene.view.angle, normal_angle))
         return angle_scalar(u_phase_angle)
 
+    @annotated("stor/R_StoreWallRange")
     def after_drawseg_u_angle_value(self) -> Node:
         # The DRAWSEG_U_PHASE -> ANGLE_VALUE handoff starts the visplane
         # find/check chain (or the wall-column pass if no plane is marked).
@@ -245,6 +262,7 @@ class WallRangeBuilder:
 
         return VisplaneMarker(self.projection).first_check_or_start_wall_columns()
 
+    @annotated("stor/R_StoreWallRange")
     def after_drawseg_value(self, fallback_out: Node) -> Node:
         projection = self.projection
         seg_i = projection.drawseg.store_i

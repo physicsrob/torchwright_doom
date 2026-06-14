@@ -22,6 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from torchwright.graph import Node
+from torchwright.graph import annotated
 
 from .past import PastHandle, PastHandleScope
 from .protocol_tokens import ProtocolTokenView
@@ -49,6 +50,7 @@ class TraversalEdges:
     edge_state: PastHandle
 
     @classmethod
+    @annotated("bsp")
     def publish(
         cls,
         past: PastHandleScope,
@@ -92,6 +94,7 @@ class TraversalEdges:
             ),
         )
 
+    @annotated("bsp")
     def after_return(self, past: PastLike, entity_u: Node, tree_depth: Node) -> Node:
         """Emit the next token after `TRAVERSE_RETURN(entity_u, depth)`.
 

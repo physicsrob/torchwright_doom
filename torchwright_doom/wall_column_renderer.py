@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from torchwright.graph import annotated
+
 from .constants import CENTER_Y, SCREEN_HEIGHT
 from .render_constants import PART_NONE, PLANE_KIND_CEILING, PLANE_KIND_FLOOR
 from .render_ops import (
@@ -78,6 +80,7 @@ class WallColumnRenderer:
 
     projection: "SegProjection"
 
+    @annotated("paint")
     def after_wall_col_u(self):
         projection = self.projection
         # delta_pos=-1 assumes WALL_COL_U sits exactly one row after SET_CURSOR_X
@@ -87,16 +90,19 @@ class WallColumnRenderer:
         )
         return value_scalar(ValueRange.R5, self.wall_column_scale(wall_col_x))
 
+    @annotated("paint")
     def after_wall_span_meta(self):
         return make_token_head(
             SET_CURSOR_Y, y=self.projection.core.inp.wall_span_meta_y
         )
 
+    @annotated("paint")
     def after_clip_update(self):
         projection = self.projection
         y1, y2 = projection.wall.wall_column.clip_range_values(projection.core.past)
         return make_token_head(SCREEN_RANGE, y1=y1, y2=y2)
 
+    @annotated("paint")
     def after_screen_y_value(self, fallback_out):
         projection = self.projection
         return select(
@@ -105,6 +111,7 @@ class WallColumnRenderer:
             fallback_out,
         )
 
+    @annotated("paint")
     def after_completed_plane_mark(self):
         projection = self.projection
         plane_kind_floor = constant(PLANE_KIND_FLOOR)
@@ -123,6 +130,7 @@ class WallColumnRenderer:
             self.first_span_or_clip_update(),
         )
 
+    @annotated("paint")
     def first_span_or_clip_update(self):
         projection = self.projection
         span_ordinal_0 = constant(0.0)
@@ -171,6 +179,7 @@ class WallColumnRenderer:
         has_span = or_(k0_visible, or_(k1_visible, k2_visible))
         return select(has_span, first_span, self.make_clip_update_or_advance())
 
+    @annotated("paint")
     def first_plane_mark_or_span(self):
         projection = self.projection
         ceiling_emit = projection.wall.wall_column.current_ceiling_emit
@@ -185,6 +194,7 @@ class WallColumnRenderer:
             ),
         )
 
+    @annotated("paint")
     def make_ceiling_plane_mark_current(self):
         projection = self.projection
         plane_kind_ceiling = constant(PLANE_KIND_CEILING)
@@ -197,6 +207,7 @@ class WallColumnRenderer:
             ),
         )
 
+    @annotated("paint")
     def make_floor_plane_mark_current(self):
         projection = self.projection
         plane_kind_floor = constant(PLANE_KIND_FLOOR)
@@ -209,6 +220,7 @@ class WallColumnRenderer:
             ),
         )
 
+    @annotated("paint")
     def make_floor_plane_mark(self):
         projection = self.projection
         plane_kind_floor = constant(PLANE_KIND_FLOOR)
@@ -224,6 +236,7 @@ class WallColumnRenderer:
             ),
         )
 
+    @annotated("paint")
     def after_completed_span(self):
         projection = self.projection
         span = projection.wall.wall_span_runtime.span_start_values(projection.core.past)
@@ -233,6 +246,7 @@ class WallColumnRenderer:
             self.make_clip_update_or_advance(),
         )
 
+    @annotated("paint")
     def part_idx_visible(self, part_idx, mid_visible, upper_visible, lower_visible):
         part_sentinel = constant(PART_NONE)
         part_oh = one_hot(part_idx, 3)
@@ -246,9 +260,11 @@ class WallColumnRenderer:
         part_exists = one_minus(same_int(part_idx, part_sentinel))
         return and_(part_exists, part_visible)
 
+    @annotated("paint")
     def after_completed_clip_update(self):
         return self.advance_after_column()
 
+    @annotated("paint")
     def make_clip_update_or_advance(self):
         projection = self.projection
         changed = projection.wall.wall_column.pick(
@@ -257,6 +273,7 @@ class WallColumnRenderer:
         )
         return select(changed, self.make_clip_update(), self.advance_after_column())
 
+    @annotated("paint")
     def advance_after_column(self):
         projection = self.projection
         next_x = add_const(
@@ -271,12 +288,15 @@ class WallColumnRenderer:
             make_token_head(SET_CURSOR_X, x=next_x),
         )
 
+    @annotated("paint")
     def make_span_meta_at_y(self, y, ordinal):
         return make_token_head(WALL_SPAN_META, y=y, ordinal=ordinal)
 
+    @annotated("paint")
     def make_clip_update(self):
         return make_token_head(CLIP_UPDATE)
 
+    @annotated("paint")
     def continue_after_range(self):
         projection = self.projection
         next_x = add_const(projection.drawseg.stop_x, 1.0)
@@ -292,6 +312,7 @@ class WallColumnRenderer:
             make_token_head(FIND_RUN, x=next_x),
         )
 
+    @annotated("paint/R_RenderSegLoop")
     def wall_column_scale(self, wall_col_x):
         """Per-column scale by linear interpolation from scale1 and scalestep.
 
@@ -311,6 +332,7 @@ class WallColumnRenderer:
             )
         )
 
+    @annotated("paint/R_RenderSegLoop")
     def wall_column_new_ceiling_from_value(self):
         """The new ceiling clip bound for a wall column (yl from worldtop, clamped
         by prior ceiling occlusion, upper tier checked, ceiling plane marked).

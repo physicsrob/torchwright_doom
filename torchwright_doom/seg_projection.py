@@ -28,6 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from torchwright.graph import Node
+from torchwright.graph import annotated
 
 from .attention_handles import RecentMarkerHandle
 from .past import PastHandle, PastHandleScope
@@ -209,6 +210,7 @@ class VisplaneRuntimeContext:
     check_result_vp_pub: PastHandle
     runtime_visplanes: RuntimeVisplaneState
 
+    @annotated("pmrk")
     def assigned_vp_for_kind(self, past: PastHandleScope, kind: Node) -> Node:
         """Runtime visplane assigned to a floor/ceiling kind by the most recent
         R_CHECK_PLANE_RESULT, recovered from the check-result handoff handles."""
@@ -239,6 +241,7 @@ class WallColumnRenderScalars:
     """
 
     @classmethod
+    @annotated("paint")
     def publish(
         cls,
         past: PastHandleScope,
@@ -315,6 +318,7 @@ class SegProjection:
     flats: FlatRuntimeContext
 
     @classmethod
+    @annotated("proj")
     def publish(
         cls,
         past: PastHandleScope,
@@ -325,7 +329,18 @@ class SegProjection:
         input_angle_or_zero: PastHandle,
         pos: Node,
     ) -> "SegProjection":
-        """Publish projection channels and recover the current seg cycle."""
+        """Publish projection channels and recover the current seg cycle.
+
+        Provenance note: this is the per-position projection context builder, so
+        its own setup nodes are ``proj``. It also delegates to other subsystems'
+        state publishers (``WallColumnState`` -> ``paint``, ``RuntimeVisplaneState``
+        -> ``pmrk``, ``FlatPassState`` -> ``plan``, ``SegLevelFacts`` -> ``stor``);
+        those are decorated with their own codes, so the nodes they build nest as
+        ``proj/<subcode>`` — the subsystem code is present in the path even though
+        the publish happens inside the projection context. The subsystems' branch
+        *logic* (the ``after_*`` owners) is built later from ``build_branch_outputs``
+        with no outer context, so it carries the clean top-level subsystem code.
+        """
         zero = constant(0.0)
         phase = ProjectionPhase.from_input(inp)
 

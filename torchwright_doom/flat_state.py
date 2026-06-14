@@ -38,6 +38,8 @@ from typing import TYPE_CHECKING
 
 from torchwright.ops.arithmetic_ops import compare
 
+from torchwright.graph import annotated
+
 from .attention_handles import RecentMarkerHandle
 from .doom_lighting import MAXLIGHTZ
 from .past import PastHandle, PastHandleScope
@@ -211,6 +213,7 @@ class FlatPassState:
     flat_cursor_state_pub: PastHandle
 
     @classmethod
+    @annotated("plan/R_MapPlane")
     def publish(
         cls,
         past: PastHandleScope,
@@ -512,6 +515,7 @@ class FlatPassState:
             flat_cursor_state_pub=flat_cursor_state_pub,
         )
 
+    @annotated("plan")
     def flat_visplane_values(self, past: PastHandleScope) -> FlatVisplaneValues:
         return FlatVisplaneValues(
             *split(
@@ -520,6 +524,7 @@ class FlatPassState:
             )
         )
 
+    @annotated("plan/R_MakeSpans")
     def make_spans_values(self, past: PastHandleScope) -> MakeSpansValues:
         # pick_most_recent recovers the stored ±1 booleans with ~1e-3 softmax
         # noise; the consumers feed them into selects over wide emit *heads*,
@@ -541,6 +546,7 @@ class FlatPassState:
             is_sentinel=snap_bool(sent),
         )
 
+    @annotated("plan/R_MakeSpans")
     def closure_values(self, past: PastHandleScope) -> ClosureValues:
         slot, y2, x_close, s1v, make_x, sent = split(
             self.closure_row.pick(past, self.closure_state_pub), [1] * 6
@@ -554,11 +560,13 @@ class FlatPassState:
             is_sentinel=snap_bool(sent),
         )
 
+    @annotated("plan")
     def flat_span_values(self, past: PastHandleScope) -> FlatSpanValues:
         return FlatSpanValues(
             *split(self.flat_span_row.pick(past, self.flat_span_state_pub), [1] * 4)
         )
 
+    @annotated("plan/R_MapPlane")
     def flat_cursor_values(self, past: PastHandleScope) -> FlatCursorValues:
         values = split(
             self.flat_cursor_x_row.pick(past, self.flat_cursor_state_pub),

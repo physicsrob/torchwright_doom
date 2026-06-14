@@ -47,6 +47,8 @@ from torchwright.ops.arithmetic_ops import (
     thermometer_floor_div,
 )
 
+from torchwright.graph import annotated
+
 from .past import PastHandle, PastHandleScope
 from .render_ops import (
     COL_RADIX_BASE as _RADIX_BASE,
@@ -304,6 +306,7 @@ class RuntimeVisplaneState:
     used_vp_value: PastHandle
 
     @classmethod
+    @annotated("pmrk")
     def publish(
         cls,
         past: PastHandleScope,
@@ -463,6 +466,7 @@ class RuntimeVisplaneState:
         )
 
     # DOOM: R_CheckPlane (r_plane.c) — does a new column range overlap an existing visplane's coverage?
+    @annotated("pmrk/R_CheckPlane")
     def check_conflict(
         self,
         past: PastHandleScope,
@@ -574,6 +578,7 @@ class RuntimeVisplaneState:
         return bool_and(cstar_present, le_x2)
 
     # DOOM: R_DrawPlanes (r_plane.c) — iterate active visplanes (for pl = visplanes; pl < lastvisplane; pl++)
+    @annotated("pmrk")
     def next_plane_after(self, past: PastHandleScope, threshold: Node) -> Node:
         """Smallest used plane STRICTLY greater than ``threshold``.
 
@@ -655,6 +660,7 @@ class RuntimeVisplaneState:
         )
 
     # DOOM: R_DrawPlanes (r_plane.c) — nested iteration over a plane's visplane instances (merge slots)
+    @annotated("pmrk")
     def next_vp_after(
         self, past: PastHandleScope, plane_id: Node, threshold: Node
     ) -> Node:
@@ -671,6 +677,7 @@ class RuntimeVisplaneState:
         return past.pick_argmax(query, self.used_vp_key, self.used_vp_value)
 
     # DOOM: visplane_t.minx (r_plane.c) — lowest column the visplane spans
+    @annotated("pmrk")
     def min_x(self, past: PastHandleScope, plane_id: Node, vp: Node) -> Node:
         one = constant(1.0)
         query = concat(
@@ -681,6 +688,7 @@ class RuntimeVisplaneState:
         return past.pick_argmax(query, self.bounds_min_key, self.occupied_x)
 
     # DOOM: visplane_t.maxx (r_plane.c) — highest column the visplane spans
+    @annotated("pmrk")
     def max_x(self, past: PastHandleScope, plane_id: Node, vp: Node) -> Node:
         one = constant(1.0)
         query = concat(
@@ -691,6 +699,7 @@ class RuntimeVisplaneState:
         return past.pick_argmax(query, self.bounds_max_key, self.occupied_x)
 
     # DOOM: visplane_t.top[]/bottom[] (r_plane.c) — per-column coverage lookup for one visplane
+    @annotated("pmrk")
     def column_range(
         self,
         past: PastHandleScope,

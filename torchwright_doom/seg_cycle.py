@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from torchwright.graph import Node
+from torchwright.graph import annotated
 
 from .attention_handles import RecentMarkerHandle, lifted_id_query
 from .past import PastHandleScope
@@ -67,6 +68,7 @@ class SubsectorContext:
     tree_depth: Node
 
     @classmethod
+    @annotated("proj")
     def publish(
         cls,
         past: PastHandleScope,
@@ -100,6 +102,7 @@ class ProcessSegCycle:
     tree_depth: Node
 
     @classmethod
+    @annotated("proj")
     def publish(
         cls,
         past: PastHandleScope,
@@ -125,6 +128,7 @@ class PlaneIdLookup:
     ceiling_id: Node
 
     @classmethod
+    @annotated("proj/R_FindPlane")
     def publish(
         cls,
         past: PastHandleScope,
@@ -170,6 +174,7 @@ class ProjectedEndpointColumns:
     is_visible: Node
 
     @classmethod
+    @annotated("proj")
     def publish(
         cls,
         past: PastHandleScope,
@@ -219,6 +224,7 @@ class VisibleRun:
     skip_to: Node
 
     @classmethod
+    @annotated("proj")
     def publish(
         cls,
         past: PastHandleScope,
@@ -240,6 +246,7 @@ class VisibleRun:
         )
 
 
+@annotated("proj")
 def dispatch_projection_angle_phase(
     phase: ProjectionPhase,
     *,

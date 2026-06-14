@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from torchwright.graph import Node
+from torchwright.graph import annotated
 
 from .bbox_pruning import BBoxPruner
 from .seg_projection import SegProjection
@@ -45,8 +46,17 @@ class PayloadRouter:
             self.bbox.after_value(no_op_out)
         )
 
+    @annotated("dispatch")
     def after_angle_value(self, no_op_out: Node) -> Node:
-        """Advance ANGLE_VALUE carrier rows by their marker-defined meaning."""
+        """Advance ANGLE_VALUE carrier rows by their marker-defined meaning.
+
+        Annotated ``dispatch`` (it is the carrier router). The routed arms it
+        builds are decorated with their own owner codes (SegScanner -> ``proj``,
+        WallRangeBuilder/VisplaneMarker -> ``stor``/``pmrk``, BBoxPruner ->
+        ``bsp``); those nest as ``dispatch/<code>`` so the owner code is present
+        in the path while the ``type_switch`` reduction glue itself reads
+        ``dispatch``. (Order-preserving: only a context wraps the unchanged body.)
+        """
         inp = self.projection.core.inp
         return type_switch(
             (inp.is_scene_angle_payload, no_op_out),

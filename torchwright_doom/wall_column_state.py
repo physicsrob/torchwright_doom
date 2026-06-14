@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 
 from torchwright.graph import Node
+from torchwright.graph import annotated
 
 from .assets import _H_IDX_OH_WIDTH
 from .attention_handles import RecentMarkerHandle
@@ -98,6 +99,7 @@ class ClipMemory:
     floor: Node
 
     @classmethod
+    @annotated("paint")
     def publish(
         cls,
         past: PastHandleScope,
@@ -212,6 +214,7 @@ class WallColumnState:
     plane_ranges: PastHandle
 
     @classmethod
+    @annotated("paint/R_RenderSegLoop")
     def publish(
         cls,
         past: PastHandleScope,
@@ -520,17 +523,21 @@ class WallColumnState:
             ),
         )
 
+    @annotated("paint")
     def pick(self, past: PastHandleScope, value: PastHandle) -> Node:
         return self.row.pick(past, value)
 
+    @annotated("paint")
     def span_values(self, past: PastHandleScope) -> WallColumnSpanValues:
         values = split(self.pick(past, self.span_state), [1] * 9)
         return WallColumnSpanValues(*values)
 
+    @annotated("paint")
     def clip_range_values(self, past: PastHandleScope) -> tuple[Node, Node]:
         y1, y2 = split(self.pick(past, self.clip_range), [1, 1])
         return y1, y2
 
+    @annotated("paint")
     def plane_range_values(self, past: PastHandleScope) -> WallColumnPlaneRanges:
         values = split(self.pick(past, self.plane_ranges), [1, 1, 1, 1])
         return WallColumnPlaneRanges(*values)
@@ -582,6 +589,7 @@ class WallSpanRuntimeState:
     span_v0_state_pub: PastHandle
     wallcol_k_y1_pub: PastHandle
 
+    @annotated("paint")
     def span_start_values(self, past: PastHandleScope) -> SpanStartValues:
         values = split(
             self.span_start_row.pick(past, self.span_start_state_pub),
@@ -602,11 +610,13 @@ class WallSpanRuntimeState:
         )
         return SpanStartValues(*values)
 
+    @annotated("paint")
     def span_v0_values(self, past: PastHandleScope) -> SpanV0Values:
         return SpanV0Values(
             *split(self.span_v0_row.pick(past, self.span_v0_state_pub), [1, 1])
         )
 
+    @annotated("paint")
     def wallcol_k_y1_values(
         self,
         past: PastHandleScope,
@@ -632,6 +642,7 @@ class WallSpanRuntimeDraft:
     k2_y1_value: Node
 
     @classmethod
+    @annotated("paint/R_RenderSegLoop")
     def publish(
         cls,
         past: PastHandleScope,
@@ -804,6 +815,7 @@ class WallSpanRuntimeDraft:
             k2_y1_value=k2_y1_value,
         )
 
+    @annotated("paint/R_RenderSegLoop")
     def finish(
         self,
         past: PastHandleScope,

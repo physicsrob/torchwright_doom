@@ -34,6 +34,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from torchwright.graph import Node
+from torchwright.graph import annotate, annotated
 
 from .attention_handles import LiftedKeyValueHandle
 from .bbox_pruning import BBoxPruner
@@ -76,6 +77,7 @@ class SideTable:
     handle: LiftedKeyValueHandle
 
     @classmethod
+    @annotated("side/R_PointOnSide")
     def publish(
         cls,
         past: PastHandleScope,
@@ -111,6 +113,7 @@ class BspTraversal:
     bbox: BBoxPruner
 
     @classmethod
+    @annotated("bsp")
     def publish(
         cls,
         past: PastHandleScope,
@@ -157,6 +160,7 @@ class BspTraversal:
             bbox=bbox,
         )
 
+    @annotated("bsp")
     def after_set_cursor_direction_y(self) -> Node:
         """Branch for the SET_CURSOR_DIRECTION_Y row (which BEGIN emits). Starts the
         side-bit precompute prefix: THINK_SIDE(0) when the map has BSP nodes, else
@@ -167,11 +171,13 @@ class BspTraversal:
             make_token_head(VISIT_SUBSECTOR, s=constant(0.0), depth=constant(0.0)),
         )
 
+    @annotated("side/R_PointOnSide")
     def after_think_side(self) -> Node:
         """Emit `SIDE_RECORD(node, side(node))` for the current THINK_SIDE row."""
         side = bool_to_01(_think_side_compute(self.scene, self.inp.think_node))
         return make_token_head(SIDE_RECORD, node=self.inp.think_node, side=side)
 
+    @annotated("bsp")
     def after_side_record(self) -> Node:
         """Advance side precompute, or enter the BSP root after existing nodes."""
         next_think_node = add_const(self.inp.side_record_node, 1.0)
@@ -182,6 +188,7 @@ class BspTraversal:
         )
         return select(has_next_node, next_side, enter_root)
 
+    @annotated("bsp")
     def after_enter(self) -> Node:
         """Descend from TRAVERSE_ENTER to the first/front child.
 
@@ -193,6 +200,7 @@ class BspTraversal:
         """Run R_CheckBBox-style pruning before the second/back child."""
         return self.bbox.after_between()
 
+    @annotated("bsp")
     def after_return(self) -> Node:
         """Pop the dynamic traversal stack after a child/subsector returns."""
         return self.edges.after_return(
@@ -235,6 +243,7 @@ class BspTraversal:
         return self.bbox.after_scan()
 
 
+@annotated("side/R_PointOnSide")
 def _think_side_compute(scene: SceneIndex, node: Node) -> Node:
     """Compute `side_p` for the current THINK_SIDE position's node.
 
@@ -258,6 +267,7 @@ def _think_side_compute(scene: SceneIndex, node: Node) -> Node:
 
 
 # DOOM: NF_SUBSECTOR flag test in R_RenderBSPNode (r_bsp.c:558-565) — node vs subsector dispatch
+@annotated("bsp")
 def _child_dispatch(child_u: Node, tree_depth: Node) -> Node:
     """Emit the correct traversal token for a node-or-subsector child id."""
     is_ss = IS_SUBSECTOR(child_u)
@@ -269,6 +279,7 @@ def _child_dispatch(child_u: Node, tree_depth: Node) -> Node:
     )
 
 
+@annotated("bsp")
 def node_child_out(child: Node, tree_depth: Node) -> Node:
     # DOOM: R_RenderBSPNode (r_bsp.c) — recursive descent to a child at increased tree depth
     child_tree_depth = add_const(tree_depth, 1.0)
@@ -276,6 +287,7 @@ def node_child_out(child: Node, tree_depth: Node) -> Node:
 
 
 # DOOM: R_RenderBSPNode (r_bsp.c:573) — front child selection via bsp->children[side]
+@annotated("bsp")
 def _node_first_child(scene: SceneIndex, side_table: SideTable, node: Node) -> Node:
     """Return the DOOM front child for this node and player side bit."""
     side = side_table.pick(node)
@@ -285,6 +297,7 @@ def _node_first_child(scene: SceneIndex, side_table: SideTable, node: Node) -> N
 
 
 # DOOM: R_RenderBSPNode (r_bsp.c:576) — back child (side^1) candidate before R_CheckBBox
+@annotated("bsp")
 def _node_second_child(scene: SceneIndex, side_table: SideTable, node: Node) -> Node:
     """Return the DOOM back child candidate before R_CheckBBox pruning."""
     side = side_table.pick(node)
@@ -293,6 +306,7 @@ def _node_second_child(scene: SceneIndex, side_table: SideTable, node: Node) -> 
     return select(side, back_child, front_child)
 
 
+@annotated("bsp")
 def _node_first_child_lifted(
     scene: SceneIndex, side_table: SideTable, node: Node
 ) -> Node:
@@ -308,6 +322,7 @@ def _node_first_child_lifted(
     return select(side, front_child, back_child)
 
 
+@annotated("bsp")
 def _node_second_child_lifted(
     scene: SceneIndex, side_table: SideTable, node: Node
 ) -> Node:

@@ -25,6 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from torchwright.graph import Node
+from torchwright.graph import annotated
 from torchwright.ops.arithmetic_ops import compare, mod_const, thermometer_floor_div
 
 from .attention_handles import RecentMarkerHandle
@@ -91,6 +92,7 @@ class SolidIntervals:
     carry_payload: PastHandle
 
     @classmethod
+    @annotated("stor")
     def publish(
         cls,
         past: PastHandleScope,
@@ -150,6 +152,7 @@ class SolidIntervals:
         )
 
     # DOOM: solidsegs scan predicate (r_bsp.c:R_ClipSolidWallSegment/R_ClipPassWallSegment)
+    @annotated("stor")
     def covered_and_end(
         self,
         column: Node,
@@ -180,6 +183,7 @@ class SolidIntervals:
         # (see ``render_ops.snap_bool``). ``end`` stays raw (a screen column).
         return snap_bool(covered), end
 
+    @annotated("stor")
     def next_start_after(self, column: Node) -> Node:
         """Return the nearest solid interval start strictly after `column`."""
         query_hi = thermometer_floor_div(column, _RADIX_BASE, SCREEN_WIDTH)

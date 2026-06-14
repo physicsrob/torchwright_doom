@@ -47,6 +47,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from torchwright.graph import annotated
+
 from .render_constants import PLANE_KIND_CEILING, PLANE_KIND_FLOOR
 from .render_ops import add_const, and_, gt_height, one_minus, same_int
 from .std import constant, make_token_head, select
@@ -67,6 +69,7 @@ class VisplaneMarker:
 
     projection: "SegProjection"
 
+    @annotated("pmrk/R_CheckPlane")
     def after_r_check_plane(self):
         projection = self.projection
         kind = projection.core.inp.r_check_plane_kind
@@ -89,6 +92,7 @@ class VisplaneMarker:
             make_token_head(R_CHECK_PLANE_RESULT, kind=kind, vp=candidate_vp),
         )
 
+    @annotated("pmrk/R_CheckPlane")
     def after_r_check_plane_result(self):
         projection = self.projection
         plane_kind_floor = constant(PLANE_KIND_FLOOR)
@@ -102,6 +106,7 @@ class VisplaneMarker:
             self.start_wall_columns(),
         )
 
+    @annotated("pmrk/R_CheckPlane")
     def after_plane_mark(self):
         projection = self.projection
         plane_kind_floor = constant(PLANE_KIND_FLOOR)
@@ -113,6 +118,7 @@ class VisplaneMarker:
             y2=select(is_floor, ranges.floor_y2, ranges.ceiling_y2),
         )
 
+    @annotated("pmrk/R_CheckPlane")
     def first_check_or_start_wall_columns(self):
         plane_kind_ceiling = constant(PLANE_KIND_CEILING)
         plane_kind_floor = constant(PLANE_KIND_FLOOR)

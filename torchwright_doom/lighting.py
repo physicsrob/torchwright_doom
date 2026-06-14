@@ -14,6 +14,7 @@ node at import (``global_node_id`` stays ``0``).
 from __future__ import annotations
 
 from torchwright.graph import Node
+from torchwright.graph import annotated
 
 from .std import concat, pick_by_index, pwl_def
 from .doom_lighting import NUMCOLORMAPS
@@ -41,6 +42,7 @@ _COLORMAP_ROW_PWLS = tuple(_colormap_row_pwl(row) for row in range(NUMCOLORMAPS)
 
 
 # DOOM: COLORMAP[row][palette_index] lookup (r_draw.c: dc_colormap[...] per column).
+@annotated("paint")
 def apply_colormap_row(raw_palette_index: Node, colormap_row: Node) -> Node:
     """Return the lit palette index for a texel palette index and COLORMAP row.
 

@@ -31,6 +31,27 @@ from functools import cached_property
 from typing import TYPE_CHECKING
 
 from torchwright.graph import Node
+from torchwright.graph import annotate, annotated
+
+
+def _input_cached_property(fn):
+    """``cached_property`` whose body runs under ``annotate("input")``.
+
+    ``ProtocolTokenView`` is the current-token typed decode; every node a
+    property builds is the ``input`` subsystem (token decode + memory fetch).
+    The properties are lazily evaluated at first access from many subsystems, so
+    wrapping the body in the ContextVar (rather than relying on the caller's
+    label) is what pins the decode nodes to ``input`` deterministically. The
+    cache, lazy timing, and node creation are otherwise identical to a bare
+    ``cached_property`` — this only sets ``.annotation`` on the nodes built."""
+
+    def wrapper(self):
+        with annotate("input"):
+            return fn(self)
+
+    wrapper.__name__ = fn.__name__
+    wrapper.__doc__ = fn.__doc__
+    return cached_property(wrapper)
 
 from .protocol_registry import (
     BBOX_ANGLE_MARKERS as _BBOX_ANGLE_MARKERS,
@@ -230,21 +251,21 @@ class ProtocolTokenView:
     # class creation. Context-sensitive predicates below remain hand-written.
 
     # --- Marker-relative phase predicates: is this the VALUE row after marker M? ---
-    @cached_property
+    @_input_cached_property
     def is_value_after_seg_dc_tmid_mid(self) -> Node:
         return and_(
             self.is_value,
             _input_type_matches(self.prev_input_type, SEG_DC_TMID_MID),
         )
 
-    @cached_property
+    @_input_cached_property
     def is_value_after_seg_dc_tmid_upper(self) -> Node:
         return and_(
             self.is_value,
             _input_type_matches(self.prev_input_type, SEG_DC_TMID_UPPER),
         )
 
-    @cached_property
+    @_input_cached_property
     def is_value_after_seg_dc_tmid_lower(self) -> Node:
         return and_(
             self.is_value,
@@ -255,98 +276,98 @@ class ProtocolTokenView:
     # VALUE reads stay indexed by the range-bank id. Call sites give these
     # numeric accessors role-specific local names when the surrounding marker
     # protocol determines the meaning.
-    @cached_property
+    @_input_cached_property
     def value_v0(self) -> Node:
         return value_derived(self.input_vec, ValueRange.R0)
 
-    @cached_property
+    @_input_cached_property
     def value_v3(self) -> Node:
         return value_derived(self.input_vec, ValueRange.R3)
 
-    @cached_property
+    @_input_cached_property
     def value_v4(self) -> Node:
         return value_derived(self.input_vec, ValueRange.R4)
 
-    @cached_property
+    @_input_cached_property
     def value_v5(self) -> Node:
         return value_derived(self.input_vec, ValueRange.R5)
 
-    @cached_property
+    @_input_cached_property
     def value_inv5(self) -> Node:
         return value_derived(self.input_vec, ValueRange.R5, "inv")
 
-    @cached_property
+    @_input_cached_property
     def value_wall_scale_diminish5(self) -> Node:
         return value_derived(self.input_vec, ValueRange.R5, "wall_scale_diminish")
 
-    @cached_property
+    @_input_cached_property
     def value_inv6(self) -> Node:
         return value_derived(self.input_vec, ValueRange.R6, "inv")
 
-    @cached_property
+    @_input_cached_property
     def value_inv7(self) -> Node:
         return value_derived(self.input_vec, ValueRange.R7, "inv")
 
-    @cached_property
+    @_input_cached_property
     def value_v8(self) -> Node:
         return value_derived(self.input_vec, ValueRange.R8)
 
     # --- SEG_KPART accessors: wall texture-part bits and offsets ---
-    @cached_property
+    @_input_cached_property
     def seg_kpart_K_part_0(self) -> Node:
         return extract_derived(self.input_vec, "K_part_0")
 
-    @cached_property
+    @_input_cached_property
     def seg_kpart_K_part_1(self) -> Node:
         return extract_derived(self.input_vec, "K_part_1")
 
-    @cached_property
+    @_input_cached_property
     def seg_kpart_K_part_2(self) -> Node:
         return extract_derived(self.input_vec, "K_part_2")
 
-    @cached_property
+    @_input_cached_property
     def seg_kpart_has_mid(self) -> Node:
         return indicator_to_bool(extract_derived(self.input_vec, "has_mid"))
 
-    @cached_property
+    @_input_cached_property
     def seg_kpart_has_upper(self) -> Node:
         return indicator_to_bool(extract_derived(self.input_vec, "has_upper"))
 
-    @cached_property
+    @_input_cached_property
     def seg_kpart_has_lower(self) -> Node:
         return indicator_to_bool(extract_derived(self.input_vec, "has_lower"))
 
     # --- Current-type tests and same-row slot accessors (visplane setup) ---
-    @cached_property
+    @_input_cached_property
     def is_set_cursor_x(self) -> Node:
         return SET_CURSOR_X.check(self.input_vec)
 
-    @cached_property
+    @_input_cached_property
     def wall_col_u_idx(self) -> Node:
         return WALL_COL_U.extract(self.input_vec, "u_idx")
 
-    @cached_property
+    @_input_cached_property
     def is_plane_def(self) -> Node:
         return PLANE_DEF.check(self.input_vec)
 
-    @cached_property
+    @_input_cached_property
     def is_ss_floor_plane(self) -> Node:
         return SS_FLOOR_PLANE.check(self.input_vec)
 
-    @cached_property
+    @_input_cached_property
     def is_ss_ceiling_plane(self) -> Node:
         return SS_CEILING_PLANE.check(self.input_vec)
 
-    @cached_property
+    @_input_cached_property
     def ss_floor_plane_p(self) -> Node:
         return SS_FLOOR_PLANE.extract(self.input_vec, "p")
 
-    @cached_property
+    @_input_cached_property
     def ss_ceiling_plane_p(self) -> Node:
         return SS_CEILING_PLANE.extract(self.input_vec, "p")
 
     # --- Payload-group membership tests: classify a carrier by its marker ---
-    @cached_property
+    @_input_cached_property
     def is_inert_non_payload(self) -> Node:
         """Rows whose type is intrinsically inert and should emit `NO_OP`.
 
@@ -356,7 +377,7 @@ class ProtocolTokenView:
         """
         return _current_type_matches_any(self.input_vec, _INERT_NON_PAYLOAD_TYPES)
 
-    @cached_property
+    @_input_cached_property
     def is_scene_value_payload(self) -> Node:
         """Whether this `VALUE` row carries scene/prefill data."""
         return and_(
@@ -364,7 +385,7 @@ class ProtocolTokenView:
             _prev_type_matches_any(self.prev_input_type, _SCENE_VALUE_MARKERS),
         )
 
-    @cached_property
+    @_input_cached_property
     def is_scene_angle_payload(self) -> Node:
         """Whether this `ANGLE_VALUE` row carries scene/prefill data."""
         return and_(
@@ -372,7 +393,7 @@ class ProtocolTokenView:
             _prev_type_matches_any(self.prev_input_type, _SCENE_ANGLE_MARKERS),
         )
 
-    @cached_property
+    @_input_cached_property
     def is_projection_angle_payload(self) -> Node:
         """Whether this `ANGLE_VALUE` row is part of the AR projection cycle."""
         return and_(
@@ -380,7 +401,7 @@ class ProtocolTokenView:
             _prev_type_matches_any(self.prev_input_type, _PROJECTION_ANGLE_MARKERS),
         )
 
-    @cached_property
+    @_input_cached_property
     def is_bbox_angle_payload(self) -> Node:
         """Whether this `ANGLE_VALUE` row is part of bbox projection."""
         return and_(
@@ -389,63 +410,63 @@ class ProtocolTokenView:
         )
 
     # --- Angle after-marker phase predicates: ANGLE_VALUE row after marker M ---
-    @cached_property
+    @_input_cached_property
     def angle_after_world_a(self) -> Node:
         return and_(
             self.is_angle_value,
             _input_type_matches(self.prev_input_type, WORLD_ANGLE_MARK_A),
         )
 
-    @cached_property
+    @_input_cached_property
     def angle_after_theta_a(self) -> Node:
         return and_(
             self.is_angle_value,
             _input_type_matches(self.prev_input_type, THETA_MARK_A),
         )
 
-    @cached_property
+    @_input_cached_property
     def angle_after_world_b(self) -> Node:
         return and_(
             self.is_angle_value,
             _input_type_matches(self.prev_input_type, WORLD_ANGLE_MARK_B),
         )
 
-    @cached_property
+    @_input_cached_property
     def angle_after_theta_b(self) -> Node:
         return and_(
             self.is_angle_value,
             _input_type_matches(self.prev_input_type, THETA_MARK_B),
         )
 
-    @cached_property
+    @_input_cached_property
     def angle_after_drawseg_u_phase(self) -> Node:
         return and_(
             self.is_angle_value,
             _input_type_matches(self.prev_input_type, DRAWSEG_U_PHASE),
         )
 
-    @cached_property
+    @_input_cached_property
     def angle_after_bbox_world_a(self) -> Node:
         return and_(
             self.is_angle_value,
             _input_type_matches(self.prev_input_type, BBOX_WORLD_ANGLE_MARK_A),
         )
 
-    @cached_property
+    @_input_cached_property
     def angle_after_bbox_theta_a(self) -> Node:
         return and_(
             self.is_angle_value,
             _input_type_matches(self.prev_input_type, BBOX_THETA_MARK_A),
         )
 
-    @cached_property
+    @_input_cached_property
     def angle_after_bbox_world_b(self) -> Node:
         return and_(
             self.is_angle_value,
             _input_type_matches(self.prev_input_type, BBOX_WORLD_ANGLE_MARK_B),
         )
 
-    @cached_property
+    @_input_cached_property
     def angle_after_bbox_theta_b(self) -> Node:
         return and_(
             self.is_angle_value,
@@ -453,91 +474,91 @@ class ProtocolTokenView:
         )
 
     # --- More VALUE after-marker phase predicates (bbox corners, drawseg) ---
-    @cached_property
+    @_input_cached_property
     def is_value_after_bbox_corner_x_a(self) -> Node:
         return and_(
             self.is_value,
             _input_type_matches(self.prev_input_type, BBOX_CORNER_X_MARK_A),
         )
 
-    @cached_property
+    @_input_cached_property
     def is_value_after_bbox_corner_y_a(self) -> Node:
         return and_(
             self.is_value,
             _input_type_matches(self.prev_input_type, BBOX_CORNER_Y_MARK_A),
         )
 
-    @cached_property
+    @_input_cached_property
     def is_value_after_bbox_corner_x_b(self) -> Node:
         return and_(
             self.is_value,
             _input_type_matches(self.prev_input_type, BBOX_CORNER_X_MARK_B),
         )
 
-    @cached_property
+    @_input_cached_property
     def is_value_after_bbox_corner_y_b(self) -> Node:
         return and_(
             self.is_value,
             _input_type_matches(self.prev_input_type, BBOX_CORNER_Y_MARK_B),
         )
 
-    @cached_property
+    @_input_cached_property
     def is_value_after_drawseg_scale1_den(self) -> Node:
         return and_(
             self.is_value,
             _input_type_matches(self.prev_input_type, DRAWSEG_SCALE1_DEN),
         )
 
-    @cached_property
+    @_input_cached_property
     def is_value_after_drawseg_scale1(self) -> Node:
         return and_(
             self.is_value,
             _input_type_matches(self.prev_input_type, DRAWSEG_SCALE1),
         )
 
-    @cached_property
+    @_input_cached_property
     def is_value_after_drawseg_scale2_den(self) -> Node:
         return and_(
             self.is_value,
             _input_type_matches(self.prev_input_type, DRAWSEG_SCALE2_DEN),
         )
 
-    @cached_property
+    @_input_cached_property
     def is_value_after_drawseg_scale2(self) -> Node:
         return and_(
             self.is_value,
             _input_type_matches(self.prev_input_type, DRAWSEG_SCALE2),
         )
 
-    @cached_property
+    @_input_cached_property
     def is_value_after_drawseg_scalestep_den(self) -> Node:
         return and_(
             self.is_value,
             _input_type_matches(self.prev_input_type, DRAWSEG_SCALESTEP_DEN),
         )
 
-    @cached_property
+    @_input_cached_property
     def is_value_after_drawseg_scalestep(self) -> Node:
         return and_(
             self.is_value,
             _input_type_matches(self.prev_input_type, DRAWSEG_SCALESTEP),
         )
 
-    @cached_property
+    @_input_cached_property
     def is_value_after_drawseg_bsilheight(self) -> Node:
         return and_(
             self.is_value,
             _input_type_matches(self.prev_input_type, DRAWSEG_BSILHEIGHT),
         )
 
-    @cached_property
+    @_input_cached_property
     def is_value_after_drawseg_tsilheight(self) -> Node:
         return and_(
             self.is_value,
             _input_type_matches(self.prev_input_type, DRAWSEG_TSILHEIGHT),
         )
 
-    @cached_property
+    @_input_cached_property
     def is_value_after_wall_column(self) -> Node:
         # After Step 1, the rw_scale VALUE follows WALL_COL_U (not
         # SET_CURSOR_X directly). The semantic name is preserved — this
@@ -547,7 +568,7 @@ class ProtocolTokenView:
             _input_type_matches(self.prev_input_type, WALL_COL_U),
         )
 
-    @cached_property
+    @_input_cached_property
     def is_value_after_set_cursor_y(self) -> Node:
         return and_(
             self.is_value,
@@ -555,7 +576,7 @@ class ProtocolTokenView:
         )
 
     # --- SCREEN_Y / SCREEN_RANGE after-marker phase predicates ---
-    @cached_property
+    @_input_cached_property
     def screen_y_after_wall_column_scale(self) -> Node:
         # The wall-column rw_scale carrier follows WALL_COL_U; its
         # SCREEN_Y_VALUE emits the staged ceiling.
@@ -567,14 +588,14 @@ class ProtocolTokenView:
             ),
         )
 
-    @cached_property
+    @_input_cached_property
     def screen_range_after_clip_update(self) -> Node:
         return and_(
             self.is_screen_range,
             _input_type_matches(self.prev_input_type, CLIP_UPDATE),
         )
 
-    @cached_property
+    @_input_cached_property
     def screen_range_after_plane_mark(self) -> Node:
         return and_(
             self.is_screen_range,
@@ -583,252 +604,252 @@ class ProtocolTokenView:
 
     # --- Per-token slot accessors: typed reads of one named slot off the
     # current row (each returns 0 when the active row is not that type) ---
-    @cached_property
+    @_input_cached_property
     def plane_mark_kind(self) -> Node:
         return PLANE_MARK.extract(self.input_vec, "kind")
 
-    @cached_property
+    @_input_cached_property
     def plane_mark_p(self) -> Node:
         return PLANE_MARK.extract(self.input_vec, "p")
 
-    @cached_property
+    @_input_cached_property
     def plane_mark_vp(self) -> Node:
         return PLANE_MARK.extract(self.input_vec, "vp")
 
-    @cached_property
+    @_input_cached_property
     def r_check_plane_kind(self) -> Node:
         return R_CHECK_PLANE.extract(self.input_vec, "kind")
 
-    @cached_property
+    @_input_cached_property
     def r_check_plane_vp(self) -> Node:
         return R_CHECK_PLANE.extract(self.input_vec, "vp")
 
-    @cached_property
+    @_input_cached_property
     def r_check_plane_result_kind(self) -> Node:
         return R_CHECK_PLANE_RESULT.extract(self.input_vec, "kind")
 
-    @cached_property
+    @_input_cached_property
     def r_check_plane_result_vp(self) -> Node:
         return R_CHECK_PLANE_RESULT.extract(self.input_vec, "vp")
 
-    @cached_property
+    @_input_cached_property
     def plane_def_p(self) -> Node:
         return PLANE_DEF.extract(self.input_vec, "p")
 
-    @cached_property
+    @_input_cached_property
     def flat_next_plane_p(self) -> Node:
         return FLAT_NEXT_PLANE.extract(self.input_vec, "p")
 
-    @cached_property
+    @_input_cached_property
     def flat_next_vp_p(self) -> Node:
         return FLAT_NEXT_VP.extract(self.input_vec, "p")
 
-    @cached_property
+    @_input_cached_property
     def flat_next_vp_vp(self) -> Node:
         return FLAT_NEXT_VP.extract(self.input_vec, "vp")
 
-    @cached_property
+    @_input_cached_property
     def flat_visplane_p(self) -> Node:
         return FLAT_VISPLANE_BEGIN.extract(self.input_vec, "p")
 
-    @cached_property
+    @_input_cached_property
     def flat_visplane_vp(self) -> Node:
         return FLAT_VISPLANE_BEGIN.extract(self.input_vec, "vp")
 
-    @cached_property
+    @_input_cached_property
     def make_spans_x(self) -> Node:
         return MAKE_SPANS_COL.extract(self.input_vec, "x")
 
-    @cached_property
+    @_input_cached_property
     def span_close_slot(self) -> Node:
         return SPAN_CLOSE_SLOT.extract(self.input_vec, "slot")
 
-    @cached_property
+    @_input_cached_property
     def span_row_y(self) -> Node:
         return SPAN_ROW.extract(self.input_vec, "y")
 
-    @cached_property
+    @_input_cached_property
     def span_row_yslope(self) -> Node:
         return extract_derived(self.input_vec, "yslope")
 
-    @cached_property
+    @_input_cached_property
     def think_node(self) -> Node:
         return THINK_SIDE.extract(self.input_vec, "node")
 
-    @cached_property
+    @_input_cached_property
     def side_record_node(self) -> Node:
         return SIDE_RECORD.extract(self.input_vec, "node")
 
-    @cached_property
+    @_input_cached_property
     def side_record_side(self) -> Node:
         return SIDE_RECORD.extract(self.input_vec, "side")
 
-    @cached_property
+    @_input_cached_property
     def enter_node(self) -> Node:
         return TRAVERSE_ENTER.extract(self.input_vec, "node")
 
-    @cached_property
+    @_input_cached_property
     def enter_depth(self) -> Node:
         return TRAVERSE_ENTER.extract(self.input_vec, "depth")
 
-    @cached_property
+    @_input_cached_property
     def between_node(self) -> Node:
         return TRAVERSE_BETWEEN.extract(self.input_vec, "node")
 
-    @cached_property
+    @_input_cached_property
     def between_depth(self) -> Node:
         return TRAVERSE_BETWEEN.extract(self.input_vec, "depth")
 
-    @cached_property
+    @_input_cached_property
     def return_entity(self) -> Node:
         return TRAVERSE_RETURN.extract(self.input_vec, "entity_u")
 
-    @cached_property
+    @_input_cached_property
     def return_depth(self) -> Node:
         return TRAVERSE_RETURN.extract(self.input_vec, "depth")
 
-    @cached_property
+    @_input_cached_property
     def visit_ss(self) -> Node:
         return VISIT_SUBSECTOR.extract(self.input_vec, "s")
 
-    @cached_property
+    @_input_cached_property
     def visit_depth(self) -> Node:
         return VISIT_SUBSECTOR.extract(self.input_vec, "depth")
 
-    @cached_property
+    @_input_cached_property
     def process_i(self) -> Node:
         return PROCESS_SEG.extract(self.input_vec, "i")
 
-    @cached_property
+    @_input_cached_property
     def find_run_x(self) -> Node:
         return FIND_RUN.extract(self.input_vec, "x")
 
-    @cached_property
+    @_input_cached_property
     def find_run_x_square(self) -> Node:
         return extract_derived(self.input_vec, "x_square")
 
-    @cached_property
+    @_input_cached_property
     def advance_seg_i(self) -> Node:
         return ADVANCE_SEG.extract(self.input_vec, "i")
 
-    @cached_property
+    @_input_cached_property
     def emit_x2_x(self) -> Node:
         return EMIT_X2.extract(self.input_vec, "x")
 
-    @cached_property
+    @_input_cached_property
     def emit_x2_xtova_cos(self) -> Node:
         return extract_derived(self.input_vec, "xtova_cos")
 
-    @cached_property
+    @_input_cached_property
     def store_i(self) -> Node:
         return R_STORE_WALL_RANGE.extract(self.input_vec, "i")
 
-    @cached_property
+    @_input_cached_property
     def id_lifted_key(self) -> Node:
         return extract_derived(self.input_vec, ID_LIFTED_KEY_DERIVED_NAME)
 
-    @cached_property
+    @_input_cached_property
     def drawseg_meta_i(self) -> Node:
         return DRAWSEG_META.extract(self.input_vec, "i")
 
-    @cached_property
+    @_input_cached_property
     def cursor_x(self) -> Node:
         return SET_CURSOR_X.extract(self.input_vec, "x")
 
-    @cached_property
+    @_input_cached_property
     def cursor_x_distscale(self) -> Node:
         return extract_derived(self.input_vec, "distscale")
 
-    @cached_property
+    @_input_cached_property
     def wall_column_x(self) -> Node:
         return self.cursor_x
 
-    @cached_property
+    @_input_cached_property
     def cursor_y(self) -> Node:
         return SET_CURSOR_Y.extract(self.input_vec, "y")
 
-    @cached_property
+    @_input_cached_property
     def wall_span_meta_y(self) -> Node:
         return WALL_SPAN_META.extract(self.input_vec, "y")
 
-    @cached_property
+    @_input_cached_property
     def wall_span_meta_ordinal(self) -> Node:
         return WALL_SPAN_META.extract(self.input_vec, "ordinal")
 
-    @cached_property
+    @_input_cached_property
     def pixel_color(self) -> Node:
         return PIXEL.extract(self.input_vec, "color")
 
-    @cached_property
+    @_input_cached_property
     def pixel_r(self) -> Node:
         return extract_derived(self.input_vec, "pixel_r")
 
-    @cached_property
+    @_input_cached_property
     def pixel_g(self) -> Node:
         return extract_derived(self.input_vec, "pixel_g")
 
-    @cached_property
+    @_input_cached_property
     def pixel_b(self) -> Node:
         return extract_derived(self.input_vec, "pixel_b")
 
-    @cached_property
+    @_input_cached_property
     def screen_y(self) -> Node:
         return SCREEN_Y_VALUE.extract(self.input_vec, "y")
 
-    @cached_property
+    @_input_cached_property
     def screen_range_y1(self) -> Node:
         return SCREEN_RANGE.extract(self.input_vec, "y1")
 
-    @cached_property
+    @_input_cached_property
     def screen_range_y2(self) -> Node:
         return SCREEN_RANGE.extract(self.input_vec, "y2")
 
     # --- bbox sub-protocol tests and accessors (bounding-box visibility) ---
-    @cached_property
+    @_input_cached_property
     def bbox_scan_x(self) -> Node:
         return BBOX_SCAN.extract(self.input_vec, "x")
 
-    @cached_property
+    @_input_cached_property
     def bbox_scan_x_square(self) -> Node:
         return extract_derived(self.input_vec, "x_square")
 
-    @cached_property
+    @_input_cached_property
     def bbox_boxpos(self) -> Node:
         return BBOX_BOXPOS.extract(self.input_vec, "boxpos")
 
-    @cached_property
+    @_input_cached_property
     def bbox_corner_x_a_boxpos(self) -> Node:
         return BBOX_CORNER_X_MARK_A.extract(self.input_vec, "boxpos")
 
-    @cached_property
+    @_input_cached_property
     def bbox_corner_y_a_boxpos(self) -> Node:
         return BBOX_CORNER_Y_MARK_A.extract(self.input_vec, "boxpos")
 
-    @cached_property
+    @_input_cached_property
     def bbox_corner_x_b_boxpos(self) -> Node:
         return BBOX_CORNER_X_MARK_B.extract(self.input_vec, "boxpos")
 
-    @cached_property
+    @_input_cached_property
     def bbox_corner_y_b_boxpos(self) -> Node:
         return BBOX_CORNER_Y_MARK_B.extract(self.input_vec, "boxpos")
 
-    @cached_property
+    @_input_cached_property
     def boxpos_check_a_x_right(self) -> Node:
         return indicator_to_bool(extract_derived(self.input_vec, "check_a_x_right"))
 
-    @cached_property
+    @_input_cached_property
     def boxpos_check_a_y_bottom(self) -> Node:
         return indicator_to_bool(extract_derived(self.input_vec, "check_a_y_bottom"))
 
-    @cached_property
+    @_input_cached_property
     def boxpos_check_b_x_right(self) -> Node:
         return indicator_to_bool(extract_derived(self.input_vec, "check_b_x_right"))
 
-    @cached_property
+    @_input_cached_property
     def boxpos_check_b_y_bottom(self) -> Node:
         return indicator_to_bool(extract_derived(self.input_vec, "check_b_y_bottom"))
 
-    @cached_property
+    @_input_cached_property
     def boxpos_fails_open(self) -> Node:
         return indicator_to_bool(extract_derived(self.input_vec, "fails_open"))
 
@@ -838,7 +859,7 @@ class ProtocolTokenView:
     # one source slot is populated per row (a row has one type), so summing the
     # candidates yields that one value, or zero when none of them is the active
     # type — a marker-free way to read "whichever of these tokens this row is".
-    @cached_property
+    @_input_cached_property
     def boxpos_or_zero(self) -> Node:
         return vec_sum(
             self.bbox_boxpos,
@@ -848,7 +869,7 @@ class ProtocolTokenView:
             self.bbox_corner_y_b_boxpos,
         )
 
-    @cached_property
+    @_input_cached_property
     def seg_i_or_zero(self) -> Node:
         return vec_sum(
             self.process_i,
@@ -857,7 +878,7 @@ class ProtocolTokenView:
             self.drawseg_meta_i,
         )
 
-    @cached_property
+    @_input_cached_property
     def seg_x_or_zero(self) -> Node:
         return vec_sum(
             self.find_run_x,
@@ -867,7 +888,7 @@ class ProtocolTokenView:
 
 
 def _token_check_property(token_type: TokenType):
-    @cached_property  # type: ignore[misc]
+    @_input_cached_property  # type: ignore[misc]
     def predicate(self: ProtocolTokenView) -> Node:
         return token_type.check(self.input_vec)
 
@@ -908,6 +929,7 @@ def _current_type_matches_any(
     return bool_or(*(token_type.check(input_vec) for token_type in token_types))
 
 
+@annotated("input")
 def screen_column_one_hot(input_vec: Node) -> Node:
     return concat(
         *(extract_derived(input_vec, name) for name in SCREEN_X_ONE_HOT_DERIVED_NAMES)
