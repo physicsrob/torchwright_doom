@@ -1974,12 +1974,12 @@ class _WallColumnsState:
         if self.complete:
             if t == SET_CURSOR_X:
                 self.complete = False
-                self.x = int(actual.values["x"])
+                self.x = int(actual.values["x"]) // PIXEL_WIDTH
                 self.phase = "col_u"
                 return True
             return False
         if self.phase == "column" and t == SET_CURSOR_X:
-            self.x = int(actual.values["x"])
+            self.x = int(actual.values["x"]) // PIXEL_WIDTH
             self.phase = "col_u"
             return True
         if self.phase == "col_u" and t == WALL_COL_U:

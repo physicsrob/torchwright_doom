@@ -124,7 +124,10 @@ def flat_pixel_eval():
     from torchwright_doom.prompt.build import build_prompt
 
     submodule_root = Path(__file__).resolve().parents[2]
-    config = load_render_config(submodule_root / "configs" / "e1m1.yaml")
+    config_path = os.environ.get(
+        "TWDOOM_ORACLE_CONFIG", str(submodule_root / "configs" / "e1m1.yaml")
+    )
+    config = load_render_config(config_path)
     scene = load_render_scene(config, base_dir=submodule_root)
     pose = pose_from_world(scene)
     py_scene = pydoom_scene_for(scene, pose)
