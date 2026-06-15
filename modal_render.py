@@ -88,10 +88,10 @@ def compile_remote(
 
     config_path = _write_shipped_config(config_name, config_text)
 
-    # EXPERIMENT (default OFF): linear-layer fusion before compile. fuse_mode in
-    # {"", "all", "safe"} — "safe" applies the relu-ejection gate. The graph
-    # toggle lives in inference/compiled_model.py; set its env var here so the
-    # in-container compile picks it up. (2026-06-14)
+    # Linear-layer fusion OVERRIDE. The default (the width-safe gate) lives in
+    # inference/compiled_model.py and applies on every compile; pass fuse_mode
+    # only to override it — "off" disables fusion, "all" is the unsafe blind
+    # fusion. Set the env var the in-container compile reads. (2026-06-15)
     if fuse_mode:
         os.environ["TWDOOM_FUSE_LINEARS"] = fuse_mode
 
