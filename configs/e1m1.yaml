@@ -17,7 +17,7 @@
 # 320x200 render holds empirically (no expired-read corruption) but a
 # formal re-cert of those bounds at this taller frame is still open.
 wad: doom1.wad
-model: {d: 8192, d_head: 32, scale: 1, detail: low, d_hidden: 16384, optimize: 2, cache_window: 12288}
+model: {d: 8192, d_head: 32, scale: 1, detail: low, hud: true, d_hidden: 16384, optimize: 2, cache_window: 12288}
 region: {x1: 627.2, y1: -3760.0, x2: 1395.2, y2: -2800.0}
 textures:
   wall: [BROWN1, BROWN144, COMPUTE2, DOOR3, DOORSTOP, LITE3, STARTAN3, STEP6, SUPPORT2]

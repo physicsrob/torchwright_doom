@@ -53,10 +53,28 @@ SCREEN_WIDTH = _screen_dim_from_env(
 SCREEN_HEIGHT = _screen_dim_from_env(
     "TORCHWRIGHT_DOOM_SCREEN_HEIGHT", _DEFAULT_SCREEN_HEIGHT, minimum=2
 )
-CENTER_Y = SCREEN_HEIGHT / 2.0
+# Status-bar / viewport split — mirror of constants.py. When the bar is on, the
+# 3D view occupies the top VIEW_HEIGHT rows and the horizon sits at the view
+# centre; off (default) => BAR_HEIGHT 0 => VIEW_HEIGHT == SCREEN_HEIGHT, i.e.
+# today's full-screen reference, bit-identical. Bar height scales with the
+# screen (DOOM ST_HEIGHT 32 of 200): 32 at scale 1, 16 at scale 2.
+_FULL_SCREEN_HEIGHT = 200
+_FULL_BAR_HEIGHT = 32
+_HUD = os.environ.get("TORCHWRIGHT_DOOM_HUD", "0")
+if _HUD not in ("0", "1"):
+    raise ValueError(f"TORCHWRIGHT_DOOM_HUD must be '0' or '1', got {_HUD!r}")
+HUD_ENABLED = _HUD == "1"
+BAR_HEIGHT = (
+    (_FULL_BAR_HEIGHT * SCREEN_HEIGHT) // _FULL_SCREEN_HEIGHT if HUD_ENABLED else 0
+)
+VIEW_HEIGHT = SCREEN_HEIGHT - BAR_HEIGHT
+HUD_TOP = VIEW_HEIGHT
+CENTER_Y = VIEW_HEIGHT / 2.0
 _DETAIL = os.environ.get("TORCHWRIGHT_DOOM_DETAIL", "high")
 if _DETAIL not in ("low", "high"):
-    raise ValueError(f"TORCHWRIGHT_DOOM_DETAIL must be 'low' or 'high', got {_DETAIL!r}")
+    raise ValueError(
+        f"TORCHWRIGHT_DOOM_DETAIL must be 'low' or 'high', got {_DETAIL!r}"
+    )
 PIXEL_WIDTH = 2 if _DETAIL == "low" else 1
 COLUMN_COUNT = SCREEN_WIDTH // PIXEL_WIDTH
 DEFAULT_VIEW_Z = 41.0
@@ -264,7 +282,7 @@ def expected_wall_column_pass(scene: Scene, state: GameState) -> WallColumnPass:
     viewz = _state_viewz(state)
     ranges = _horizontal_wall_ranges(scene, state)
     ceilingclip = [-1] * COLUMN_COUNT
-    floorclip = [SCREEN_HEIGHT] * COLUMN_COUNT
+    floorclip = [VIEW_HEIGHT] * COLUMN_COUNT
     drawsegs: list[DrawsegMetaRecord] = []
     spans: list[WallSpanRecord] = []
     clip_updates: list[ClipUpdateRecord] = []
@@ -310,7 +328,7 @@ def expected_pixel_pass(scene: Scene, state: GameState) -> list[Pixel]:
     name_to_id = _build_uv_texture_id_map()
     h_scaled_by_id = _texture_height_by_id()
     ceilingclip = [-1] * COLUMN_COUNT
-    floorclip = [SCREEN_HEIGHT] * COLUMN_COUNT
+    floorclip = [VIEW_HEIGHT] * COLUMN_COUNT
     out: list[Pixel] = []
 
     for context in contexts:
@@ -357,7 +375,7 @@ def expected_pixel_color_options(
     name_to_id = _build_uv_texture_id_map()
     h_scaled_by_id = _texture_height_by_id()
     ceilingclip = [-1] * COLUMN_COUNT
-    floorclip = [SCREEN_HEIGHT] * COLUMN_COUNT
+    floorclip = [VIEW_HEIGHT] * COLUMN_COUNT
     out: list[PixelColorOptions] = []
 
     for context in contexts:
@@ -411,7 +429,7 @@ def expected_pixel_structure_tolerance(
     name_to_id = _build_uv_texture_id_map()
     h_scaled_by_id = _texture_height_by_id()
     ceilingclip = [-1] * COLUMN_COUNT
-    floorclip = [SCREEN_HEIGHT] * COLUMN_COUNT
+    floorclip = [VIEW_HEIGHT] * COLUMN_COUNT
     edge_trace = _PixelEdgeTrace(COLUMN_COUNT)
     out: list[None] = []
 
@@ -1003,7 +1021,7 @@ def _render_wall_columns_pixels(
                     edge_trace.mark_span(
                         x,
                         max(0, yl),
-                        min(SCREEN_HEIGHT - 1, yh),
+                        min(VIEW_HEIGHT - 1, yh),
                         start_fragile=yl_fragile,
                         end_fragile=yh_fragile,
                     )
@@ -1021,14 +1039,14 @@ def _render_wall_columns_pixels(
                     mid_id,
                     x,
                     max(0, yl),
-                    min(SCREEN_HEIGHT - 1, yh),
+                    min(VIEW_HEIGHT - 1, yh),
                     dc_tmid,
                     dc_iscale,
                     h,
                     u_scaled,
                     colormap_row,
                 )
-            ceilingclip[x] = SCREEN_HEIGHT
+            ceilingclip[x] = VIEW_HEIGHT
             floorclip[x] = -1
             if edge_trace is not None:
                 edge_trace.set_solid(x)
@@ -1050,7 +1068,7 @@ def _render_wall_columns_pixels(
                     edge_trace.mark_span(
                         x,
                         max(0, yl),
-                        min(SCREEN_HEIGHT - 1, mid_y),
+                        min(VIEW_HEIGHT - 1, mid_y),
                         start_fragile=yl_fragile,
                         end_fragile=mid_end_fragile,
                     )
@@ -1068,7 +1086,7 @@ def _render_wall_columns_pixels(
                     upper_id,
                     x,
                     max(0, yl),
-                    min(SCREEN_HEIGHT - 1, mid_y),
+                    min(VIEW_HEIGHT - 1, mid_y),
                     dc_tmid,
                     dc_iscale,
                     h,
@@ -1109,7 +1127,7 @@ def _render_wall_columns_pixels(
                     edge_trace.mark_span(
                         x,
                         max(0, mid_y),
-                        min(SCREEN_HEIGHT - 1, yh),
+                        min(VIEW_HEIGHT - 1, yh),
                         start_fragile=mid_start_fragile,
                         end_fragile=yh_fragile,
                     )
@@ -1127,7 +1145,7 @@ def _render_wall_columns_pixels(
                     lower_id,
                     x,
                     max(0, mid_y),
-                    min(SCREEN_HEIGHT - 1, yh),
+                    min(VIEW_HEIGHT - 1, yh),
                     dc_tmid,
                     dc_iscale,
                     h,
@@ -1217,7 +1235,9 @@ def _accumulate_pixel_options_column(
             for du in range(-4, 5)
             for dv in range(-4, 5)
         }
-        out.append(PixelColorOptions(x=x * PIXEL_WIDTH, y=y, colors=tuple(sorted(colors))))
+        out.append(
+            PixelColorOptions(x=x * PIXEL_WIDTH, y=y, colors=tuple(sorted(colors)))
+        )
 
 
 def _near_pixel_edge(value: float) -> bool:
@@ -1242,7 +1262,7 @@ def _mark_pixel_span_edges(
             optional_extra.add((x, y_start - 1))
     if end_fragile:
         optional_missing.add((x, y_end))
-        if y_end < SCREEN_HEIGHT - 1:
+        if y_end < VIEW_HEIGHT - 1:
             optional_extra.add((x, y_end + 1))
 
 
@@ -1284,7 +1304,7 @@ def expected_wall_plane_mark_pass(scene: Scene, state: GameState) -> WallPlaneMa
     plane_tables = _build_plane_tables(md)
     contexts = _horizontal_wall_range_contexts(scene, state)
     ceilingclip = [-1] * COLUMN_COUNT
-    floorclip = [SCREEN_HEIGHT] * COLUMN_COUNT
+    floorclip = [VIEW_HEIGHT] * COLUMN_COUNT
     runtime_visplanes = _RuntimeVisplanes()
     ranges: list[StoreWallRangeRecord] = []
     drawsegs: list[DrawsegMetaRecord] = []
@@ -1959,7 +1979,7 @@ def _render_wall_columns(
 
         if meta.wall_kind in {"solid", "closed"}:
             _append_span(spans, record.seg_idx, x, "middle", yl, yh)
-            ceilingclip[x] = SCREEN_HEIGHT
+            ceilingclip[x] = VIEW_HEIGHT
             floorclip[x] = -1
             clip_updates.append(ClipUpdateRecord(x, ceilingclip[x], floorclip[x]))
             continue
@@ -2057,7 +2077,7 @@ def _append_plane_mark(
     runtime_visplanes: _RuntimeVisplanes | None,
 ) -> None:
     y1 = max(0, y1)
-    y2 = min(SCREEN_HEIGHT - 1, y2)
+    y2 = min(VIEW_HEIGHT - 1, y2)
     if y1 <= y2:
         if runtime_visplanes is not None:
             runtime_visplanes.publish_occupancy(plane_id, vp, x)
@@ -2082,17 +2102,17 @@ def _append_span(
     y2: int,
 ) -> None:
     y1 = max(0, y1)
-    y2 = min(SCREEN_HEIGHT - 1, y2)
+    y2 = min(VIEW_HEIGHT - 1, y2)
     if y1 <= y2:
         spans.append(WallSpanRecord(seg_idx=seg_idx, x=x, part=part, y1=y1, y2=y2))
 
 
 def _clamp_ceilingclip(value: int) -> int:
-    return max(-1, min(SCREEN_HEIGHT, value))
+    return max(-1, min(VIEW_HEIGHT, value))
 
 
 def _clamp_floorclip(value: int) -> int:
-    return max(-1, min(SCREEN_HEIGHT, value))
+    return max(-1, min(VIEW_HEIGHT, value))
 
 
 @dataclass(frozen=True)

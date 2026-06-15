@@ -15,7 +15,7 @@ from torchwright.graph import annotated
 
 from .assets import _H_IDX_OH_WIDTH
 from .attention_handles import RecentMarkerHandle
-from .constants import CENTER_Y, SCREEN_HEIGHT
+from .constants import CENTER_Y, VIEW_HEIGHT
 from .past import PastHandle, PastHandleScope
 from .render_constants import MATCH_GAIN_CLIP, OPEN_CLIP_CEILING, PART_NONE
 from .render_ops import (
@@ -108,7 +108,7 @@ class ClipMemory:
         cursor_x_scalar_pub: PastHandle,
     ) -> "ClipMemory":
         """Recover the current column's (ceiling, floor) clip, defaulting to the
-        open clip ``(-1, SCREEN_HEIGHT)`` when the column has no prior update.
+        open clip ``(-1, VIEW_HEIGHT)`` when the column has no prior update.
 
         The per-column key is a radix (bucket, digit) pair of one-hots (was a
         width-(SCREEN_WIDTH+1) one-hot; width N_BUCKETS+B = 16/26). The dot has
@@ -121,7 +121,7 @@ class ClipMemory:
         from averaging to ``x`` (distinct positions break the tie).
         """
         clip_ceiling_initial = constant(OPEN_CLIP_CEILING)
-        clip_floor_initial = constant(float(SCREEN_HEIGHT))
+        clip_floor_initial = constant(float(VIEW_HEIGHT))
         absent_column = constant(_ABSENT_COLUMN)
 
         query_col = SCREEN_X_CLAMP(current_x_scalar)
@@ -243,8 +243,11 @@ class WallColumnState:
         - assemble and publish the state handles.
         """
         center_y = constant(float(CENTER_Y))
-        screen_height = constant(float(SCREEN_HEIGHT))
-        screen_height_m1 = constant(float(SCREEN_HEIGHT - 1))
+        # The view bottom (DOOM viewheight): the closed-column ceiling clip and
+        # the plane-mark "top below the view" cutoff. VIEW_HEIGHT == SCREEN_HEIGHT
+        # when the status bar is off.
+        screen_height = constant(float(VIEW_HEIGHT))
+        screen_height_m1 = constant(float(VIEW_HEIGHT - 1))
         clip_ceiling_initial = constant(OPEN_CLIP_CEILING)
         one = constant(1.0)
 

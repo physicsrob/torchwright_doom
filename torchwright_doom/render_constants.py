@@ -40,7 +40,7 @@ PART_NONE = 3.0
 
 # Open (unclipped) ceiling bound for a column's clip array — one row above the
 # top of the screen, so any real ceiling clips below it. The matching open floor
-# bound is ``SCREEN_HEIGHT``.
+# bound is the view bottom ``VIEW_HEIGHT`` (== ``SCREEN_HEIGHT`` with no bar).
 OPEN_CLIP_CEILING = -1.0
 
 # A recovered one-hot dot scores ~1 when its row is present and ~0 when absent;

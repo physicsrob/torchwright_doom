@@ -52,6 +52,7 @@ def _input_cached_property(fn):
     wrapper.__doc__ = fn.__doc__
     return cached_property(wrapper)
 
+
 from .protocol_registry import (
     BBOX_ANGLE_MARKERS as _BBOX_ANGLE_MARKERS,
     INERT_NON_PAYLOAD_TYPES as _INERT_NON_PAYLOAD_TYPES,

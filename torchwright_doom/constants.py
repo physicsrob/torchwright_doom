@@ -71,8 +71,34 @@ SCREEN_WIDTH = _screen_dim_from_env(
 SCREEN_HEIGHT = _screen_dim_from_env(
     "TORCHWRIGHT_DOOM_SCREEN_HEIGHT", _default_height, minimum=2
 )
-# Screen vertical centre (the projection horizon).
-CENTER_Y = SCREEN_HEIGHT / 2.0
+
+# Status-bar / viewport split. DOOM's default screen (screenblocks 10) renders
+# the 3D view into the top 168 of 200 rows and fills the bottom 32 with the
+# status bar; the projection horizon sits at the view centre (84), not the
+# screen centre. We gate that behind TORCHWRIGHT_DOOM_HUD (set from the YAML
+# model.hud field by apply_screen_env). OFF (default) => BAR_HEIGHT 0 =>
+# VIEW_HEIGHT == SCREEN_HEIGHT, i.e. today's full-screen view: every VIEW_HEIGHT
+# site below collapses to its old SCREEN_HEIGHT value, so a HUD-off build is
+# bit-identical to before this split. The bar's own height scales with the
+# screen (DOOM ST_HEIGHT 32 of a 200-row screen): 32 at scale 1, 16 at scale 2.
+_FULL_SCREEN_HEIGHT = 200
+_FULL_BAR_HEIGHT = 32
+_HUD = os.environ.get("TORCHWRIGHT_DOOM_HUD", "0")
+if _HUD not in ("0", "1"):
+    raise ValueError(f"TORCHWRIGHT_DOOM_HUD must be '0' or '1', got {_HUD!r}")
+HUD_ENABLED = _HUD == "1"
+BAR_HEIGHT = (
+    (_FULL_BAR_HEIGHT * SCREEN_HEIGHT) // _FULL_SCREEN_HEIGHT if HUD_ENABLED else 0
+)
+# The 3D view occupies the top VIEW_HEIGHT rows; the bar (blank until the HUD
+# phase lands) occupies [HUD_TOP, SCREEN_HEIGHT). The host buffer and every
+# vocab encoding range stay at the full SCREEN_HEIGHT (the bar rows are still
+# addressable, e.g. by setCursorY for bar pixels); only the 3D clip extent and
+# the projection horizon use VIEW_HEIGHT.
+VIEW_HEIGHT = SCREEN_HEIGHT - BAR_HEIGHT
+HUD_TOP = VIEW_HEIGHT
+# Projection horizon — the 3D view's vertical centre.
+CENTER_Y = VIEW_HEIGHT / 2.0
 
 # Pixel paint width (DOOM detail mode): low-detail paints 2 screen columns per
 # rendered column, high-detail 1. Read directly from the env (like the screen

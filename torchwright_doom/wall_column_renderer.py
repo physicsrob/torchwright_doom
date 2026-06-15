@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 from torchwright.graph import annotated
 
-from .constants import CENTER_Y, SCREEN_HEIGHT
+from .constants import CENTER_Y, VIEW_HEIGHT
 from .render_constants import PART_NONE, PLANE_KIND_CEILING, PLANE_KIND_FLOOR
 from .render_ops import (
     CEIL_Y,
@@ -350,7 +350,9 @@ class WallColumnRenderer:
         # (staged_new_ceiling); the two MUST agree — this is the emit half.
         projection = self.projection
         center_y = constant(float(CENTER_Y))
-        screen_height = constant(float(SCREEN_HEIGHT))
+        # Closed-column ceiling clip = DOOM viewheight (the view bottom);
+        # VIEW_HEIGHT == SCREEN_HEIGHT when the status bar is off.
+        screen_height = constant(float(VIEW_HEIGHT))
         seg_i = projection.drawseg.store_i
         scale = SCALE_CLAMP(projection.inputs.drawseg_scale_vec)
 

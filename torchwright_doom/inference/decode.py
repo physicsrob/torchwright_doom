@@ -99,7 +99,7 @@ def pixel_color_index(row: int) -> int:
     higher-order slot), so the color is the row offset floored by the number
     of width levels.
     """
-    return (row - _PIXEL_START) // _PIXEL_W_LEVELS
+    return int((row - _PIXEL_START) // _PIXEL_W_LEVELS)
 
 
 def decode_xy_by_position(rows) -> dict[int, tuple[int, int]]:

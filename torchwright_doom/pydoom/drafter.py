@@ -109,6 +109,7 @@ from ..vocab import (
     N_NODES_MAX,
     PIXEL_WIDTH,
     SCREEN_HEIGHT,
+    VIEW_HEIGHT,
     SEG_KPART,
     SET_CURSOR_DIRECTION_X,
     SET_CURSOR_DIRECTION_Y,
@@ -358,7 +359,7 @@ def _add_solid_range(ranges: list[_ClipRange], first: int, last: int) -> None:
 
 
 def _clamp_span_y(value: int) -> int:
-    return max(0, min(SCREEN_HEIGHT - 1, int(value)))
+    return max(0, min(VIEW_HEIGHT - 1, int(value)))
 
 
 def _append_plane_mark_emit(
@@ -371,7 +372,7 @@ def _append_plane_mark_emit(
     y2: int,
 ) -> None:
     y1 = max(0, y1)
-    y2 = min(SCREEN_HEIGHT - 1, y2)
+    y2 = min(VIEW_HEIGHT - 1, y2)
     if y1 <= y2:
         out.append(
             _PlaneMarkEmit(
@@ -1586,7 +1587,7 @@ class _WallColumnsState:
             else {"mid": 0, "upper": 0, "lower": 0}
         )
         self.new_ceiling = -1
-        self.new_floor = SCREEN_HEIGHT
+        self.new_floor = VIEW_HEIGHT
         self.plane_marks: list[_PlaneMarkEmit] = []
         self.spans: list[_SpanEmit] = []
         self.plane_idx = 0
@@ -1804,7 +1805,7 @@ class _WallColumnsState:
 
         if self.meta.wall_kind in {"solid", "closed"}:
             _record_part("middle", yl, yh)
-            new_ceiling = SCREEN_HEIGHT
+            new_ceiling = VIEW_HEIGHT
             new_floor = -1
         else:
             if self.worldhigh < self.worldtop:
@@ -2642,7 +2643,7 @@ class ARDrafter:
             runtime_visplanes=ref._RuntimeVisplanes(),
             solidsegs=[_ClipRange(-(10**9), -1), _ClipRange(COLUMN_COUNT, 10**9)],
             ceilingclip=[-1] * COLUMN_COUNT,
-            floorclip=[SCREEN_HEIGHT] * COLUMN_COUNT,
+            floorclip=[VIEW_HEIGHT] * COLUMN_COUNT,
             side_table={},
             stack=[],
         )

@@ -33,7 +33,13 @@ from __future__ import annotations
 import math
 
 from .asset_config import N_FLATS, N_WALL_TEXTURES, PLAYPAL
-from .constants import COLUMN_COUNT, PIXEL_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH
+from .constants import (
+    COLUMN_COUNT,
+    PIXEL_WIDTH,
+    SCREEN_HEIGHT,
+    SCREEN_WIDTH,
+    VIEW_HEIGHT,
+)
 from .doom_lighting import doom_flat_startmap
 from .tokens import Derived, FloatSlot, IntSlot, Token, TokenType
 from .value_ranges import (
@@ -136,7 +142,9 @@ def _id_lifted_key(value: int) -> list[float]:
 
 def _yslope(y: int) -> float:
     # Doom's plane distance scales as projection / distance from the horizon.
-    center_y = SCREEN_HEIGHT / 2.0
+    # The horizon is the 3D view centre (VIEW_HEIGHT/2), which equals
+    # SCREEN_HEIGHT/2 when the status bar is off.
+    center_y = VIEW_HEIGHT / 2.0
     projection = (SCREEN_WIDTH - 1) / (2.0 * _TAN_FOV_HALF)
     return projection / max(0.5, abs(float(y) - center_y))
 
@@ -180,9 +188,7 @@ _SCAN_X_DERIVED = {
 # dict above at PIXEL_WIDTH=1 (high-detail), where screen coord == column.
 _CURSOR_X_ONE_HOT_DERIVED = {
     name: (
-        lambda value, column=column: 1.0
-        if int(value) // PIXEL_WIDTH == column
-        else 0.0
+        lambda value, column=column: 1.0 if int(value) // PIXEL_WIDTH == column else 0.0
     )
     for column, name in enumerate(SCREEN_X_ONE_HOT_DERIVED_NAMES)
 }

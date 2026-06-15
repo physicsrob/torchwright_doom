@@ -50,7 +50,7 @@ from torchwright.ops.arithmetic_ops import (
 from torchwright.ops.linear_relu_linear import linear_relu_linear
 from torchwright.ops.logic_ops import bool_all_true, bool_any_true, bool_not
 
-from .constants import COLUMN_COUNT, PIXEL_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH
+from .constants import COLUMN_COUNT, PIXEL_WIDTH, SCREEN_WIDTH, VIEW_HEIGHT
 from .std import concat, constant, linear, one_hot, select
 from .value_ranges import _PROJ_RATIO
 from .vocab import _TAN_FOV_HALF, ANGLE_BAM, N_NODES_MAX
@@ -638,22 +638,23 @@ def mul_column_scalestep(x_offset: Node, scalestep: Node) -> Node:
 
 
 def CEIL_Y(x: Node) -> Node:
-    """Integer ceil over the screen-y range ``[0, SCREEN_HEIGHT-1]``;
-    ``sharpness=10000`` → 1e-4 ramp."""
-    return ceil_int(x, 0, SCREEN_HEIGHT - 1, sharpness=10_000.0)
+    """Integer ceil over the 3D-view y range ``[0, VIEW_HEIGHT-1]``;
+    ``sharpness=10000`` → 1e-4 ramp. (VIEW_HEIGHT == SCREEN_HEIGHT when the
+    status bar is off.)"""
+    return ceil_int(x, 0, VIEW_HEIGHT - 1, sharpness=10_000.0)
 
 
 def FLOOR_Y(x: Node) -> Node:
-    """Integer floor over ``[0, SCREEN_HEIGHT-1]``."""
-    return floor_int(x, 0, SCREEN_HEIGHT - 1, sharpness=10_000.0)
+    """Integer floor over ``[0, VIEW_HEIGHT-1]``."""
+    return floor_int(x, 0, VIEW_HEIGHT - 1, sharpness=10_000.0)
 
 
 def FLOOR_Y_WIDE(x: Node) -> Node:
-    """Integer floor over ``[-128, SCREEN_HEIGHT-1]``.
+    """Integer floor over ``[-128, VIEW_HEIGHT-1]``.
     Keeps negative results so an above-horizon upper region yields a negative
     ``mid`` and the integer ``le_span_y`` visibility check marks the empty upper
     span empty (narrow ``FLOOR_Y`` would clamp it to 0 and hide that case)."""
-    return floor_int(x, -128, SCREEN_HEIGHT - 1, sharpness=10_000.0)
+    return floor_int(x, -128, VIEW_HEIGHT - 1, sharpness=10_000.0)
 
 
 def CEIL_Y_WIDE(x: Node) -> Node:
@@ -683,13 +684,15 @@ def le_span_y(y1: Node, y2: Node) -> Node:
 
 
 def SPAN_Y_CLAMP(x: Node) -> Node:
-    """Clamp a span y to ``[0, SCREEN_HEIGHT-1]``."""
-    return clamp(x, 0.0, float(SCREEN_HEIGHT - 1))
+    """Clamp a span y to the 3D view ``[0, VIEW_HEIGHT-1]`` (== SCREEN_HEIGHT-1
+    when the status bar is off)."""
+    return clamp(x, 0.0, float(VIEW_HEIGHT - 1))
 
 
 def CLIP_Y_CLAMP(x: Node) -> Node:
-    """Clamp a clip-array y to ``[-1, SCREEN_HEIGHT]``."""
-    return clamp(x, -1.0, float(SCREEN_HEIGHT))
+    """Clamp a clip-array y to ``[-1, VIEW_HEIGHT]`` (the open-floor bound is the
+    view bottom; == SCREEN_HEIGHT when the status bar is off)."""
+    return clamp(x, -1.0, float(VIEW_HEIGHT))
 
 
 def FAR_DEN_CLAMP(x: Node) -> Node:

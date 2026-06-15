@@ -33,7 +33,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from torchwright.graph import Node
-from torchwright.graph import annotate, annotated
+from torchwright.graph import annotated
 
 from .attention_handles import LiftedKeyValueHandle
 from .bbox_pruning import BBoxPruner

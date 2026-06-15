@@ -32,6 +32,13 @@ class ModelConfig:
     # silently halve the column count of the scale-2 config). Rides the
     # compile-cache key via asdict(config.model) (busts every key once).
     detail: str = "high"
+    # Status bar / viewport split. When True, the 3D view shrinks to the top
+    # VIEW_HEIGHT rows (the projection horizon moves to the view centre) and the
+    # bottom BAR_HEIGHT rows are reserved for DOOM's status bar — DOOM's default
+    # screenblocks-10 layout. False (default) keeps today's full-screen view,
+    # bit-identical (VIEW_HEIGHT collapses to SCREEN_HEIGHT). Changes the graph
+    # geometry, so it rides the compile-cache key via asdict(config.model).
+    hud: bool = False
     d_hidden: int | None = None
     max_layers: int = 200
     trim_heads: bool = True
@@ -227,6 +234,7 @@ def apply_screen_env(config: RenderConfig) -> None:
     os.environ["TORCHWRIGHT_DOOM_SCREEN_WIDTH"] = str(width)
     os.environ["TORCHWRIGHT_DOOM_SCREEN_HEIGHT"] = str(height)
     os.environ["TORCHWRIGHT_DOOM_DETAIL"] = config.model.detail
+    os.environ["TORCHWRIGHT_DOOM_HUD"] = "1" if config.model.hud else "0"
 
 
 def load_render_config(path: str | Path) -> RenderConfig:
@@ -249,6 +257,7 @@ def load_render_config(path: str | Path) -> RenderConfig:
             d_head=int(model.get("d_head", 32)),
             scale=int(model.get("scale", 4)),
             detail=str(model.get("detail", "high")),
+            hud=bool(model.get("hud", False)),
             d_hidden=_optional_int(model.get("d_hidden")),
             max_layers=int(model.get("max_layers", 200)),
             trim_heads=bool(model.get("trim_heads", True)),
@@ -367,7 +376,9 @@ def canonical_compile_payload(
 def _validate_config(config: RenderConfig) -> None:
     screen_dims_for_scale(config.model.scale)
     if config.model.detail not in ("low", "high"):
-        raise ValueError(f"model.detail {config.model.detail!r} must be 'low' or 'high'")
+        raise ValueError(
+            f"model.detail {config.model.detail!r} must be 'low' or 'high'"
+        )
     if config.run.mode not in ("spec_decode", "pure_ar", "both"):
         raise ValueError(
             f"run.mode {config.run.mode!r} must be spec_decode | pure_ar | both"
