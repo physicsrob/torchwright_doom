@@ -20,6 +20,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .asset_config import FLAT_NAMES, WALL_TEXTURE_NAMES
+from .constants import HUD_ENABLED, PIXEL_WIDTH, SCREEN_WIDTH
 from .doom_lighting import NUMCOLORMAPS
 from .wad_assets import (
     DOOM1_WAD_PATH,
@@ -28,11 +29,29 @@ from .wad_assets import (
     TextureImage,
     load_asset_book,
 )
+from .weapon_assets import bake_weapon_table
+
+# COLORMAP row applied to the ready pistol at bake time (DOOM lights the ready
+# weapon by the view sector's brightest scale-light). Row 0 (brightest) matches
+# the bright E1M1 start room; refine to the exact start-sector scale-light if the
+# render-verify shows it reading too bright against the room.
+WEAPON_COLORMAP_ROW = 0
 
 
 def _is_sky_flat(flat_name: str) -> bool:
     name = flat_name.upper()
     return name.startswith("F_SKY")
+
+
+def _build_weapon_bank(wad_path) -> tuple[np.ndarray, int, int, int, int]:
+    """Bake the player-weapon table, or a 1x1 placeholder when the HUD is off."""
+    if not HUD_ENABLED:
+        return (np.zeros((1, 1), dtype=np.float32), 0, 0, 0, 0)
+    scale = 320 // SCREEN_WIDTH  # 1 (320 wide) or 2 (160 wide) for the real configs
+    bake = bake_weapon_table(
+        scale, PIXEL_WIDTH, WEAPON_COLORMAP_ROW, wad_path=wad_path or DOOM1_WAD_PATH
+    )
+    return (bake.table, bake.min_col, bake.max_col, bake.top, bake.bottom)
 
 
 @dataclass(frozen=True)
@@ -88,6 +107,18 @@ class AssetBanks:
     flat_id_values: list[float]
     flat_table_2d: np.ndarray
     flat_row_addr: list[list[float]]
+    # Player-weapon (R_DrawPlayerSprites) baked picture: a (bbox_h, bbox_w) table
+    # of lit palette indices, WEAPON_TRANSPARENT where transparent, addressed by
+    # the cursor offset into the bounding box. The bbox bounds (rendered columns /
+    # rows) are all the emit phase needs; per-pixel transparency lives in the
+    # table and is resolved in the render loop (the setCursorY-skip path), not
+    # preprocessed. Built only when the status bar / HUD is enabled; a 1x1
+    # placeholder otherwise (the weapon phase never runs HUD-off).
+    weapon_table_2d: np.ndarray
+    weapon_min_col: int
+    weapon_max_col: int
+    weapon_top: int
+    weapon_bottom: int
 
 
 def _build_wall_banks(asset_book: AssetBook) -> tuple[WallBank, ...]:
@@ -228,6 +259,14 @@ def build_asset_banks(
     flat_is_sky = tuple(1.0 if _is_sky_flat(name) else 0.0 for name in flat_names)
     n_flats = len(flat_names)
 
+    (
+        weapon_table_2d,
+        weapon_min_col,
+        weapon_max_col,
+        weapon_top,
+        weapon_bottom,
+    ) = _build_weapon_bank(wad_path)
+
     return AssetBanks(
         asset_book=asset_book,
         wall_names=wall_names,
@@ -261,6 +300,11 @@ def build_asset_banks(
         flat_id_values=[float(i) for i in range(n_flats)],
         flat_table_2d=flat_table.reshape(n_flats * FLAT_SIZE, FLAT_SIZE),
         flat_row_addr=[[float(FLAT_SIZE)], [1.0]],
+        weapon_table_2d=weapon_table_2d,
+        weapon_min_col=weapon_min_col,
+        weapon_max_col=weapon_max_col,
+        weapon_top=weapon_top,
+        weapon_bottom=weapon_bottom,
     )
 
 

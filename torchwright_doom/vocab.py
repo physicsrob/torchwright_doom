@@ -716,6 +716,13 @@ SCREEN_RANGE = TokenType(
         "y2": IntSlot(-1, SCREEN_HEIGHT + 1),
     },
 )
+# --- Phase: player weapon (R_DrawPlayerSprites) ---
+# Begins the weapon phase, emitted after the 3D scene (where the flat pass would
+# otherwise emit DONE) when the HUD is enabled. Slotless control token, like the
+# other phase-begin markers (cf. R_DrawPlanes). Defined/appended AFTER DONE so it
+# takes a fresh E8 identity code without shifting any existing type's index.
+DRAW_PSPRITES_BEGIN = TokenType("R_DrawPlayerSprites")
+
 # --- Phase: terminal ---
 # Frame complete.
 DONE = TokenType("done")
@@ -786,6 +793,7 @@ AR_TYPES = [
     SCREEN_Y_VALUE,
     SCREEN_RANGE,
     DONE,
+    DRAW_PSPRITES_BEGIN,
 ]
 
 

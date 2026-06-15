@@ -236,6 +236,7 @@ class ProtocolTokenView:
         is_screen_y_value: Node
         is_screen_range: Node
         is_done: Node
+        is_draw_psprites_begin: Node
 
     def __init__(
         self,

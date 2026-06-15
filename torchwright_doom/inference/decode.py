@@ -3,8 +3,8 @@
 This is the host side of the autoregressive loop: it walks the model's emitted
 tokens in order, tracks a cursor (position + direction), and blits each ``pixel``
 token's palette color at the cursor. It does **no** geometry, arithmetic, or
-visibility logic — only cursor bookkeeping, a palette table lookup, and a
-conditional first-write-wins blit (front-to-back compositing). All rendering
+visibility logic — only cursor bookkeeping, a palette table lookup, and an
+overwriting blit (last-write-wins, DOOM's painter order). All rendering
 decisions were made inside the transformer.
 
 Generalizes ``tests/scene/test_flat_pixel_oracle.py::_decode_pixel_xy`` (+ its
@@ -78,16 +78,17 @@ def decode_rows_to_pixels(
     """Walk a generated row stream -> ``{(x, y): rgb}``.
 
     Each ``pixel`` token paints ``w`` adjacent cells in +X (low-detail blits two).
-    First write at each ``(x, y)`` wins (front-to-back compositing: a conditional
-    write, not computation).
+    Last write at each ``(x, y)`` wins — a plain overwrite, DOOM's painter order:
+    the 3D scene is emitted first, then the weapon on top of it (and the bar into
+    its own rows). The 3D pass itself writes each view pixel exactly once (column
+    clipping), so this is identical to the old front-to-back rule there; the
+    overwrite only matters where the weapon covers the scene.
     """
     buf: dict[tuple[int, int], Rgb] = {}
     for _, row, (x, y), w in _walk_pixels(rows):
         r, g, b = palette[pixel_color_index(row)]
         for k in range(w):
-            key = (x + k, y)
-            if key not in buf:
-                buf[key] = (int(r), int(g), int(b))
+            buf[(x + k, y)] = (int(r), int(g), int(b))
     return buf
 
 

@@ -35,6 +35,7 @@ from .std import (
 )
 from .asset_banks import DEFAULT_ASSET_BANKS, AssetBanks
 from .pwl_banks import build_sawtooth_bank
+from .render_ops import add_const
 
 # Width of the per-texture height-index one-hot ``h_idx_oh`` returns
 # (= number of distinct wall-texture heights in the WAD: sorted{16, 56, 72,
@@ -185,17 +186,42 @@ class FlatAssets:
 
 
 @dataclass(frozen=True)
+class WeaponAssets:
+    """Player-weapon (R_DrawPlayerSprites) baked-picture lookup.
+
+    One masked bitmap indexed by the screen cursor, encoded exactly like a flat
+    texture: a ``table_lookup_2d`` over the baked ``(bbox_h, bbox_w)`` weight. The
+    value is a *lit* palette index, or ``WEAPON_TRANSPARENT`` (256) for a
+    transparent cell — the render loop reads it at the cursor and emits a pixel
+    (opaque) or a ``setCursorY`` skip (transparent).
+    """
+
+    banks: AssetBanks = DEFAULT_ASSET_BANKS
+
+    @annotated("tex/R_DrawPlayerSprites")
+    def color_or_transparent(self, col: Node, row: Node) -> Node:
+        # col = rendered column, row = screen row; offset into the bbox table.
+        local_col = add_const(col, -float(self.banks.weapon_min_col))
+        local_row = add_const(row, -float(self.banks.weapon_top))
+        return table_lookup_2d(
+            local_row, local_col, self.banks.weapon_table_2d, sharpness=1000.0
+        )
+
+
+@dataclass(frozen=True)
 class AssetIndex:
     """Weight-side asset lookups; constructed with zero ``past.publish``."""
 
     banks: AssetBanks = DEFAULT_ASSET_BANKS
     walls: WallAssets = field(init=False)
     flats: FlatAssets = field(init=False)
+    weapon: WeaponAssets = field(init=False)
     sawtooth_bank: tuple = field(init=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "walls", WallAssets(self.banks))
         object.__setattr__(self, "flats", FlatAssets(self.banks))
+        object.__setattr__(self, "weapon", WeaponAssets(self.banks))
         object.__setattr__(
             self, "sawtooth_bank", build_sawtooth_bank(self.banks.wall_height_bank)
         )

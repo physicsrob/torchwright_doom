@@ -127,11 +127,12 @@ image patches.
 
 That's it. The host feeds tokens and blits pixels. It does zero
 computation — no sorting, no geometry, no visibility culling, no
-arithmetic. The host may skip already-filled pixels when writing
-(front-to-back compositing), but that is a conditional write, not
-computation. All rendering logic — wall selection, visibility,
-distance, texture lookup, compositing decisions — lives inside the
-transformer.
+arithmetic. Each pixel token overwrites whatever was at its cell
+(last-write-wins, DOOM's painter order): the transformer emits the 3D
+scene first, then the weapon on top of it, then the bar into its own
+rows. That is an unconditional write, not computation. All rendering
+logic — wall selection, visibility, distance, texture lookup,
+compositing/draw order — lives inside the transformer.
 
 **Never violate this principle.** If a proposed design, optimization,
 or bug fix moves computation from the transformer to the host, it is

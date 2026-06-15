@@ -51,6 +51,7 @@ from .vocab import (
     DRAWSEG_TSILHEIGHT,
     DRAWSEG_U_PHASE,
     DRAW_PLANES_BEGIN,
+    DRAW_PSPRITES_BEGIN,
     EMIT_X2,
     FIND_RUN,
     FLAT_NEXT_PLANE,
@@ -758,6 +759,17 @@ PROTOCOL_ENTRIES: tuple[ProtocolEntry, ...] = (
         branch="done",
         order=63,
         role="terminal",
+    ),
+    # Player weapon phase (R_DrawPlayerSprites), emitted after the 3D scene when
+    # the HUD is enabled. Branch logic + the HUD-gated splice land with the weapon
+    # spine; until then this is contract-complete but dormant (never emitted, so
+    # its branch falls back to NO_OP via build_branch_outputs' setdefault).
+    _branch(
+        DRAW_PSPRITES_BEGIN,
+        owner="projection",
+        predicate="is_draw_psprites_begin",
+        branch="draw_psprites_begin",
+        order=64,
     ),
 )
 

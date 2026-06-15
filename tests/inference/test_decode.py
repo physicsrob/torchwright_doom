@@ -1,4 +1,4 @@
-"""Host pixel decode: cursor tracking, wall-Y / flat-X advance, first-write-wins,
+"""Host pixel decode: cursor tracking, wall-Y / flat-X advance, last-write-wins,
 and the low-detail width slot (paint W cells, advance by counting)."""
 
 from __future__ import annotations
@@ -48,16 +48,18 @@ def test_flats_advance_in_x():
     assert decode_rows_to_pixels(rows) == {(4, 1): PLAYPAL[10], (5, 1): PLAYPAL[11]}
 
 
-def test_first_write_wins():
+def test_last_write_wins():
+    # Painter's order (DOOM): the later write at a cell overwrites the earlier
+    # one. This is what lets the weapon (emitted last) paint over the 3D scene.
     rows = [
         _r(SET_CURSOR_DIRECTION_Y),
         _r(SET_CURSOR_X, x=0),
         _r(SET_CURSOR_Y, y=0),
         _px(1),  # (0,0) -> color 1; cursor advances to (0,1)
         _r(SET_CURSOR_Y, y=0),  # reset back to (0,0)
-        _px(2),  # (0,0) again -> ignored (first write wins)
+        _px(2),  # (0,0) again -> overwrites (last write wins)
     ]
-    assert decode_rows_to_pixels(rows) == {(0, 0): PLAYPAL[1]}
+    assert decode_rows_to_pixels(rows) == {(0, 0): PLAYPAL[2]}
 
 
 def test_pixel_before_cursor_is_dropped():
@@ -100,19 +102,19 @@ def test_width2_flat_paints_two_cells_and_steps_two():
     }
 
 
-def test_width2_first_write_wins_per_cell():
-    # Each of the w cells composites independently (first write wins per cell).
+def test_width2_last_write_wins_per_cell():
+    # Each of the w cells composites independently (last write wins per cell).
     rows = [
         _r(SET_CURSOR_DIRECTION_X),
         _r(SET_CURSOR_Y, y=0),
         _r(SET_CURSOR_X, x=0),
         _px(1, w=2),  # paints (0,0),(1,0); cursor -> x=2
         _r(SET_CURSOR_X, x=1),
-        _px(2, w=2),  # paints (1,0) [taken, ignored], (2,0) [new]
+        _px(2, w=2),  # paints (1,0) [overwritten], (2,0) [new]
     ]
     assert decode_rows_to_pixels(rows) == {
         (0, 0): PLAYPAL[1],
-        (1, 0): PLAYPAL[1],
+        (1, 0): PLAYPAL[2],
         (2, 0): PLAYPAL[2],
     }
 
