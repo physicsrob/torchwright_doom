@@ -55,10 +55,12 @@ from typing import TYPE_CHECKING
 
 from torchwright.graph import annotated
 
+from .constants import HUD_ENABLED
 from .render_ops import add_const, and_, gt_screen, one_minus, same_int
 from .std import constant, make_token_head, select
 from .vocab import (
     DONE,
+    DRAW_PSPRITES_BEGIN,
     FLAT_NEXT_PLANE,
     FLAT_NEXT_VP,
     FLAT_VISPLANE_BEGIN,
@@ -98,9 +100,18 @@ class FlatPassRenderer:
             projection.core.past,
             projection.core.inp.flat_next_plane_p,
         )
+        # The flat pass ends here. With the HUD on, splice in the player-weapon
+        # phase (R_DrawPlayerSprites, drawn last over the 3D view); HUD off emits
+        # DONE exactly as before. The choice is a compile-time Python `if` on
+        # HUD_ENABLED, so a flag-off build is bit-identical at the sentinel arm.
+        sentinel_arm = (
+            make_token_head(DRAW_PSPRITES_BEGIN)
+            if HUD_ENABLED
+            else make_token_head(DONE)
+        )
         return select(
             same_int(next_plane, constant(float(N_PLANE_SENTINEL))),
-            make_token_head(DONE),
+            sentinel_arm,
             make_token_head(FLAT_NEXT_VP, p=next_plane, vp=constant(-1.0)),
         )
 

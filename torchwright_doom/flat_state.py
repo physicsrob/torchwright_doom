@@ -576,3 +576,113 @@ class FlatPassState:
             [1, 1, 1, 1, 1, 1, 1],
         )
         return FlatCursorValues(*values)
+
+
+@dataclass(frozen=True)
+class WeaponCursorValues:
+    """The most-recent weapon ``SET_CURSOR_Y``'s y value and its position.
+
+    ``current_row = sy_value + (pos - sy_pos)``: after a ``SET_CURSOR_Y`` the
+    pick lands on the current row (``pos == sy_pos``, so ``current_row ==
+    sy_value``); after k opaque ``PIXEL``\\ s in a run ``pos`` has advanced k
+    past ``sy_pos`` so ``current_row == sy_value + k`` (the run started at
+    ``sy_value``). Mirror of the flat pass's ``pixel_index = pos - cursor.pos``.
+    """
+
+    sy_value: Node
+    sy_pos: Node
+
+
+@dataclass(frozen=True)
+class WeaponPassState:
+    """Player-weapon (R_DrawPlayerSprites) pass publish handles.
+
+    The weapon is drawn last, on top of the 3D view (DOOM's painter order). It
+    is a third raster pass after the flat pass, structured like a wall column:
+    the cursor advances in Y down each column of the baked sprite bounding box.
+    This state owns the two things the weapon dispatch reads back:
+
+    1. ``weapon_seen`` — ``+1`` once ``R_DrawPlayerSprites`` has fired this
+       frame (a marker recovered exactly like ``flat_span_seen``), gating the
+       shared cursor/pixel branches onto the weapon arm. Structurally false
+       before the weapon phase (and forever when the HUD is off, since the
+       splice never emits ``DRAW_PSPRITES_BEGIN``), so every fork degenerates to
+       the existing wall/flat arm.
+    2. The weapon cursor recoveries. ``inp.cursor_x`` / ``inp.cursor_y`` are only
+       populated on their own ``SET_CURSOR_*`` rows; on a ``PIXEL`` row both are
+       stale/zero. So the column (the most-recent weapon ``SET_CURSOR_X``) and
+       the painted-row base (the most-recent weapon ``SET_CURSOR_Y``) are each
+       recovered through a recency marker scoped to the weapon phase
+       (``and_(is_set_cursor_*, weapon_seen)``). The recovery reads stay within
+       one weapon column (<= the sprite bbox height), far inside the windowed KV
+       cache, so ``DRAW_PLANES_BEGIN``/``setCursorX``/``setCursorY`` keep their
+       certified expiry — no cache change.
+    """
+
+    weapon_begin_row: RecentMarkerHandle
+    weapon_seen: Node
+    weapon_cursor_x_row: RecentMarkerHandle
+    weapon_cursor_x_state_pub: PastHandle
+    weapon_cursor_y_row: RecentMarkerHandle
+    weapon_cursor_y_state_pub: PastHandle
+
+    @classmethod
+    @annotated("pspr/R_DrawPlayerSprites")
+    def publish(
+        cls,
+        past: PastHandleScope,
+        inp: "ProtocolTokenView",
+        pos: Node,
+    ) -> "WeaponPassState":
+        weapon_begin_row = RecentMarkerHandle.publish(
+            past,
+            "weapon_begin",
+            inp.is_draw_psprites_begin,
+        )
+        weapon_seen = MARKER_PRESENT(
+            weapon_begin_row.pick(past, weapon_begin_row.marker)
+        )
+        # The weapon cursor markers are scoped to the weapon phase so they cannot
+        # match the wall/flat passes' SET_CURSOR_X/Y rows.
+        weapon_cursor_x_active = and_(inp.is_set_cursor_x, weapon_seen)
+        weapon_cursor_x_row = RecentMarkerHandle.publish(
+            past,
+            "weapon_cursor_x",
+            weapon_cursor_x_active,
+        )
+        # cursor_x carries the SCREEN coordinate (col * PIXEL_WIDTH); column space
+        # is recovered by the consumer via column_from_screen_x.
+        weapon_cursor_x_state_pub = past.publish("weapon_cursor_x_state", inp.cursor_x)
+        weapon_cursor_y_active = and_(inp.is_set_cursor_y, weapon_seen)
+        weapon_cursor_y_row = RecentMarkerHandle.publish(
+            past,
+            "weapon_cursor_y",
+            weapon_cursor_y_active,
+        )
+        weapon_cursor_y_state_pub = past.publish(
+            "weapon_cursor_y_state",
+            concat(inp.cursor_y, pos),
+        )
+        return cls(
+            weapon_begin_row=weapon_begin_row,
+            weapon_seen=weapon_seen,
+            weapon_cursor_x_row=weapon_cursor_x_row,
+            weapon_cursor_x_state_pub=weapon_cursor_x_state_pub,
+            weapon_cursor_y_row=weapon_cursor_y_row,
+            weapon_cursor_y_state_pub=weapon_cursor_y_state_pub,
+        )
+
+    @annotated("pspr/R_DrawPlayerSprites")
+    def weapon_column(self, past: PastHandleScope) -> Node:
+        """The current weapon column (the most-recent weapon SET_CURSOR_X)."""
+        return column_from_screen_x(
+            self.weapon_cursor_x_row.pick(past, self.weapon_cursor_x_state_pub)
+        )
+
+    @annotated("pspr/R_DrawPlayerSprites")
+    def weapon_cursor_values(self, past: PastHandleScope) -> WeaponCursorValues:
+        sy_value, sy_pos = split(
+            self.weapon_cursor_y_row.pick(past, self.weapon_cursor_y_state_pub),
+            [1, 1],
+        )
+        return WeaponCursorValues(sy_value=sy_value, sy_pos=sy_pos)

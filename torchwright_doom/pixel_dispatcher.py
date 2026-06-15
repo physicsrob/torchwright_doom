@@ -27,6 +27,7 @@ from torchwright.graph import annotated
 from .constants import COLUMN_COUNT, PIXEL_WIDTH
 from .flat_pass_renderer import FlatPassRenderer
 from .lighting import apply_colormap_row
+from .psprite_renderer import PspriteRenderer
 from .pwl_banks import MOD64_PWL
 from .render_ops import (
     FLOOR_NATIVE,
@@ -62,6 +63,12 @@ class PixelDispatcher:
 
     # --- The three shared pixel/cursor branches (forked on flat_span_seen) ----
 
+    # Each shared branch wraps its existing wall/flat select in an OUTER select on
+    # weapon_seen, so the weapon (drawn last) takes the SET_CURSOR_X / SET_CURSOR_Y
+    # / PIXEL arrows once R_DrawPlayerSprites has fired. The outer placement keeps
+    # the wall/flat width keystone (after_pixel_color) structurally intact; the
+    # weapon arms are shallow (a table lookup + a counter).
+
     @annotated("pix")
     def after_wall_column(self) -> "Node":
         projection = self.projection
@@ -77,9 +84,13 @@ class PixelDispatcher:
             w=constant(float(PIXEL_WIDTH)),
         )
         return select(
-            projection.flats.flat_pass.flat_span_seen,
-            flat_first_pixel,
-            self.wall_column_output(),
+            projection.flats.weapon.weapon_seen,
+            PspriteRenderer(projection).after_set_cursor_x_weapon(),
+            select(
+                projection.flats.flat_pass.flat_span_seen,
+                flat_first_pixel,
+                self.wall_column_output(),
+            ),
         )
 
     @annotated("pix")
@@ -87,18 +98,26 @@ class PixelDispatcher:
         projection = self.projection
         flat_span = projection.flats.flat_pass.flat_span_values(projection.core.past)
         return select(
-            projection.flats.flat_pass.flat_span_seen,
-            make_token_head(SET_CURSOR_X, x=screen_x_from_column(flat_span.x1)),
-            make_value(ValueRange.R3, self.span_v0_at_top()),
+            projection.flats.weapon.weapon_seen,
+            PspriteRenderer(projection).decision(),
+            select(
+                projection.flats.flat_pass.flat_span_seen,
+                make_token_head(SET_CURSOR_X, x=screen_x_from_column(flat_span.x1)),
+                make_value(ValueRange.R3, self.span_v0_at_top()),
+            ),
         )
 
     @annotated("pix")
     def after_pixel_color(self) -> "Node":
         projection = self.projection
         return select(
-            projection.flats.flat_pass.flat_span_seen,
-            self.after_flat_pixel_color(),
-            self.after_wall_pixel_color(),
+            projection.flats.weapon.weapon_seen,
+            PspriteRenderer(projection).decision(),
+            select(
+                projection.flats.flat_pass.flat_span_seen,
+                self.after_flat_pixel_color(),
+                self.after_wall_pixel_color(),
+            ),
         )
 
     # --- Wall texel pass -----------------------------------------------------

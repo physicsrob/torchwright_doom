@@ -55,7 +55,7 @@ from .std import (
 from .std import sum as vec_sum
 from torchwright.ops.arithmetic_ops import clamp
 from .render_constants import MATCH_GAIN_LONG
-from .flat_state import FlatPassState
+from .flat_state import FlatPassState, WeaponPassState
 from .visplane_state import RuntimeVisplaneState
 from .wall_column_state import (
     ClipMemory,
@@ -223,9 +223,10 @@ class VisplaneRuntimeContext:
 
 @dataclass(frozen=True)
 class FlatRuntimeContext:
-    """Published flat-pass state (Phase J)."""
+    """Published flat-pass state (Phase J) + the player-weapon pass (Phase 2)."""
 
     flat_pass: FlatPassState
+    weapon: WeaponPassState
 
 
 class WallColumnRenderScalars:
@@ -589,6 +590,9 @@ class SegProjection:
             runtime_visplanes,
             pos,
         )
+        # Player-weapon pass marker + cursor recoveries (read once the weapon
+        # phase begins; inert before it / when the HUD is off).
+        weapon_pass = WeaponPassState.publish(past, inp, pos)
         wall_span_runtime = wall_span_draft.finish(past, inp)
 
         inputs = InputChannels(
@@ -643,5 +647,5 @@ class SegProjection:
                 check_result_vp_pub=check_result_vp_pub,
                 runtime_visplanes=runtime_visplanes,
             ),
-            flats=FlatRuntimeContext(flat_pass=flat_pass),
+            flats=FlatRuntimeContext(flat_pass=flat_pass, weapon=weapon_pass),
         )

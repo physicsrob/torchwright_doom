@@ -37,6 +37,7 @@ from .flat_pass_renderer import FlatPassRenderer
 from .past import GraphPast, PastHandleScope
 from .payload_router import PayloadRouter
 from .pixel_dispatcher import PixelDispatcher
+from .psprite_renderer import PspriteRenderer
 from .protocol_registry import DISPATCH_TRANSITIONS
 from .protocol_tokens import ProtocolTokenView
 from .render_ops import _ATAN_ABS_RANGE, signed_world_angle
@@ -58,6 +59,7 @@ from .std import (
     concat,
     make_token_head,
     pick_by_one_hot,
+    select,
     type_switch,
 )
 from .vocab import ANGLE_VALUE, DONE, NO_OP, SET_CURSOR_DIRECTION_Y
@@ -299,6 +301,7 @@ def build_branch_outputs(
     wall_cols = WallColumnRenderer(projection)
     pixels = PixelDispatcher(projection)
     flats = FlatPassRenderer(projection)
+    weapon = PspriteRenderer(projection)
     visplanes = VisplaneMarker(projection)
     ranges = RangeDispatcher(projection)
     branches: dict[str, "Node | ScalarEmit | AngleInputEmit"] = {
@@ -312,7 +315,14 @@ def build_branch_outputs(
         "enter": traversal.after_enter(),
         "between": traversal.after_between(),
         "return_": traversal.after_return(),
-        "set_cursor_direction_y": traversal.after_set_cursor_direction_y(),
+        # SET_CURSOR_DIRECTION_Y is emitted both at frame start (BEGIN) and at the
+        # weapon phase start (R_DrawPlayerSprites); fork on weapon_seen so the
+        # weapon arm walks to its first column instead of starting the BSP walk.
+        "set_cursor_direction_y": select(
+            projection.flats.weapon.weapon_seen,
+            weapon.after_set_cursor_direction_y_weapon(),
+            traversal.after_set_cursor_direction_y(),
+        ),
         # R_CheckBBox visibility pruning (BBoxPruner via BspTraversal).
         "bbox_boxpos": traversal.after_bbox_boxpos(),
         "bbox_corner_x_a": traversal.after_bbox_corner_x_mark_a(),
@@ -376,6 +386,10 @@ def build_branch_outputs(
         "make_spans_col": flats.after_make_spans_col(),
         "span_close_slot": flats.after_span_close_slot(),
         "span_row": flats.after_span_row(),
+        # Player weapon pass (PspriteRenderer). The phase-begin head; the rest of
+        # the weapon walk rides the shared SET_CURSOR_* / PIXEL branches above,
+        # forked on weapon_seen.
+        "draw_psprites_begin": weapon.after_draw_psprites_begin(),
         # Host-visible screen-range merge (RangeDispatcher).
         "screen_range": ranges.after_screen_range(no_op_out),
     }
