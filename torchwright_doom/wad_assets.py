@@ -79,6 +79,12 @@ class PatchImage:
     height: int
     # Column-major. Transparent pixels are None.
     pixels: list[list[int | None]]
+    # DOOM picture offsets (``leftoffset``/``topoffset`` in the lump header).
+    # ``V_DrawPatch`` draws so patch-local (0, 0) lands at screen
+    # ``(x - leftoffset, y - topoffset)`` — the HUD blit needs these to place
+    # widgets faithfully (e.g. the face STFST01 carries ``(-5, -2)``).
+    leftoffset: int = 0
+    topoffset: int = 0
 
 
 @dataclass(frozen=True)
@@ -220,11 +226,20 @@ class WADReader:
             out.update(_parse_texture_defs(self.lump(lump_name)))
         return out
 
+    def patch(self, name: str) -> PatchImage:
+        """Public by-name patch loader (the thin wrapper the HUD bake needs).
+
+        Returns the decoded masked picture (``pixels[col][row]``, ``None`` for
+        transparent) with its DOOM offsets. Same decode the texture compositor
+        uses internally.
+        """
+        return self._patch_image(name)
+
     def _patch_image(self, name: str) -> PatchImage:
         buf = self.lump(name)
         if len(buf) < 8:
             raise ValueError(f"patch {name!r} is too short")
-        width, height, _left, _top = struct.unpack_from("<hhhh", buf, 0)
+        width, height, leftoffset, topoffset = struct.unpack_from("<hhhh", buf, 0)
         if width < 0 or height < 0:
             raise ValueError(f"patch {name!r} has invalid size {width}x{height}")
         column_table_size = 8 + width * 4
@@ -256,7 +271,13 @@ class WADReader:
                         pixels[x][y] = int(buf[pos + dy])
                 pos += length
                 pos += 1  # unused padding byte
-        return PatchImage(width=width, height=height, pixels=pixels)
+        return PatchImage(
+            width=width,
+            height=height,
+            pixels=pixels,
+            leftoffset=leftoffset,
+            topoffset=topoffset,
+        )
 
 
 def _parse_texture_defs(buf: bytes) -> dict[str, TextureDef]:

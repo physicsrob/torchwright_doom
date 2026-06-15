@@ -57,6 +57,8 @@ from .vocab import (
     FLAT_NEXT_PLANE,
     FLAT_NEXT_VP,
     FLAT_VISPLANE_BEGIN,
+    HUD_BEGIN,
+    HUD_ITEM,
     MAKE_SPANS_COL,
     NODE,
     NODE_BACK_CHILD,
@@ -770,6 +772,23 @@ PROTOCOL_ENTRIES: tuple[ProtocolEntry, ...] = (
         predicate="is_draw_psprites_begin",
         branch="draw_psprites_begin",
         order=64,
+    ),
+    # Status-bar phase (ST_Drawer), emitted after the weapon phase when the HUD
+    # is enabled. HUD_BEGIN starts the phase; HUD_ITEM walks one draw-list patch
+    # (V_DrawPatch) at a time.
+    _branch(
+        HUD_BEGIN,
+        owner="projection",
+        predicate="is_hud_begin",
+        branch="hud_begin",
+        order=65,
+    ),
+    _branch(
+        HUD_ITEM,
+        owner="projection",
+        predicate="is_hud_item",
+        branch="hud_item",
+        order=66,
     ),
 )
 

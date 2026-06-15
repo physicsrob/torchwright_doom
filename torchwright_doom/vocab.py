@@ -35,6 +35,7 @@ import math
 from .asset_config import N_FLATS, N_WALL_TEXTURES, PLAYPAL
 from .constants import (
     COLUMN_COUNT,
+    MAX_HUD_ITEMS,
     PIXEL_WIDTH,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
@@ -723,6 +724,15 @@ SCREEN_RANGE = TokenType(
 # takes a fresh E8 identity code without shifting any existing type's index.
 DRAW_PSPRITES_BEGIN = TokenType("R_DrawPlayerSprites")
 
+# --- Phase: status bar (ST_Drawer) ---
+# Begins the status-bar phase, emitted after the weapon phase (where it would
+# otherwise emit DONE) when the HUD is enabled. Slotless control token, like the
+# other phase-begin markers. HUD_ITEM carries the draw-list item index, which
+# selects the patch + its screen origin/size from the baked draw-list tables —
+# the spine walks one HUD_ITEM per V_DrawPatch, then rasterizes that patch.
+HUD_BEGIN = TokenType("ST_Drawer")
+HUD_ITEM = TokenType("ST_Drawer.item", slots={"item": IntSlot(0, MAX_HUD_ITEMS)})
+
 # --- Phase: terminal ---
 # Frame complete.
 DONE = TokenType("done")
@@ -794,6 +804,8 @@ AR_TYPES = [
     SCREEN_RANGE,
     DONE,
     DRAW_PSPRITES_BEGIN,
+    HUD_BEGIN,
+    HUD_ITEM,
 ]
 
 

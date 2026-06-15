@@ -24,10 +24,11 @@ from typing import TYPE_CHECKING
 
 from torchwright.graph import annotated
 
-from .constants import COLUMN_COUNT, PIXEL_WIDTH
+from .constants import COLUMN_COUNT, HUD_ENABLED, PIXEL_WIDTH
 from .flat_pass_renderer import FlatPassRenderer
 from .lighting import apply_colormap_row
 from .psprite_renderer import PspriteRenderer
+from .statusbar_renderer import StatusBarRenderer
 from .pwl_banks import MOD64_PWL
 from .render_ops import (
     FLOOR_NATIVE,
@@ -83,7 +84,7 @@ class PixelDispatcher:
             # (Token(PIXEL, w=PIXEL_WIDTH)); identity at high-detail.
             w=constant(float(PIXEL_WIDTH)),
         )
-        return select(
+        below = select(
             projection.flats.weapon.weapon_seen,
             PspriteRenderer(projection).after_set_cursor_x_weapon(),
             select(
@@ -92,12 +93,22 @@ class PixelDispatcher:
                 self.wall_column_output(),
             ),
         )
+        # HUD off: no HUD arm built at all (bit-identical to pre-HUD).
+        if not HUD_ENABLED:
+            return below
+        hud = projection.flats.hud
+        assert hud is not None  # built on the HUD_ENABLED path (guarded above)
+        return select(
+            hud.hud_seen,
+            StatusBarRenderer(projection).after_set_cursor_x_hud(),
+            below,
+        )
 
     @annotated("pix")
     def after_set_cursor_y(self) -> "Node":
         projection = self.projection
         flat_span = projection.flats.flat_pass.flat_span_values(projection.core.past)
-        return select(
+        below = select(
             projection.flats.weapon.weapon_seen,
             PspriteRenderer(projection).decision(),
             select(
@@ -106,11 +117,20 @@ class PixelDispatcher:
                 make_value(ValueRange.R3, self.span_v0_at_top()),
             ),
         )
+        if not HUD_ENABLED:
+            return below
+        hud = projection.flats.hud
+        assert hud is not None  # built on the HUD_ENABLED path (guarded above)
+        return select(
+            hud.hud_seen,
+            StatusBarRenderer(projection).decision(),
+            below,
+        )
 
     @annotated("pix")
     def after_pixel_color(self) -> "Node":
         projection = self.projection
-        return select(
+        below = select(
             projection.flats.weapon.weapon_seen,
             PspriteRenderer(projection).decision(),
             select(
@@ -118,6 +138,15 @@ class PixelDispatcher:
                 self.after_flat_pixel_color(),
                 self.after_wall_pixel_color(),
             ),
+        )
+        if not HUD_ENABLED:
+            return below
+        hud = projection.flats.hud
+        assert hud is not None  # built on the HUD_ENABLED path (guarded above)
+        return select(
+            hud.hud_seen,
+            StatusBarRenderer(projection).decision(),
+            below,
         )
 
     # --- Wall texel pass -----------------------------------------------------

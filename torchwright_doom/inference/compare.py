@@ -54,6 +54,42 @@ def _weapon_reference_cells() -> list[tuple[int, int, Rgb]]:
     return cells
 
 
+def _hud_reference_cells() -> list[tuple[int, int, Rgb]]:
+    """Opaque status-bar cells as ``(x, y, rgb)`` in painter (draw-list) order;
+    empty when the HUD is off.
+
+    Composited from ``configured_hud_draw_list`` + ``configured_hud_bake`` — the
+    SAME tables the graph spine and the pydoom token reference walk — so the bar
+    is consistent across all three. The bar paints at native screen resolution
+    (one cell per column, ``w = 1``, unlike the doubled weapon/3D view). Cells are
+    emitted in draw-list order, so the consumer's last-write-wins puts each widget
+    over the plate beneath it (DOOM's painter order)."""
+    from ..asset_banks import (
+        PLAYPAL,
+        configured_hud_bake,
+        configured_hud_draw_list,
+    )
+    from ..hud_assets import HUD_TRANSPARENT
+
+    draw_list = configured_hud_draw_list()
+    bake = configured_hud_bake()
+    if draw_list is None or bake is None:
+        return []
+    cells: list[tuple[int, int, Rgb]] = []
+    for i in range(draw_list.n_items):
+        patch_id = draw_list.patch_id[i]
+        ox, oy = draw_list.origin_x[i], draw_list.origin_y[i]
+        base = bake.base_rows[patch_id]
+        for col in range(draw_list.width[i]):
+            for v in range(draw_list.height[i]):
+                value = float(bake.table[base + v, col])
+                if value >= HUD_TRANSPARENT - 0.5:
+                    continue
+                r, g, b = PLAYPAL[int(value)]
+                cells.append((ox + col, oy + v, (int(r), int(g), int(b))))
+    return cells
+
+
 def reference_pixels(scene, pose) -> PixelBuf:
     """Reference frame as ``{(x, y): rgb}`` (first emission at each pixel wins).
 
@@ -75,6 +111,8 @@ def reference_pixels(scene, pose) -> PixelBuf:
             out.setdefault((int(p.x) + k, int(p.y)), rgb)
     for x, y, rgb in _weapon_reference_cells():
         out[(x, y)] = rgb  # last-write-wins: weapon over the 3D scene
+    for x, y, rgb in _hud_reference_cells():
+        out[(x, y)] = rgb  # the status bar paints its own (bottom) rows
     return out
 
 
@@ -94,6 +132,8 @@ def reference_options(scene, pose) -> dict[tuple[int, int], set[Rgb]]:
             opts.setdefault((int(o.x) + k, int(o.y)), set()).update(colors)
     for x, y, rgb in _weapon_reference_cells():
         opts[(x, y)] = {rgb}
+    for x, y, rgb in _hud_reference_cells():
+        opts[(x, y)] = {rgb}  # bar pixels: the single baked color, no tolerance
     return opts
 
 

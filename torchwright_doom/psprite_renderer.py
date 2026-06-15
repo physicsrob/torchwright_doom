@@ -44,7 +44,7 @@ from typing import TYPE_CHECKING
 from torchwright.graph import annotated
 from torchwright.ops.arithmetic_ops import compare
 
-from .constants import PIXEL_WIDTH
+from .constants import HUD_ENABLED, PIXEL_WIDTH
 from .render_ops import (
     add_const,
     column_from_screen_x,
@@ -54,7 +54,14 @@ from .render_ops import (
 )
 from .std import constant, make_token_head, select
 from .std import sum as vec_sum
-from .vocab import DONE, PIXEL, SET_CURSOR_DIRECTION_Y, SET_CURSOR_X, SET_CURSOR_Y
+from .vocab import (
+    DONE,
+    HUD_BEGIN,
+    PIXEL,
+    SET_CURSOR_DIRECTION_Y,
+    SET_CURSOR_X,
+    SET_CURSOR_Y,
+)
 from .weapon_assets import WEAPON_TRANSPARENT
 
 if TYPE_CHECKING:
@@ -88,14 +95,18 @@ class PspriteRenderer:
     @annotated("pspr/R_DrawPlayerSprites")
     def after_set_cursor_x_weapon(self) -> "Node":
         # On the SET_CURSOR_X row cursor_x is fresh (it is this row's value);
-        # past the last column finish the weapon (DONE), else start the column at
-        # the bbox top.
+        # past the last column the weapon is done -- hand off to the status-bar
+        # phase (HUD_BEGIN, drawn last over the view), else start the column at
+        # the bbox top. The weapon only runs when the HUD is on, so the bar
+        # always follows it; the DONE arm is the dead HUD-off case kept for
+        # symmetry with the flat-pass splice.
         projection = self.projection
         banks = projection.core.scene.assets.banks
         col = column_from_screen_x(projection.core.inp.cursor_x)
+        terminal = make_token_head(HUD_BEGIN) if HUD_ENABLED else make_token_head(DONE)
         return select(
             gt_screen(col, constant(float(banks.weapon_max_col))),
-            make_token_head(DONE),
+            terminal,
             make_token_head(SET_CURSOR_Y, y=constant(float(banks.weapon_top))),
         )
 
