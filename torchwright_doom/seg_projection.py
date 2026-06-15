@@ -30,6 +30,7 @@ from torchwright.graph import Node
 from torchwright.graph import annotated
 
 from .attention_handles import RecentMarkerHandle
+from .constants import HUD_ENABLED
 from .past import PastHandle, PastHandleScope
 from .protocol_tokens import ProtocolTokenView, screen_column_one_hot
 from .render_ops import SCREEN_X_CLAMP, column_from_screen_x, or_
@@ -55,7 +56,7 @@ from .std import (
 from .std import sum as vec_sum
 from torchwright.ops.arithmetic_ops import clamp
 from .render_constants import MATCH_GAIN_LONG
-from .flat_state import FlatPassState, WeaponPassState
+from .flat_state import FlatPassState, HudPassState, WeaponPassState
 from .visplane_state import RuntimeVisplaneState
 from .wall_column_state import (
     ClipMemory,
@@ -227,6 +228,7 @@ class FlatRuntimeContext:
 
     flat_pass: FlatPassState
     weapon: WeaponPassState
+    hud: "HudPassState | None"
 
 
 class WallColumnRenderScalars:
@@ -593,6 +595,10 @@ class SegProjection:
         # Player-weapon pass marker + cursor recoveries (read once the weapon
         # phase begins; inert before it / when the HUD is off).
         weapon_pass = WeaponPassState.publish(past, inp, pos)
+        # Status-bar pass marker + draw-list item + cursor recoveries (read once
+        # the bar phase begins). Built only when the HUD is on, so a HUD-off graph
+        # carries no bar state at all (bit-identical to pre-HUD).
+        hud_pass = HudPassState.publish(past, inp, pos) if HUD_ENABLED else None
         wall_span_runtime = wall_span_draft.finish(past, inp)
 
         inputs = InputChannels(
@@ -647,5 +653,7 @@ class SegProjection:
                 check_result_vp_pub=check_result_vp_pub,
                 runtime_visplanes=runtime_visplanes,
             ),
-            flats=FlatRuntimeContext(flat_pass=flat_pass, weapon=weapon_pass),
+            flats=FlatRuntimeContext(
+                flat_pass=flat_pass, weapon=weapon_pass, hud=hud_pass
+            ),
         )

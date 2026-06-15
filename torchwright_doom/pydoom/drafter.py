@@ -107,6 +107,8 @@ from ..vocab import (
     DONE,
     DRAW_PLANES_BEGIN,
     DRAW_PSPRITES_BEGIN,
+    HUD_BEGIN,
+    HUD_ITEM,
     N_NODES_MAX,
     PIXEL_WIDTH,
     SCREEN_HEIGHT,
@@ -116,7 +118,12 @@ from ..vocab import (
     SET_CURSOR_DIRECTION_Y,
     _K_PART_TABLES,
 )
-from ..asset_banks import configured_weapon_bake
+from ..asset_banks import (
+    configured_hud_bake,
+    configured_hud_draw_list,
+    configured_weapon_bake,
+)
+from ..hud_assets import HUD_TRANSPARENT
 from ..weapon_assets import WEAPON_TRANSPARENT
 from ..value_ranges import (
     ValueRange,
@@ -242,6 +249,17 @@ _FLAT_SCAN_TYPES = {
     SET_CURSOR_X,
     SET_CURSOR_Y,
     PIXEL,
+    # Weapon + status-bar scaffold tokens. These are literal steps in the
+    # flat plan's tail (`_weapon_plan_tail` / `_statusbar_plan_tail`), so
+    # `consume` must advance the plan past them too -- otherwise the flat
+    # scan lags one step per occurrence and the drafter desyncs through the
+    # whole weapon/bar (every HUD_ITEM is one more step of lag). The frame's
+    # first SET_CURSOR_DIRECTION_Y is handled earlier in consume(); only the
+    # weapon's re-assertion of it reaches the flat-scan router here.
+    DRAW_PSPRITES_BEGIN,
+    SET_CURSOR_DIRECTION_Y,
+    HUD_BEGIN,
+    HUD_ITEM,
 }
 
 # Per-column span-emission tokens within a single visplane (everything a
@@ -2594,8 +2612,51 @@ def _weapon_plan_tail() -> list[Token]:
                 tokens.append(Token(PIXEL, {"color": int(value), "w": PIXEL_WIDTH}))
     # The terminal SET_CURSOR_X(max_col+1): the graph's decision emits it after the
     # last column's last row (current_row > bbox bottom), and its SET_CURSOR_X arm
-    # then sees col > max_col and emits DONE.
+    # then sees col > max_col and hands off to the status-bar phase (HUD on).
     tokens.append(Token(SET_CURSOR_X, {"x": (bake.max_col + 1) * PIXEL_WIDTH}))
+    tokens.extend(_statusbar_plan_tail())
+    return tokens
+
+
+def _statusbar_plan_tail() -> list[Token]:
+    """The status-bar token walk, spliced after the weapon, ending ``DONE``.
+
+    Mirrors the graph's ``StatusBarRenderer`` token-for-token: ``HUD_BEGIN``, then
+    one ``HUD_ITEM(i)`` per draw-list patch, then that patch rasterized column by
+    column (cursor advancing in Y) — a ``PIXEL`` (opaque) or ``SET_CURSOR_Y`` skip
+    (transparent) per row, a ``SET_CURSOR_X`` advance per column. The bar paints
+    at native screen resolution (``w = 1``). Built from ``configured_hud_*`` — the
+    SAME bake the graph banks use, so the teacher-forced token oracle matches.
+    """
+    draw_list = configured_hud_draw_list()
+    bake = configured_hud_bake()
+    if draw_list is None or bake is None:
+        return [Token(DONE)]
+    tokens: list[Token] = [Token(HUD_BEGIN)]
+    for i in range(draw_list.n_items):
+        patch_id = draw_list.patch_id[i]
+        ox = draw_list.origin_x[i]
+        oy = draw_list.origin_y[i]
+        width = draw_list.width[i]
+        height = draw_list.height[i]
+        base = bake.base_rows[patch_id]
+        tokens.append(Token(HUD_ITEM, {"item": i}))
+        tokens.append(Token(SET_CURSOR_X, {"x": ox}))  # arm the first column
+        for col in range(width):
+            tokens.append(Token(SET_CURSOR_Y, {"y": oy}))  # open the column
+            for v in range(height):
+                value = float(bake.table[base + v, col])
+                if value >= HUD_TRANSPARENT - 0.5:
+                    tokens.append(Token(SET_CURSOR_Y, {"y": oy + v + 1}))
+                else:
+                    tokens.append(Token(PIXEL, {"color": int(value), "w": 1}))
+            # Not the last column: the decision emits SET_CURSOR_X(cursor_x+1) to
+            # open the next column. The LAST column emits no SET_CURSOR_X — the
+            # decision advances the item directly (HUD_ITEM(i+1) / DONE), so the
+            # cursor never reaches `width` (a full-width patch can't encode it).
+            if col < width - 1:
+                tokens.append(Token(SET_CURSOR_X, {"x": ox + col + 1}))
+    # After the last item's last column the graph's HUD arm emits DONE.
     tokens.append(Token(DONE))
     return tokens
 

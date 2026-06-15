@@ -100,6 +100,11 @@ HUD_TOP = VIEW_HEIGHT
 # Projection horizon — the 3D view's vertical centre.
 CENTER_Y = VIEW_HEIGHT / 2.0
 
+# Upper bound (with headroom) on the number of status-bar draw-list items — the
+# V_DrawPatch calls the HUD spine walks. The hardcoded E1M1 bar uses ~32; this
+# fixed bound sizes the HUD_ITEM index slot without the vocab importing the WAD.
+MAX_HUD_ITEMS = 64
+
 # Pixel paint width (DOOM detail mode): low-detail paints 2 screen columns per
 # rendered column, high-detail 1. Read directly from the env (like the screen
 # dims) so it is fixed before the graph modules import; defaults to high so a

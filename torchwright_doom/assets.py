@@ -209,6 +209,30 @@ class WeaponAssets:
 
 
 @dataclass(frozen=True)
+class HudAssets:
+    """Status-bar (ST_Drawer) patch-bank lookup.
+
+    Banked like the flats (one stacked table, a per-patch base row) but returning
+    color-or-transparent like the weapon: ``table[base_rows[patch_id] + v, u]`` is
+    a raw (unlit) palette index, or ``HUD_TRANSPARENT`` (256) for a transparent or
+    padding cell. The draw-list spine supplies ``patch_id`` and the local ``(u, v)``
+    (cursor minus the draw-item origin); the loop emits a pixel (opaque) or a
+    ``setCursorY`` skip (transparent), exactly as the weapon does.
+    """
+
+    banks: AssetBanks = DEFAULT_ASSET_BANKS
+
+    @annotated("tex/ST_Drawer")
+    def color_or_transparent(self, patch_id: Node, u: Node, v: Node) -> Node:
+        # row = base_rows[patch_id] + v; column = u (local to the patch).
+        base = pick_by_index(
+            patch_id, constant(self.banks.hud_base_rows), self.banks.n_hud_patches
+        )
+        row = linear(concat(base, v), [[1.0], [1.0]])
+        return table_lookup_2d(row, u, self.banks.hud_table_2d, sharpness=1000.0)
+
+
+@dataclass(frozen=True)
 class AssetIndex:
     """Weight-side asset lookups; constructed with zero ``past.publish``."""
 
@@ -216,12 +240,14 @@ class AssetIndex:
     walls: WallAssets = field(init=False)
     flats: FlatAssets = field(init=False)
     weapon: WeaponAssets = field(init=False)
+    hud: HudAssets = field(init=False)
     sawtooth_bank: tuple = field(init=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "walls", WallAssets(self.banks))
         object.__setattr__(self, "flats", FlatAssets(self.banks))
         object.__setattr__(self, "weapon", WeaponAssets(self.banks))
+        object.__setattr__(self, "hud", HudAssets(self.banks))
         object.__setattr__(
             self, "sawtooth_bank", build_sawtooth_bank(self.banks.wall_height_bank)
         )

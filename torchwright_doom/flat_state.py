@@ -686,3 +686,103 @@ class WeaponPassState:
             [1, 1],
         )
         return WeaponCursorValues(sy_value=sy_value, sy_pos=sy_pos)
+
+
+@dataclass(frozen=True)
+class HudPassState:
+    """Status-bar (ST_Drawer) pass publish handles.
+
+    The bar is drawn after the weapon, last of all (DOOM's painter order). Like
+    the weapon it is a column-major raster, but it walks a DRAW-LIST of patches
+    (the ``V_DrawPatch`` sequence): each ``HUD_ITEM`` marks the next patch + its
+    screen origin. This state owns what the HUD dispatch reads back:
+
+    1. ``hud_seen`` — ``+1`` once ``ST_Drawer`` has fired this frame, gating the
+       shared cursor/pixel branches onto the HUD arm. False before the phase
+       (and forever HUD-off, since the splice never emits ``HUD_BEGIN``), so
+       every fork degenerates to the weapon/wall/flat arm.
+    2. ``hud_item`` — the current draw-list index (the most-recent ``HUD_ITEM``),
+       which selects the patch id + screen origin/size from the baked draw-list
+       tables. This is the only piece the weapon lacks: the weapon is one fixed
+       patch, the bar a list of them.
+    3. The cursor recoveries: the screen column (most-recent HUD ``SET_CURSOR_X``)
+       and the painted-row base (most-recent HUD ``SET_CURSOR_Y``), each scoped
+       to the HUD phase (``and_(is_set_cursor_*, hud_seen)``) so they cannot
+       match the earlier passes' cursor rows. The reads stay within one patch
+       column (<= the patch height), far inside the windowed KV cache.
+
+    The bar paints at native screen resolution (one host pixel per screen column,
+    ``w = 1``), so the column is the raw ``cursor_x`` — no ``column_from_screen_x``
+    divide (that is the doubled-3D-view convention, not the bar's).
+    """
+
+    hud_begin_row: RecentMarkerHandle
+    hud_seen: Node
+    hud_item_row: RecentMarkerHandle
+    hud_item_state_pub: PastHandle
+    hud_cursor_x_row: RecentMarkerHandle
+    hud_cursor_x_state_pub: PastHandle
+    hud_cursor_y_row: RecentMarkerHandle
+    hud_cursor_y_state_pub: PastHandle
+
+    @classmethod
+    @annotated("hud/ST_Drawer")
+    def publish(
+        cls,
+        past: PastHandleScope,
+        inp: "ProtocolTokenView",
+        pos: Node,
+    ) -> "HudPassState":
+        hud_begin_row = RecentMarkerHandle.publish(past, "hud_begin", inp.is_hud_begin)
+        hud_seen = MARKER_PRESENT(hud_begin_row.pick(past, hud_begin_row.marker))
+        # The current draw-list item (the most-recent HUD_ITEM), scoped to the
+        # HUD phase.
+        hud_item_active = and_(inp.is_hud_item, hud_seen)
+        hud_item_row = RecentMarkerHandle.publish(past, "hud_item", hud_item_active)
+        hud_item_state_pub = past.publish("hud_item_state", inp.hud_item_value)
+        # Cursor recoveries, scoped to the HUD phase.
+        hud_cursor_x_active = and_(inp.is_set_cursor_x, hud_seen)
+        hud_cursor_x_row = RecentMarkerHandle.publish(
+            past, "hud_cursor_x", hud_cursor_x_active
+        )
+        # cursor_x is the SCREEN column directly (the bar is w=1); the consumer
+        # subtracts the item origin to get the patch-local column. The setCursorX
+        # value decode is exact across the bar's full screen-x range (measured),
+        # so the raw value is fine.
+        hud_cursor_x_state_pub = past.publish("hud_cursor_x_state", inp.cursor_x)
+        hud_cursor_y_active = and_(inp.is_set_cursor_y, hud_seen)
+        hud_cursor_y_row = RecentMarkerHandle.publish(
+            past, "hud_cursor_y", hud_cursor_y_active
+        )
+        hud_cursor_y_state_pub = past.publish(
+            "hud_cursor_y_state",
+            concat(inp.cursor_y, pos),
+        )
+        return cls(
+            hud_begin_row=hud_begin_row,
+            hud_seen=hud_seen,
+            hud_item_row=hud_item_row,
+            hud_item_state_pub=hud_item_state_pub,
+            hud_cursor_x_row=hud_cursor_x_row,
+            hud_cursor_x_state_pub=hud_cursor_x_state_pub,
+            hud_cursor_y_row=hud_cursor_y_row,
+            hud_cursor_y_state_pub=hud_cursor_y_state_pub,
+        )
+
+    @annotated("hud/ST_Drawer")
+    def hud_item(self, past: PastHandleScope) -> Node:
+        """The current draw-list item index (the most-recent HUD_ITEM)."""
+        return self.hud_item_row.pick(past, self.hud_item_state_pub)
+
+    @annotated("hud/ST_Drawer")
+    def hud_cursor_x(self, past: PastHandleScope) -> Node:
+        """The current screen column (the most-recent HUD SET_CURSOR_X)."""
+        return self.hud_cursor_x_row.pick(past, self.hud_cursor_x_state_pub)
+
+    @annotated("hud/ST_Drawer")
+    def hud_cursor_values(self, past: PastHandleScope) -> WeaponCursorValues:
+        sy_value, sy_pos = split(
+            self.hud_cursor_y_row.pick(past, self.hud_cursor_y_state_pub),
+            [1, 1],
+        )
+        return WeaponCursorValues(sy_value=sy_value, sy_pos=sy_pos)

@@ -32,12 +32,14 @@ from torchwright.graph import Node, PosEncoding
 from torchwright.graph import annotate, annotated
 
 from .bsp_traversal import BspTraversal
+from .constants import HUD_ENABLED
 from .emit import emit_derived_zero
 from .flat_pass_renderer import FlatPassRenderer
 from .past import GraphPast, PastHandleScope
 from .payload_router import PayloadRouter
 from .pixel_dispatcher import PixelDispatcher
 from .psprite_renderer import PspriteRenderer
+from .statusbar_renderer import StatusBarRenderer
 from .protocol_registry import DISPATCH_TRANSITIONS
 from .protocol_tokens import ProtocolTokenView
 from .render_ops import _ATAN_ABS_RANGE, signed_world_angle
@@ -302,6 +304,7 @@ def build_branch_outputs(
     pixels = PixelDispatcher(projection)
     flats = FlatPassRenderer(projection)
     weapon = PspriteRenderer(projection)
+    statusbar = StatusBarRenderer(projection)
     visplanes = VisplaneMarker(projection)
     ranges = RangeDispatcher(projection)
     branches: dict[str, "Node | ScalarEmit | AngleInputEmit"] = {
@@ -390,6 +393,11 @@ def build_branch_outputs(
         # the weapon walk rides the shared SET_CURSOR_* / PIXEL branches above,
         # forked on weapon_seen.
         "draw_psprites_begin": weapon.after_draw_psprites_begin(),
+        # Status-bar pass (StatusBarRenderer). The phase-begin head and the
+        # per-item head; the per-pixel walk rides the shared SET_CURSOR_* / PIXEL
+        # branches above, forked on hud_seen.
+        "hud_begin": statusbar.after_hud_begin() if HUD_ENABLED else no_op_out,
+        "hud_item": statusbar.after_hud_item() if HUD_ENABLED else no_op_out,
         # Host-visible screen-range merge (RangeDispatcher).
         "screen_range": ranges.after_screen_range(no_op_out),
     }

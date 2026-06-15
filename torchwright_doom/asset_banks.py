@@ -29,6 +29,13 @@ from .wad_assets import (
     TextureImage,
     load_asset_book,
 )
+from .hud_assets import (
+    HUD_TRANSPARENT,
+    HudBank,
+    HudDrawList,
+    bake_hud_bank,
+    bake_hud_draw_list,
+)
 from .weapon_assets import WeaponBake, bake_weapon_table
 
 # COLORMAP row applied to the ready pistol at bake time (DOOM lights the ready
@@ -64,6 +71,66 @@ def _build_weapon_bank(wad_path) -> tuple[np.ndarray, int, int, int, int]:
     if bake is None:
         return (np.zeros((1, 1), dtype=np.float32), 0, 0, 0, 0)
     return (bake.table, bake.min_col, bake.max_col, bake.top, bake.bottom)
+
+
+def configured_hud_bake(wad_path=None) -> HudBank | None:
+    """The HUD-on status-bar patch bank at the active config's scale, or ``None``
+    when the HUD is off.
+
+    The SINGLE source the graph banks (``_build_hud_bank``), the pydoom token
+    reference (the drafter's status-bar tail), and the image-compare reference
+    all bake from, so the three cannot disagree (the weapon's contract)."""
+    if not HUD_ENABLED:
+        return None
+    scale = 320 // SCREEN_WIDTH  # 1 (320 wide) or 2 (160 wide) for the real configs
+    return bake_hud_bank(scale, wad_path=wad_path or DOOM1_WAD_PATH)
+
+
+def _build_hud_bank(
+    wad_path,
+) -> tuple[np.ndarray, list[float], list[float], list[float], int]:
+    """Bake the status-bar patch bank, or a 1x1 placeholder when the HUD is off."""
+    bake = configured_hud_bake(wad_path)
+    if bake is None:
+        return (
+            np.full((1, 1), HUD_TRANSPARENT, dtype=np.float32),
+            [0.0],
+            [1.0],
+            [1.0],
+            1,
+        )
+    return (
+        bake.table,
+        [float(r) for r in bake.base_rows],
+        [float(w) for w in bake.widths],
+        [float(h) for h in bake.heights],
+        len(bake.base_rows),
+    )
+
+
+def configured_hud_draw_list(wad_path=None) -> HudDrawList | None:
+    """The HUD-on status-bar draw-list at the active config's scale, or ``None``."""
+    if not HUD_ENABLED:
+        return None
+    scale = 320 // SCREEN_WIDTH
+    return bake_hud_draw_list(scale, wad_path=wad_path or DOOM1_WAD_PATH)
+
+
+def _build_hud_draw_list(
+    wad_path,
+) -> tuple[list[float], list[float], list[float], list[float], list[float], int]:
+    """Bake the status-bar draw-list, or a 1-entry placeholder when HUD is off."""
+    draw_list = configured_hud_draw_list(wad_path)
+    if draw_list is None:
+        return ([0.0], [0.0], [0.0], [1.0], [1.0], 1)
+    return (
+        [float(p) for p in draw_list.patch_id],
+        [float(x) for x in draw_list.origin_x],
+        [float(y) for y in draw_list.origin_y],
+        [float(w) for w in draw_list.width],
+        [float(h) for h in draw_list.height],
+        draw_list.n_items,
+    )
 
 
 @dataclass(frozen=True)
@@ -131,6 +198,26 @@ class AssetBanks:
     weapon_max_col: int
     weapon_top: int
     weapon_bottom: int
+    # Status-bar (ST_Drawer) patch bank: every HUD lump stacked into one
+    # (total_rows, max_width) table of palette indices, HUD_TRANSPARENT for
+    # transparent/padding cells, addressed by (patch_id -> base row) + the local
+    # cursor. The draw-list (the V_DrawPatch sequence) selects a patch_id and an
+    # origin at runtime; this bank is just the per-patch color lookup. Built only
+    # when the HUD is enabled; a 1x1 placeholder otherwise.
+    hud_table_2d: np.ndarray
+    hud_base_rows: list[float]
+    hud_patch_widths: list[float]
+    hud_patch_heights: list[float]
+    n_hud_patches: int
+    # Status-bar draw-list: one entry per V_DrawPatch (the painter-order sequence
+    # of patches the spine composites). Indexed by the item counter; selects a
+    # patch and its screen origin / size. 1-entry placeholder when HUD is off.
+    hud_item_patch_id: list[float]
+    hud_item_origin_x: list[float]
+    hud_item_origin_y: list[float]
+    hud_item_width: list[float]
+    hud_item_height: list[float]
+    n_hud_items: int
 
 
 def _build_wall_banks(asset_book: AssetBook) -> tuple[WallBank, ...]:
@@ -279,6 +366,23 @@ def build_asset_banks(
         weapon_bottom,
     ) = _build_weapon_bank(wad_path)
 
+    (
+        hud_table_2d,
+        hud_base_rows,
+        hud_patch_widths,
+        hud_patch_heights,
+        n_hud_patches,
+    ) = _build_hud_bank(wad_path)
+
+    (
+        hud_item_patch_id,
+        hud_item_origin_x,
+        hud_item_origin_y,
+        hud_item_width,
+        hud_item_height,
+        n_hud_items,
+    ) = _build_hud_draw_list(wad_path)
+
     return AssetBanks(
         asset_book=asset_book,
         wall_names=wall_names,
@@ -317,6 +421,17 @@ def build_asset_banks(
         weapon_max_col=weapon_max_col,
         weapon_top=weapon_top,
         weapon_bottom=weapon_bottom,
+        hud_table_2d=hud_table_2d,
+        hud_base_rows=hud_base_rows,
+        hud_patch_widths=hud_patch_widths,
+        hud_patch_heights=hud_patch_heights,
+        n_hud_patches=n_hud_patches,
+        hud_item_patch_id=hud_item_patch_id,
+        hud_item_origin_x=hud_item_origin_x,
+        hud_item_origin_y=hud_item_origin_y,
+        hud_item_width=hud_item_width,
+        hud_item_height=hud_item_height,
+        n_hud_items=n_hud_items,
     )
 
 

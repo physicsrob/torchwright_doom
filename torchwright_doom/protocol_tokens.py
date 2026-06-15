@@ -94,6 +94,7 @@ from .vocab import (
     FLAT_NEXT_PLANE,
     FLAT_NEXT_VP,
     FLAT_VISPLANE_BEGIN,
+    HUD_ITEM,
     ID_LIFTED_KEY_DERIVED_NAME,
     MAKE_SPANS_COL,
     PIXEL,
@@ -237,6 +238,8 @@ class ProtocolTokenView:
         is_screen_range: Node
         is_done: Node
         is_draw_psprites_begin: Node
+        is_hud_begin: Node
+        is_hud_item: Node
 
     def __init__(
         self,
@@ -342,6 +345,11 @@ class ProtocolTokenView:
     @_input_cached_property
     def is_set_cursor_x(self) -> Node:
         return SET_CURSOR_X.check(self.input_vec)
+
+    @_input_cached_property
+    def hud_item_value(self) -> Node:
+        """The draw-list item index carried by a HUD_ITEM row (else 0)."""
+        return HUD_ITEM.extract(self.input_vec, "item")
 
     @_input_cached_property
     def wall_col_u_idx(self) -> Node:
