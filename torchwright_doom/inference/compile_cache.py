@@ -66,6 +66,13 @@ def compile_cached(
         verbose=verbose,
         asset_config=config.asset_config(),
         wad_path=wad_path,
+        # Render geometry travels into the debug sidecar's free-form
+        # "extra" (torchwright owns the sidecar schema but not these
+        # doom-domain keys); the floor-plan viz reads them from there.
+        extra_metadata={
+            "screen": {"width": config.screen[0], "height": config.screen[1]},
+            "scale": config.model.scale,
+        },
     )
     _write_render_meta(
         meta_path,

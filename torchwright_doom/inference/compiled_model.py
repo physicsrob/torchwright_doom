@@ -75,6 +75,7 @@ def compile_to_onnx_path(
     d_hidden: int | None = None,
     asset_config: AssetConfig | None = None,
     wad_path: str | Path | None = None,
+    extra_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compile the token-id forward to ONNX and return basic build metadata.
 
@@ -119,6 +120,8 @@ def compile_to_onnx_path(
         kwargs["cache_stride"] = cache_stride
     if d_hidden is not None:
         kwargs["d_hidden"] = d_hidden
+    if extra_metadata is not None:
+        kwargs["extra_metadata"] = extra_metadata
     compile_to_onnx(
         next_token,
         pos,
