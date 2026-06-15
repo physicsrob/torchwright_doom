@@ -91,25 +91,16 @@ def compile_to_onnx_path(
     next_token, pos, emb, asset_banks = build_graph(
         asset_config=asset_config, wad_path=wad_path
     )
-    # Linear-layer fusion before compile — DEFAULT ON, width-safe gate: skip the
-    # fusions that would eject a downstream ReLU into the residual stream, which
-    # drops the production compile ~57 -> 48 layers without busting the width
-    # budget (see torchwright.graph.optimize.fuse_consecutive_linears). Override
-    # via TWDOOM_FUSE_LINEARS: "off" disables fusion, "all" is the unsafe blind
-    # fusion (width blow-up — diagnostics only). (2026-06-15)
-    import os as _os
+    # Linear-layer fusion before compile (always on): the width-safe gate skips
+    # the fusions that would eject a downstream ReLU into the residual stream,
+    # which drops the production compile ~57 -> 48 layers without busting the
+    # width budget. See torchwright.graph.optimize.fuse_consecutive_linears.
+    from torchwright.graph.optimize import fuse_consecutive_linears
 
-    _fuse_mode = _os.environ.get("TWDOOM_FUSE_LINEARS", "safe").lower()
-    if _fuse_mode != "off":
-        from torchwright.graph.optimize import fuse_consecutive_linears
-
-        n_fused = fuse_consecutive_linears(
-            {next_token}, verbose=False, skip_relu_ejecting=(_fuse_mode != "all")
-        )
-        print(
-            f"[compile] linear fusion (mode={_fuse_mode}): fused {n_fused} pairs",
-            flush=True,
-        )
+    n_fused = fuse_consecutive_linears(
+        {next_token}, verbose=False, skip_relu_ejecting=True
+    )
+    print(f"[compile] linear fusion (width-safe): fused {n_fused} pairs", flush=True)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     kwargs: dict[str, Any] = {

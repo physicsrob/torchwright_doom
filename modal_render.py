@@ -78,7 +78,6 @@ def compile_remote(
     cache_subdir: str,
     compile_payload: dict,
     verbose_compile: bool,
-    fuse_mode: str = "",
 ) -> dict:
     import os
     import sys
@@ -87,13 +86,6 @@ def compile_remote(
         sys.path.insert(0, "/root")
 
     config_path = _write_shipped_config(config_name, config_text)
-
-    # Linear-layer fusion OVERRIDE. The default (the width-safe gate) lives in
-    # inference/compiled_model.py and applies on every compile; pass fuse_mode
-    # only to override it — "off" disables fusion, "all" is the unsafe blind
-    # fusion. Set the env var the in-container compile reads. (2026-06-15)
-    if fuse_mode:
-        os.environ["TWDOOM_FUSE_LINEARS"] = fuse_mode
 
     # CP-SAT reads this at solve time (torchwright cpsat_scheduler); point it
     # at the container's full CPU allocation instead of the 16-worker default.
@@ -159,9 +151,7 @@ def _volume_has_compiled(cache_subdir: str) -> bool:
     return {"model.onnx", "model.meta.json"} <= names
 
 
-def _compile_on_modal(
-    config_path: Path, verbose_compile: bool, fuse_mode: str = ""
-) -> str:
+def _compile_on_modal(config_path: Path, verbose_compile: bool) -> str:
     """Compute the compile-cache key LOCALLY and compile on Modal on a miss.
 
     Shared by the render entrypoint (``main``) and the compile-only
@@ -198,18 +188,13 @@ def _compile_on_modal(
     wad_path = resolve_wad_path(render_config, base_dir=config_path.parent)
     compile_payload = canonical_compile_payload(render_config, wad_path)
     cache_subdir = cache_key_from_payload(compile_payload)
-    # EXPERIMENT: keep a fused artifact under a distinct key so it never
-    # collides with (or overwrites) the production no-fusion entry. (2026-06-14)
-    if fuse_mode:
-        cache_subdir = f"{cache_subdir}-fuse-{fuse_mode}"
 
     if _volume_has_compiled(cache_subdir):
         print(f"[local] compile cache HIT CACHE_VOLUME:/{cache_subdir}", flush=True)
     else:
         print(
             f"[local] compile cache MISS — compiling {config_path} on Modal "
-            f"({_COMPILE_CPUS} CPUs, fuse_mode={fuse_mode!r}) -> "
-            f"CACHE_VOLUME:/{cache_subdir}",
+            f"({_COMPILE_CPUS} CPUs) -> CACHE_VOLUME:/{cache_subdir}",
             flush=True,
         )
         compile_remote.remote(
@@ -218,7 +203,6 @@ def _compile_on_modal(
             cache_subdir,
             compile_payload,
             verbose_compile,
-            fuse_mode=fuse_mode,
         )
     return cache_subdir
 
@@ -227,7 +211,6 @@ def _compile_on_modal(
 def compile_only(
     config: str = "configs/e1m1.yaml",
     verbose_compile: bool = False,
-    fuse_mode: str = "",
 ):
     """``make compile`` — compile a config to the Modal cache volume, no render.
 
@@ -238,7 +221,7 @@ def compile_only(
     no local-disk copy (that is what ``make run-local`` would build instead).
     """
     config_path = Path(config)
-    cache_subdir = _compile_on_modal(config_path, verbose_compile, fuse_mode=fuse_mode)
+    cache_subdir = _compile_on_modal(config_path, verbose_compile)
     print(f"[local] compile complete -> CACHE_VOLUME:/{cache_subdir}", flush=True)
 
 
