@@ -106,6 +106,7 @@ from ..vocab import (
     COLUMN_COUNT,
     DONE,
     DRAW_PLANES_BEGIN,
+    DRAW_PSPRITES_BEGIN,
     N_NODES_MAX,
     PIXEL_WIDTH,
     SCREEN_HEIGHT,
@@ -115,6 +116,8 @@ from ..vocab import (
     SET_CURSOR_DIRECTION_Y,
     _K_PART_TABLES,
 )
+from ..asset_banks import configured_weapon_bake
+from ..weapon_assets import WEAPON_TRANSPARENT
 from ..value_ranges import (
     ValueRange,
     decode_float,
@@ -2556,8 +2559,45 @@ def _build_flat_plan(
             else:
                 plan.append(Token(FLAT_NEXT_VP, {"p": plane_id, "vp": vp}))
         plan.append(Token(FLAT_NEXT_PLANE, {"p": plane_id}))
-    plan.append(Token(DONE))
+    # The flat pass ends with DONE, unless the HUD is on — then the player-weapon
+    # phase (R_DrawPlayerSprites) is spliced in before DONE, exactly mirroring the
+    # graph's after_flat_next_plane sentinel arm.
+    plan.extend(_weapon_plan_tail())
     return plan
+
+
+def _weapon_plan_tail() -> list[Token]:
+    """The frame terminus: ``[DONE]`` HUD-off; the weapon token walk + ``DONE``
+    HUD-on.
+
+    Walks the baked pistol bounding box one column at a time, cursor advancing in
+    Y — the literal token stream the graph's ``PspriteRenderer`` emits (so the
+    teacher-forced token oracle matches token-for-token). Built from
+    ``configured_weapon_bake`` — the SAME bake the graph banks use.
+    """
+    bake = configured_weapon_bake()
+    if bake is None:
+        return [Token(DONE)]
+    tokens: list[Token] = [Token(DRAW_PSPRITES_BEGIN), Token(SET_CURSOR_DIRECTION_Y)]
+    for col in range(bake.min_col, bake.max_col + 1):
+        # Each column opens at its bbox top; the cursor then walks down to the
+        # bbox bottom, emitting a PIXEL (opaque) or a SET_CURSOR_Y skip
+        # (transparent) per row. After the last row the graph emits
+        # SET_CURSOR_X(col+1) for the next column (or the terminal column).
+        tokens.append(Token(SET_CURSOR_X, {"x": col * PIXEL_WIDTH}))
+        tokens.append(Token(SET_CURSOR_Y, {"y": bake.top}))
+        for row in range(bake.top, bake.bottom + 1):
+            value = float(bake.table[row - bake.top, col - bake.min_col])
+            if value >= WEAPON_TRANSPARENT - 0.5:
+                tokens.append(Token(SET_CURSOR_Y, {"y": row + 1}))
+            else:
+                tokens.append(Token(PIXEL, {"color": int(value), "w": PIXEL_WIDTH}))
+    # The terminal SET_CURSOR_X(max_col+1): the graph's decision emits it after the
+    # last column's last row (current_row > bbox bottom), and its SET_CURSOR_X arm
+    # then sees col > max_col and emits DONE.
+    tokens.append(Token(SET_CURSOR_X, {"x": (bake.max_col + 1) * PIXEL_WIDTH}))
+    tokens.append(Token(DONE))
+    return tokens
 
 
 class _FlatScanState:

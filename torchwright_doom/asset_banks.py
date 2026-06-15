@@ -29,7 +29,7 @@ from .wad_assets import (
     TextureImage,
     load_asset_book,
 )
-from .weapon_assets import bake_weapon_table
+from .weapon_assets import WeaponBake, bake_weapon_table
 
 # COLORMAP row applied to the ready pistol at bake time (DOOM lights the ready
 # weapon by the view sector's brightest scale-light). Row 0 (brightest) matches
@@ -43,14 +43,26 @@ def _is_sky_flat(flat_name: str) -> bool:
     return name.startswith("F_SKY")
 
 
-def _build_weapon_bank(wad_path) -> tuple[np.ndarray, int, int, int, int]:
-    """Bake the player-weapon table, or a 1x1 placeholder when the HUD is off."""
+def configured_weapon_bake(wad_path=None) -> WeaponBake | None:
+    """The HUD-on weapon bake at the active config's scale/detail, or ``None``
+    when the HUD is off.
+
+    The SINGLE source the graph banks (``_build_weapon_bank``), the pydoom token
+    reference (``drafter._weapon_plan_tail``), and the image-compare reference
+    (``inference.compare``) all bake from, so the three cannot disagree."""
     if not HUD_ENABLED:
-        return (np.zeros((1, 1), dtype=np.float32), 0, 0, 0, 0)
+        return None
     scale = 320 // SCREEN_WIDTH  # 1 (320 wide) or 2 (160 wide) for the real configs
-    bake = bake_weapon_table(
+    return bake_weapon_table(
         scale, PIXEL_WIDTH, WEAPON_COLORMAP_ROW, wad_path=wad_path or DOOM1_WAD_PATH
     )
+
+
+def _build_weapon_bank(wad_path) -> tuple[np.ndarray, int, int, int, int]:
+    """Bake the player-weapon table, or a 1x1 placeholder when the HUD is off."""
+    bake = configured_weapon_bake(wad_path)
+    if bake is None:
+        return (np.zeros((1, 1), dtype=np.float32), 0, 0, 0, 0)
     return (bake.table, bake.min_col, bake.max_col, bake.top, bake.bottom)
 
 

@@ -27,6 +27,33 @@ PixelBuf = dict[tuple[int, int], Rgb]
 # --- reference render (ground truth) --------------------------------------
 
 
+def _weapon_reference_cells() -> list[tuple[int, int, Rgb]]:
+    """Opaque player-weapon cells as ``(x, y, rgb)``, width-expanded to screen
+    cells; empty when the HUD is off.
+
+    Baked from ``configured_weapon_bake`` — the SAME bake the graph banks and the
+    pydoom token reference use — so the weapon is consistent across all three.
+    The baked value is a *lit* palette index; PLAYPAL maps it to RGB exactly as
+    the host does for an emitted PIXEL token."""
+    from ..asset_banks import PLAYPAL, configured_weapon_bake
+    from ..weapon_assets import WEAPON_TRANSPARENT
+
+    bake = configured_weapon_bake()
+    if bake is None:
+        return []
+    cells: list[tuple[int, int, Rgb]] = []
+    for col in range(bake.min_col, bake.max_col + 1):
+        for row in range(bake.top, bake.bottom + 1):
+            value = float(bake.table[row - bake.top, col - bake.min_col])
+            if value >= WEAPON_TRANSPARENT - 0.5:
+                continue
+            r, g, b = PLAYPAL[int(value)]
+            rgb = (int(r), int(g), int(b))
+            for k in range(PIXEL_WIDTH):
+                cells.append((col * PIXEL_WIDTH + k, row, rgb))
+    return cells
+
+
 def reference_pixels(scene, pose) -> PixelBuf:
     """Reference frame as ``{(x, y): rgb}`` (first emission at each pixel wins).
 
@@ -34,7 +61,11 @@ def reference_pixels(scene, pose) -> PixelBuf:
     its left-edge screen x (``col * PIXEL_WIDTH``). Mirror the host blit
     (:func:`..decode.decode_rows_to_pixels`, which paints ``w`` cells in +X) by
     filling all ``PIXEL_WIDTH`` cells, so the reference is the true 320-wide
-    frame, not a 1-wide comb. No-op at high-detail (``PIXEL_WIDTH == 1``)."""
+    frame, not a 1-wide comb. No-op at high-detail (``PIXEL_WIDTH == 1``).
+
+    The player weapon is drawn last (DOOM's painter order), so its opaque cells
+    OVERWRITE the 3D scene; transparent gaps leave the 3D pixel showing through.
+    HUD off: no weapon, frame unchanged."""
     from ..pydoom import expected_pixel_pass
 
     out: PixelBuf = {}
@@ -42,6 +73,8 @@ def reference_pixels(scene, pose) -> PixelBuf:
         rgb = (int(p.color[0]), int(p.color[1]), int(p.color[2]))
         for k in range(PIXEL_WIDTH):
             out.setdefault((int(p.x) + k, int(p.y)), rgb)
+    for x, y, rgb in _weapon_reference_cells():
+        out[(x, y)] = rgb  # last-write-wins: weapon over the 3D scene
     return out
 
 
@@ -49,7 +82,9 @@ def reference_options(scene, pose) -> dict[tuple[int, int], set[Rgb]]:
     """Per-pixel accepted-color option sets (texture-neighborhood + lighting tol).
 
     Width-expanded ``PIXEL_WIDTH`` cells wide to match the host blit (see
-    :func:`reference_pixels`); no-op at high-detail."""
+    :func:`reference_pixels`); no-op at high-detail. At weapon cells the model
+    paints the baked weapon color exactly, so the option set there is that single
+    color (replacing any 3D option underneath)."""
     from ..pydoom import expected_pixel_color_options
 
     opts: dict[tuple[int, int], set[Rgb]] = {}
@@ -57,6 +92,8 @@ def reference_options(scene, pose) -> dict[tuple[int, int], set[Rgb]]:
         colors = {(int(r), int(g), int(b)) for r, g, b in o.colors}
         for k in range(PIXEL_WIDTH):
             opts.setdefault((int(o.x) + k, int(o.y)), set()).update(colors)
+    for x, y, rgb in _weapon_reference_cells():
+        opts[(x, y)] = {rgb}
     return opts
 
 
