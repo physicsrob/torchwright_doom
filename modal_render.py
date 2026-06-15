@@ -78,6 +78,7 @@ def compile_remote(
     cache_subdir: str,
     compile_payload: dict,
     verbose_compile: bool,
+    fuse_mode: str = "",
 ) -> dict:
     import os
     import sys
@@ -86,6 +87,13 @@ def compile_remote(
         sys.path.insert(0, "/root")
 
     config_path = _write_shipped_config(config_name, config_text)
+
+    # EXPERIMENT (default OFF): linear-layer fusion before compile. fuse_mode in
+    # {"", "all", "safe"} — "safe" applies the relu-ejection gate. The graph
+    # toggle lives in inference/compiled_model.py; set its env var here so the
+    # in-container compile picks it up. (2026-06-14)
+    if fuse_mode:
+        os.environ["TWDOOM_FUSE_LINEARS"] = fuse_mode
 
     # CP-SAT reads this at solve time (torchwright cpsat_scheduler); point it
     # at the container's full CPU allocation instead of the 16-worker default.
@@ -149,6 +157,89 @@ def _volume_has_compiled(cache_subdir: str) -> bool:
         )
         return False
     return {"model.onnx", "model.meta.json"} <= names
+
+
+def _compile_on_modal(
+    config_path: Path, verbose_compile: bool, fuse_mode: str = ""
+) -> str:
+    """Compute the compile-cache key LOCALLY and compile on Modal on a miss.
+
+    Shared by the render entrypoint (``main``) and the compile-only
+    entrypoint (``compile_only``), so ``make compile`` and the implicit
+    compile inside ``make run`` are byte-for-byte the same job: the same
+    64-CPU ``compile_remote`` container, the same key, the same artifact in
+    CACHE_VOLUME.
+
+    The key embeds the submodule git SHAs, and Modal containers have no
+    ``.git`` (``_git_sha`` collapses to "unknown" there, so a remotely-derived
+    key would never change on a code edit — silently reusing a stale model).
+    The local machine computes the canonical payload + key and hands both to
+    ``compile_remote``, which compiles straight into CACHE_VOLUME under that
+    key with CP-SAT fanned out across the container's 64 CPUs.
+
+    Importing ``inference.config`` here is safe: it has no dependency on the
+    screen-sized token vocab (the import-order trap that forces
+    ``compile_config`` to call ``apply_screen_env`` before touching
+    ``inference.compile_cache``).
+
+    Returns the cache subdir (the volume-relative key).
+    """
+    from torchwright_doom.inference.config import (
+        cache_key_from_payload,
+        canonical_compile_payload,
+        load_render_config,
+        resolve_wad_path,
+    )
+
+    # Shipped by VALUE (see _write_shipped_config): /tmp variant configs work
+    # on Modal, and the legs of an A/B differ only in the file text.
+    config_text = config_path.read_text()
+    render_config = load_render_config(config_path)
+    wad_path = resolve_wad_path(render_config, base_dir=config_path.parent)
+    compile_payload = canonical_compile_payload(render_config, wad_path)
+    cache_subdir = cache_key_from_payload(compile_payload)
+    # EXPERIMENT: keep a fused artifact under a distinct key so it never
+    # collides with (or overwrites) the production no-fusion entry. (2026-06-14)
+    if fuse_mode:
+        cache_subdir = f"{cache_subdir}-fuse-{fuse_mode}"
+
+    if _volume_has_compiled(cache_subdir):
+        print(f"[local] compile cache HIT CACHE_VOLUME:/{cache_subdir}", flush=True)
+    else:
+        print(
+            f"[local] compile cache MISS — compiling {config_path} on Modal "
+            f"({_COMPILE_CPUS} CPUs, fuse_mode={fuse_mode!r}) -> "
+            f"CACHE_VOLUME:/{cache_subdir}",
+            flush=True,
+        )
+        compile_remote.remote(
+            config_path.name,
+            config_text,
+            cache_subdir,
+            compile_payload,
+            verbose_compile,
+            fuse_mode=fuse_mode,
+        )
+    return cache_subdir
+
+
+@app.local_entrypoint()
+def compile_only(
+    config: str = "configs/e1m1.yaml",
+    verbose_compile: bool = False,
+    fuse_mode: str = "",
+):
+    """``make compile`` — compile a config to the Modal cache volume, no render.
+
+    Runs the SAME 64-CPU ``compile_remote`` path ``make run`` uses on a cache
+    miss, so the production artifact is built once with the wide CP-SAT search
+    and a later ``make run`` is a cache hit.  The compiled ONNX lives in
+    CACHE_VOLUME (durable), exactly where ``render_remote`` reads it — there is
+    no local-disk copy (that is what ``make run-local`` would build instead).
+    """
+    config_path = Path(config)
+    cache_subdir = _compile_on_modal(config_path, verbose_compile, fuse_mode=fuse_mode)
+    print(f"[local] compile complete -> CACHE_VOLUME:/{cache_subdir}", flush=True)
 
 
 @app.function(
@@ -219,46 +310,15 @@ def main(
     # work on Modal, and the legs of an A/B differ only in the file text.
     config_text = config_path.read_text()
 
-    # --- Compile on Modal (64-CPU container), key computed LOCALLY -------
-    # The cache key embeds the submodule git SHAs, and Modal containers have
-    # no ``.git`` (``_git_sha`` collapses to "unknown" there, so a
-    # remotely-derived key would never change on a code edit — silently
-    # reusing a stale model).  The local machine computes the canonical
-    # payload + key and hands both to ``compile_remote``, which compiles
-    # straight into CACHE_VOLUME under that key with CP-SAT fanned out
-    # across the container's 64 CPUs.
-    #
-    # Importing ``inference.config`` here is safe: it has no dependency on
-    # the screen-sized token vocab (the import-order trap that forces
-    # ``compile_config`` to call ``apply_screen_env`` before touching
-    # ``inference.compile_cache``).
-    from torchwright_doom.inference.config import (
-        cache_key_from_payload,
-        canonical_compile_payload,
-        load_render_config,
-        resolve_wad_path,
-    )
+    # Compile on Modal (64-CPU CP-SAT) if the cache misses — the SAME job
+    # ``make compile`` (the ``compile_only`` entrypoint) runs, so the render
+    # below is a cache hit whenever it was pre-compiled.
+    cache_subdir = _compile_on_modal(config_path, verbose_compile)
+
+    # Resolve the run section for the run id + pose defaults below.
+    from torchwright_doom.inference.config import load_render_config
 
     render_config = load_render_config(config_path)
-    wad_path = resolve_wad_path(render_config, base_dir=config_path.parent)
-    compile_payload = canonical_compile_payload(render_config, wad_path)
-    cache_subdir = cache_key_from_payload(compile_payload)
-
-    if _volume_has_compiled(cache_subdir):
-        print(f"[local] compile cache HIT CACHE_VOLUME:/{cache_subdir}", flush=True)
-    else:
-        print(
-            f"[local] compile cache MISS — compiling {config_path} on Modal "
-            f"({_COMPILE_CPUS} CPUs) -> CACHE_VOLUME:/{cache_subdir}",
-            flush=True,
-        )
-        compile_remote.remote(
-            config_path.name,
-            config_text,
-            cache_subdir,
-            compile_payload,
-            verbose_compile,
-        )
 
     # Display-only resolution for the run id (run_config re-resolves the
     # real values remotely from the same flag > config.run order).

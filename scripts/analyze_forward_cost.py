@@ -134,6 +134,87 @@ def _node_label(n) -> str:
     return getattr(n, "name", "") or type(n).__name__
 
 
+def _selective_fuse(output_nodes, predicate, verbose=False):
+    """``fuse_consecutive_linears`` but only fuse pairs whose shape passes
+    ``predicate(d_in, d_mid, d_out)``. Mirrors torchwright.graph.optimize so we
+    can probe WHICH fusions drive depth vs width. Keeps the same param guard."""
+    from torchwright.compiler.utils import get_ancestor_nodes
+    from torchwright.graph import Concatenate
+    from torchwright.graph.linear import Linear
+
+    all_nodes = get_ancestor_nodes(output_nodes)
+    consumers: dict = {n: [] for n in all_nodes}
+    for node in all_nodes:
+        for inp in node.inputs:
+            if inp in consumers:
+                consumers[inp].append(node)
+
+    fusions = []
+    for node in all_nodes:
+        if not isinstance(node, Linear):
+            continue
+        l2 = node
+        inp = l2.inputs[0]
+        if isinstance(inp, Concatenate) or not isinstance(inp, Linear):
+            continue
+        l1 = inp
+        if len(consumers[l1]) != 1:
+            continue
+        d_in = l1.output_matrix.shape[0]
+        d_mid = l1.output_matrix.shape[1]
+        d_out = l2.output_matrix.shape[1]
+        old_params = d_in * d_mid + d_mid + d_mid * d_out + d_out
+        new_params = d_in * d_out + d_out
+        if new_params > old_params:
+            continue
+        if not predicate(d_in, d_mid, d_out):
+            continue
+        fusions.append((l1, l2))
+    fusions.sort(key=lambda pair: pair[0].node_id)
+
+    fused_count = 0
+    for l1, l2 in fusions:
+        fused_matrix = l1.output_matrix @ l2.output_matrix
+        fused_bias = l1.output_bias @ l2.output_matrix + l2.output_bias
+        l2.inputs = [l1.inputs[0]]
+        l2.d_input = l1.output_matrix.shape[0]
+        l2.output_matrix = fused_matrix
+        l2.output_bias = fused_bias
+        if l1.name and l2.name:
+            l2.name = f"fused_{l1.name}_{l2.name}"
+        fused_count += 1
+    if verbose:
+        print(f"[selective_fuse] fused {fused_count} pairs")
+    return fused_count
+
+
+_FUSE_PREDICATES = {
+    "narrow": lambda di, dm, do: di <= dm,  # input no wider than the waist
+    "wide": lambda di, dm, do: di > dm,  # input wider than the waist
+    "smallout": lambda di, dm, do: do <= 16,  # narrow OUTPUT (no wide relu fed)
+    "bigout": lambda di, dm, do: do > 16,  # wide OUTPUT
+}
+
+
+def _apply_fusion(output_node, verbose=False, eject_budget=None):
+    """Apply fusion; FUSE_FILTER selects all|safe|budget|narrow|wide|smallout|bigout.
+
+    ``safe`` = conservative relu-ejection gate; ``budget`` = budget-aware gate
+    (needs ``eject_budget`` = available residual columns).
+    """
+    filt = os.environ.get("FUSE_FILTER", "all")
+    if filt in ("all", "safe", "budget"):
+        from torchwright.graph.optimize import fuse_consecutive_linears
+
+        return fuse_consecutive_linears(
+            {output_node},
+            verbose=verbose,
+            skip_relu_ejecting=(filt == "safe"),
+            eject_budget=eject_budget if filt == "budget" else None,
+        )
+    return _selective_fuse({output_node}, _FUSE_PREDICATES[filt], verbose=verbose)
+
+
 def compile_capture(
     output_node,
     pos,
@@ -151,9 +232,7 @@ def compile_capture(
     """
     n_fused = None
     if run_optimize_graph:
-        from torchwright.graph.optimize import fuse_consecutive_linears
-
-        n_fused = fuse_consecutive_linears({output_node}, verbose=False)
+        n_fused = _apply_fusion(output_node, verbose=False, eject_budget=d - len(pos))
 
     node_to_layer: dict[int, int] = {}
     id_to_node: dict[int, object] = {}
@@ -226,9 +305,7 @@ def schedule_only_capture(
 
     n_fused = None
     if run_optimize_graph:
-        from torchwright.graph.optimize import fuse_consecutive_linears
-
-        n_fused = fuse_consecutive_linears({output_node}, verbose=False)
+        n_fused = _apply_fusion(output_node, verbose=False, eject_budget=d - len(pos))
 
     graph = GraphAnalyzer(output_node)
     output_node = graph.get_output_node()
@@ -364,6 +441,21 @@ def main():
     d_hidden = int(os.environ["DH"]) if os.environ.get("DH") else None
     run_og = os.environ.get("OPT_GRAPH", "0") == "1"
     sched_only = os.environ.get("SCHED_ONLY", "0") == "1"
+
+    if os.environ.get("CRIT_PATH"):
+        # Width-independent DAG longest path AFTER fusion — the floor no
+        # schedule can beat. Bounds how far the in-solver "fuse anything"
+        # version (Option B) could improve on a width-safe gate.
+        from torchwright.compiler.forward.cpsat_scheduler import critical_path_layers
+
+        nf = _apply_fusion(nt, eject_budget=d - len(pos)) if run_og else 0
+        cp = critical_path_layers(nt, pos)
+        print(
+            f"=== CRIT_PATH: FUSE_FILTER={os.environ.get('FUSE_FILTER', 'all')} "
+            f"fused={nf} critical_path_layers={cp} ==="
+        )
+        return
+
     if sched_only:
         import time as _t
 
@@ -425,6 +517,24 @@ def main():
     print(f"\n--- residual peak {peak['used']} cols, live-set by subsystem ---")
     for b, w in width_by_bucket.most_common():
         print(f"  {w:6d}  {b}")
+
+    # Per-node live-set at the peak (env LIVE_DUMP=N): what is ACTUALLY live
+    # simultaneously when width is maximal — names grouped, so we can see
+    # whether a fusion concentrates concurrent wide nodes (count + total cols).
+    live_dump = os.environ.get("LIVE_DUMP")
+    if live_dump:
+        n = int(live_dump)
+        grouped: dict[str, list[int]] = defaultdict(list)
+        for name, w in peak["live"]:
+            grouped[name or "?"].append(w)
+        print(f"\n--- peak live-set by node name (top {n}: count x width = total) ---")
+        rows = sorted(
+            ((nm, len(ws), sum(ws)) for nm, ws in grouped.items()),
+            key=lambda r: -r[2],
+        )
+        for nm, cnt, tot in rows[:n]:
+            ww = grouped[nm][0]
+            print(f"  {tot:6d} = {cnt:4d} x {ww:<5d}  {nm}")
 
 
 if __name__ == "__main__":

@@ -91,6 +91,29 @@ def compile_to_onnx_path(
     next_token, pos, emb, asset_banks = build_graph(
         asset_config=asset_config, wad_path=wad_path
     )
+    # EXPERIMENT (env-gated, default OFF) — linear-layer fusion before compile.
+    # `optimize_graph` / `fuse_consecutive_linears` is an un-wired hook; this
+    # toggle exists to measure its effect on the production compile. Remove
+    # once we decide whether to wire it in permanently. (2026-06-14)
+    import os as _os
+
+    _fuse_mode = _os.environ.get("TWDOOM_FUSE_LINEARS", "")
+    if _fuse_mode:
+        from torchwright.graph.optimize import fuse_consecutive_linears
+
+        _safe = _fuse_mode == "safe"
+        print(
+            f"[compile] TWDOOM_FUSE_LINEARS={_fuse_mode} — fusing "
+            f"(skip_relu_ejecting={_safe})",
+            flush=True,
+        )
+        n_fused = fuse_consecutive_linears(
+            {next_token}, verbose=False, skip_relu_ejecting=_safe
+        )
+        print(
+            f"[compile] linear fusion: fused {n_fused} pairs (mode={_fuse_mode})",
+            flush=True,
+        )
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     kwargs: dict[str, Any] = {

@@ -61,8 +61,27 @@ lint:
 	uv run ruff check --select F .
 
 .PHONY: render-compile compile
+# Compile on Modal — the SAME 64-CPU compile_remote container `make run` uses
+# on a cache miss, so the wide CP-SAT search finds a better (fewer-layer)
+# schedule than a local box can in the time budget. The artifact lands in the
+# durable CACHE_VOLUME (not local disk); a later `make run` is a cache hit.
+# (Local compile still happens implicitly via `make run-local` on a miss.)
 render-compile compile:
-	uv run python -m torchwright_doom.inference compile $(_RENDER_COMPILE_ARGS)
+	@bash -c ' \
+		LOGFILE=/tmp/torchwright_doom-compile-$$(date +%Y%m%d-%H%M%S).log ; \
+		ln -sfn "$$LOGFILE" /tmp/torchwright_doom-compile.log ; \
+		echo "=== Log file: $$LOGFILE ===" | tee "$$LOGFILE" ; \
+		echo "=== Compiling on Modal (64-CPU CP-SAT) ===" | tee -a "$$LOGFILE" ; \
+		start=$$(date +%s) ; \
+		uv run modal run modal_render.py::compile_only $(_RENDER_COMPILE_ARGS) \
+			2>&1 | tee -a "$$LOGFILE" ; \
+		rc=$${PIPESTATUS[0]} ; \
+		end=$$(date +%s) ; \
+		echo "" | tee -a "$$LOGFILE" ; \
+		echo "=== Compile finished in $$((end - start))s (exit $$rc) ===" | tee -a "$$LOGFILE" ; \
+		echo "=== Log file: $$LOGFILE ===" | tee -a "$$LOGFILE" ; \
+		exit $$rc \
+	'
 
 .PHONY: render-run run
 render-run run:
@@ -72,7 +91,7 @@ render-run run:
 		echo "=== Log file: $$LOGFILE ===" | tee "$$LOGFILE" ; \
 		echo "=== Running render on Modal ===" | tee -a "$$LOGFILE" ; \
 		start=$$(date +%s) ; \
-		RENDER_GPU=$(RENDER_GPU) uv run modal run modal_render.py $(_RENDER_MODAL_ARGS) \
+		RENDER_GPU=$(RENDER_GPU) uv run modal run modal_render.py::main $(_RENDER_MODAL_ARGS) \
 			2>&1 | tee -a "$$LOGFILE" ; \
 		rc=$${PIPESTATUS[0]} ; \
 		end=$$(date +%s) ; \
