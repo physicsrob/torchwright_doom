@@ -21,7 +21,10 @@ PNG_ZOOM ?= 8
 # knob (no recompile); empty = quarters of the model's cache_stride.
 RENDER_ATTENTION_BUCKETS ?=
 
-_RENDER_VERBOSE_COMPILE := $(if $(VERBOSE_COMPILE),--verbose-compile)
+# Verbose compile is ON by default (streams the compiler's per-layer detail +
+# head-pruning summary to stdout); opt out with VERBOSE_COMPILE=0.
+VERBOSE_COMPILE ?= 1
+_RENDER_VERBOSE_COMPILE := $(if $(filter-out 0,$(VERBOSE_COMPILE)),--verbose-compile)
 _RENDER_PNG := $(if $(PNG),--png)
 _RENDER_COMPARE := $(if $(COMPARE),--compare)
 _RENDER_PROFILE := $(if $(PROFILE),--profile)
