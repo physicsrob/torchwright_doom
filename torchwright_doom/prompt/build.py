@@ -20,6 +20,7 @@ from ..doom_lighting import (
     doom_wall_light_static,
     doom_wall_orientation_light_bias,
 )
+from ..marker_ranges import MARKER_RANGE
 from ..tokens import Token, TokenType
 from ..vocab import (
     ANGLE_BAM,
@@ -71,7 +72,6 @@ from ..vocab import (
     SS,
     SS_CEILING_PLANE,
     SS_FLOOR_PLANE,
-    ValueRange,
     prefill_value,
 )
 from .geometry import Segment, bake_segments
@@ -85,15 +85,15 @@ ML_DONTPEGTOP = 0x0008
 ML_DONTPEGBOTTOM = 0x0010
 
 
-def _marked(
-    tokens: list[Token], marker: TokenType, range_id: ValueRange, value: float
-) -> None:
+def _marked(tokens: list[Token], marker: TokenType, value: float) -> None:
     """Append a marker token then its ``VALUE`` carrier — the prefill's basic
-    marker->value pair (see GLOSSARY.md 'marker' / 'carrier'). Keeping the
-    marker, its range, and the source value on one line at each call site is the
-    point: the pairing stays explicit, just without the two-append boilerplate."""
+    marker->value pair (see GLOSSARY.md 'marker' / 'carrier'). The marker's
+    range is looked up in the shared ``marker_ranges.MARKER_RANGE`` table (the
+    single source shared with the drafter and the tokenizer surface), so the
+    range can't drift between the code that *writes* the stream and the code
+    that *reads* it."""
     tokens.append(Token(marker))
-    tokens.append(prefill_value(range_id, value))
+    tokens.append(prefill_value(MARKER_RANGE[marker], value))
 
 
 def _player_angle_signed(angle_256: int) -> int:
@@ -193,19 +193,19 @@ def build_prompt(
     tokens: list[Token] = []
     name_to_id = {"-": 0, "": 0, **asset_config.wall_id_by_name}
 
-    _marked(tokens, PLAYER_X_MARK, ValueRange.R1, state.x)
-    _marked(tokens, PLAYER_Y_MARK, ValueRange.R1, state.y)
-    _marked(tokens, PLAYER_Z_MARK, ValueRange.R3, state.viewz)
+    _marked(tokens, PLAYER_X_MARK, state.x)
+    _marked(tokens, PLAYER_Y_MARK, state.y)
+    _marked(tokens, PLAYER_Z_MARK, state.viewz)
     # Angle uses the ANGLE_VALUE carrier (not prefill_value), so it stays explicit.
     tokens.append(Token(PLAYER_ANGLE_MARK))
     tokens.append(Token(ANGLE_VALUE, {"angle": _player_angle_signed(state.angle)}))
 
     for j, node in enumerate(md.nodes):
         tokens.append(Token(NODE, {"j": j}))
-        _marked(tokens, NODE_PX, ValueRange.R1, node.px)
-        _marked(tokens, NODE_PY, ValueRange.R1, node.py)
-        _marked(tokens, NODE_DX, ValueRange.R2, node.dx)
-        _marked(tokens, NODE_DY, ValueRange.R2, node.dy)
+        _marked(tokens, NODE_PX, node.px)
+        _marked(tokens, NODE_PY, node.py)
+        _marked(tokens, NODE_DX, node.dx)
+        _marked(tokens, NODE_DY, node.dy)
         tokens.append(
             Token(NODE_FRONT_CHILD, {"child_u": _child_unified(node.front_child)})
         )
@@ -226,7 +226,7 @@ def build_prompt(
             (BBOX_LEFT_BACK, bl),
             (BBOX_RIGHT_BACK, br),
         ):
-            _marked(tokens, bbox_marker, ValueRange.R0, edge)
+            _marked(tokens, bbox_marker, edge)
 
     for s, sub in enumerate(md.subsectors):
         tokens.append(Token(SS, {"s": s}))
@@ -236,23 +236,19 @@ def build_prompt(
             # WAD Seg (types.py) — two different types reached in this loop body.
             seg = segments[i]
             tokens.append(Token(SEG, {"i": i, "is_first_of_ss": 1 if k == 0 else 0}))
-            _marked(tokens, SEG_AX, ValueRange.R1, seg.ax)
-            _marked(tokens, SEG_AY, ValueRange.R1, seg.ay)
-            _marked(tokens, SEG_BX, ValueRange.R1, seg.bx)
-            _marked(tokens, SEG_BY, ValueRange.R1, seg.by)
+            _marked(tokens, SEG_AX, seg.ax)
+            _marked(tokens, SEG_AY, seg.ay)
+            _marked(tokens, SEG_BX, seg.bx)
+            _marked(tokens, SEG_BY, seg.by)
             tokens.append(Token(SEG_TWO_SIDED, {"flag": 1 if seg.is_two_sided else 0}))
             tokens.append(Token(SEG_NORMAL_ANGLE))
             tokens.append(
                 Token(ANGLE_VALUE, {"angle": _seg_normal_angle(md.segs[i].angle)})
             )
-            tokens.append(Token(SEG_FRONT_FLOOR))
-            tokens.append(prefill_value(ValueRange.R3, seg.front_floor))
-            tokens.append(Token(SEG_FRONT_CEILING))
-            tokens.append(prefill_value(ValueRange.R3, seg.front_ceiling))
-            tokens.append(Token(SEG_BACK_FLOOR))
-            tokens.append(prefill_value(ValueRange.R4, _back_floor(seg)))
-            tokens.append(Token(SEG_BACK_CEILING))
-            tokens.append(prefill_value(ValueRange.R4, _back_ceiling(seg)))
+            _marked(tokens, SEG_FRONT_FLOOR, seg.front_floor)
+            _marked(tokens, SEG_FRONT_CEILING, seg.front_ceiling)
+            _marked(tokens, SEG_BACK_FLOOR, _back_floor(seg))
+            _marked(tokens, SEG_BACK_CEILING, _back_ceiling(seg))
             tokens.append(
                 Token(
                     SEG_MID_TEXTURE,
@@ -294,13 +290,11 @@ def build_prompt(
                     },
                 )
             )
-            tokens.append(Token(SEG_ROWOFFSET))
-            tokens.append(prefill_value(ValueRange.R3, float(rowoffset)))
+            _marked(tokens, SEG_ROWOFFSET, float(rowoffset))
 
     for plane in plane_tables.planes:
         tokens.append(Token(PLANE_DEF, {"p": plane.plane_id, "flat_id": plane.flat_id}))
-        tokens.append(Token(PLANE_HEIGHT))
-        tokens.append(prefill_value(ValueRange.R3, plane.height))
+        _marked(tokens, PLANE_HEIGHT, plane.height)
         tokens.append(Token(PLANE_LIGHT, {"light": plane.light}))
 
     for s, info in enumerate(plane_tables.subsectors):

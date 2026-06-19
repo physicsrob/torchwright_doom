@@ -34,6 +34,10 @@ dev = [
     "black",
     "mypy",
     "ruff",
+    # The HuggingFace port: DoomTokenizer wraps the readable surface as a slow
+    # PreTrainedTokenizer (torchwright_doom/tokenizer/hf_tokenizer.py).
+    "transformers",
+    "tokenizers",
 ]
 
 [[tool.uv.index]]

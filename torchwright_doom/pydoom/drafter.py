@@ -125,6 +125,7 @@ from ..asset_banks import (
 )
 from ..hud_assets import HUD_TRANSPARENT
 from ..weapon_assets import WEAPON_TRANSPARENT
+from ..marker_ranges import MARKER_RANGE
 from ..value_ranges import (
     ValueRange,
     decode_float,
@@ -1234,21 +1235,13 @@ class _WallRangeState:
         "upper": SEG_DC_TMID_UPPER,
         "lower": SEG_DC_TMID_LOWER,
     }
+    # Marker->range bindings come from the shared ``marker_ranges.MARKER_RANGE``
+    # table (single source shared with the prefill builder and the tokenizer
+    # surface); these local views just re-key it for this state machine.
     _TMID_RANGES = {
-        "mid": ValueRange.R3,
-        "upper": ValueRange.R4,
-        "lower": ValueRange.R4,
+        part: MARKER_RANGE[marker] for part, marker in _TMID_MARKERS.items()
     }
-    _PAYLOAD_RANGES = {
-        DRAWSEG_SCALE1_DEN: ValueRange.R6,
-        DRAWSEG_SCALE1: ValueRange.R5,
-        DRAWSEG_SCALE2_DEN: ValueRange.R6,
-        DRAWSEG_SCALE2: ValueRange.R5,
-        DRAWSEG_SCALESTEP_DEN: ValueRange.R7,
-        DRAWSEG_SCALESTEP: ValueRange.R8,
-        DRAWSEG_BSILHEIGHT: ValueRange.R9,
-        DRAWSEG_TSILHEIGHT: ValueRange.R9,
-    }
+    _PAYLOAD_RANGES = {marker: MARKER_RANGE[marker] for marker in _PAYLOAD_MARKERS}
 
     def __init__(
         self, ctx: _Context, seg_idx: int, subsector_idx: int, x1: int, x2: int
