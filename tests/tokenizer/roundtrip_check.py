@@ -92,6 +92,7 @@ def run(trace_path: str) -> dict:
         "strip_prefixes": True,
         "decode_values": True,
         "angle_degrees": True,
+        "indent": True,
     }
     legs = {
         "prompt_scene_relative": (prompt_rows, names),

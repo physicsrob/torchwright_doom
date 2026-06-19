@@ -92,8 +92,7 @@ _HEADER_TYPE_NAMES: frozenset[str] = frozenset(
         "begin",
         # --- AR: traversal + visibility ---
         "noOp",
-        "R_PointOnSide",
-        "pointOnSideResult",
+        "R_PointOnSide",  # pointOnSideResult is its child (the call's result)
         "boxpos",
         "bspFront",
         "bspCheckBack",
@@ -154,6 +153,16 @@ _Y_COORD_MARKERS: frozenset[str] = frozenset(
     }
 )
 
+# Indented "semantic layout" (the ``indent`` knob). A header opens a block and
+# its fields pack into aligned columns beneath it. ``_INDENT_STOPS`` are
+# absolute character columns: a field starts at the first stop at/after the end
+# of the previous field (so a wide field bumps the next one to a later stop,
+# keeping columns aligned). A new row starts at a group boundary (the
+# dotted-prefix changes), when no stop is left before ``_INDENT_MAXW``, or when
+# the stops are exhausted. Pure whitespace — parse ignores it.
+_INDENT_STOPS = (4, 20, 36)
+_INDENT_MAXW = 60
+
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -201,11 +210,13 @@ def _shortest_value(range_id: ValueRange, carrier: float, shift: float) -> str:
     return repr(physical)  # full precision fallback (always round-trips)
 
 
-def _shortest_angle(bam: int, degrees: bool) -> str:
+def _shortest_angle(bam: int, degrees: bool, clean_integers: bool = False) -> str:
     if not degrees:
         return str(int(bam))
     target = int(bam)
     physical = target * 360.0 / ANGLE_BAM
+    if clean_integers:
+        return str(round(physical))
     for places in range(0, 10):
         candidate = round(physical, places)
         if round(candidate * ANGLE_BAM / 360.0) == target:
@@ -302,6 +313,45 @@ def _format_token(
     return f"{name}({', '.join(args)})"
 
 
+def _field_group(field: str) -> str | None:
+    """Row-break key: the dotted prefix before a field's last segment
+    (``bbox1.top`` -> ``bbox1``, ``v1.x`` -> ``v1``), or ``None`` for a scalar
+    field (no dot) so consecutive scalars pack together. Each distinct group
+    starts a fresh row."""
+    name = field.split("(", 1)[0]
+    return name.rsplit(".", 1)[0] if "." in name else None
+
+
+def _layout_fields(fields: Sequence[str]) -> list[str]:
+    """Pack a header's fields into aligned ``<= _INDENT_MAXW`` rows at the
+    ``_INDENT_STOPS`` tab stops (see the constant). Stream order is preserved —
+    the layout only inserts whitespace, never reorders."""
+    rows: list[str] = []
+    row = ""
+    prev_group: str | None = None
+    for field in fields:
+        group = _field_group(field)
+        cursor = len(row) + 1 if row else _INDENT_STOPS[0]
+        stop = next((s for s in _INDENT_STOPS if s >= cursor), None)
+        wrap = (
+            not row
+            or group != prev_group
+            or stop is None
+            or stop + len(field) > _INDENT_MAXW
+        )
+        if wrap:
+            if row:
+                rows.append(row)
+            row = " " * _INDENT_STOPS[0] + field
+        else:
+            assert stop is not None  # narrowed by `wrap`
+            row += " " * (stop - len(row)) + field
+        prev_group = group
+    if row:
+        rows.append(row)
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # render
 # ---------------------------------------------------------------------------
@@ -317,6 +367,8 @@ def render(
     angle_degrees: bool = False,
     strip_prefixes: bool = False,
     decode_values: bool = False,
+    indent: bool = False,
+    clean_integers: bool = False,
 ) -> str:
     """Render a token stream to canonical readable text.
 
@@ -335,15 +387,32 @@ def render(
         type names (see :mod:`.display`).
       * ``decode_values`` — render opaque integer slots / sentinels as their
         source-shaped words (see :mod:`.display`).
+      * ``indent`` — semantic layout: each header token opens a block on its own
+        line and its fields pack into aligned columns beneath it (tab stops at
+        ``_INDENT_STOPS``, rows kept under ``_INDENT_MAXW``, a new row at each
+        dotted-prefix group). Pure whitespace (parse ignores it), so it never
+        changes the id stream.
+      * ``clean_integers`` — round each de-quantized carrier to the nearest whole
+        number (``1383.98`` -> ``1384``), dropping the sub-quantum carrier
+        residue. Unlike the others this is **not** byte-exact (the integer may
+        re-encode to a neighbouring carrier level); it is a figure convenience,
+        and must be applied at format time (not by post-processing the text) so
+        column widths under ``indent`` stay correct.
     """
     toks = [_norm(t) for t in tokens]
     lines: list[str] = []
     current: list[str] = []
 
     def flush() -> None:
-        if current:
+        if not current:
+            return
+        if indent and len(current) > 1:
+            head, *fields = current
+            lines.append(head)
+            lines.extend(_layout_fields(fields))
+        else:
             lines.append(" ".join(current))
-            current.clear()
+        current.clear()
 
     i = 0
     n = len(toks)
@@ -368,6 +437,7 @@ def render(
                 physical_values,
                 angle_degrees,
                 decode_values,
+                clean_integers,
             )
             i += 1
 
@@ -398,6 +468,7 @@ def _render_carrier(
     physical_values: bool,
     angle_degrees: bool,
     decode_values: bool,
+    clean_integers: bool,
 ) -> str:
     if carrier_type is VALUE:
         range_id = MARKER_RANGE.get(marker)
@@ -406,17 +477,18 @@ def _render_carrier(
         carrier = float(carrier_values["v"])
         if physical_values:
             shift = _origin_shift(marker.name, origin)
+            physical = decode_float(range_id, carrier) + shift
             if decode_values:
-                word = display.decode_sentinel(
-                    marker.name, decode_float(range_id, carrier) + shift
-                )
+                word = display.decode_sentinel(marker.name, physical)
                 if word is not None:
                     return word
+            if clean_integers:
+                return str(round(physical))
             return _shortest_value(range_id, carrier, shift)
         return repr(carrier)
     if marker not in ANGLE_MARKERS:
         raise ValueError(f"ANGLE_VALUE follows non-angle-marker {marker.name!r}")
-    return _shortest_angle(int(carrier_values["angle"]), angle_degrees)
+    return _shortest_angle(int(carrier_values["angle"]), angle_degrees, clean_integers)
 
 
 # ---------------------------------------------------------------------------
@@ -461,14 +533,19 @@ def parse(
     angle_degrees: bool = False,
     strip_prefixes: bool = False,
     decode_values: bool = False,
+    indent: bool = False,
+    clean_integers: bool = False,
 ) -> list[tuple[TokenType, dict[str, int | float]]]:
     """Inverse of :func:`render`: readable text -> ``(TokenType, values)`` list.
 
     Tolerant of whitespace, newlines, and ``#`` comments; named args are
     order-free, positional args map back in declaration order. The knobs mirror
     :func:`render` and must match the render settings for a byte-exact round
-    trip.
+    trip — except ``indent`` (pure layout) and ``clean_integers`` (a one-way,
+    non-byte-exact figure convenience), which are accepted but ignored here: an
+    integer carrier word like ``1384`` parses through the normal numeric path.
     """
+    del indent, clean_integers  # display-only; parse needs no special handling
     type_lookup = display.TYPE_BY_DISPLAY if strip_prefixes else _TYPE_BY_NAME
     out: list[tuple[TokenType, dict[str, int | float]]] = []
     for name, args in _scan(text):
