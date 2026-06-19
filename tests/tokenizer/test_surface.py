@@ -18,9 +18,16 @@ from torchwright_doom.asset_config import DEFAULT_ASSET_CONFIG
 from torchwright_doom.embedding import TOKEN_VOCAB
 from torchwright_doom.inference.tokens_bridge import row_to_token, token_to_row
 from torchwright_doom.marker_ranges import ANGLE_MARKERS, MARKER_RANGE
-from torchwright_doom.tokens import Token
-from torchwright_doom.tokenizer import surface
-from torchwright_doom.vocab import ANGLE_VALUE, VALUE, VOCAB_TYPES
+from torchwright_doom.tokens import IntSlot, Token
+from torchwright_doom.tokenizer import display, surface
+from torchwright_doom.value_ranges import ValueRange, encode_float
+from torchwright_doom.vocab import (
+    ANGLE_VALUE,
+    BACK_HEIGHT_SENTINEL,
+    SEG_BACK_FLOOR,
+    VALUE,
+    VOCAB_TYPES,
+)
 
 _NAMES: dict[str, Any] = dict(
     wall_names=DEFAULT_ASSET_CONFIG.wall_names,
@@ -87,3 +94,57 @@ def test_marker_tables_reference_real_types() -> None:
     assert not (set(MARKER_RANGE) & set(ANGLE_MARKERS))
     # The carriers are never themselves markers.
     assert not ({VALUE, ANGLE_VALUE} & (set(MARKER_RANGE) | set(ANGLE_MARKERS)))
+
+
+# --- display layer (strip_prefixes + decode_values knobs) ------------------
+
+_FRIENDLY = dict(_NAMES, strip_prefixes=True, decode_values=True, angle_degrees=True)
+
+
+def test_display_alias_is_a_bijection() -> None:
+    """Every type has a display name and the inverse map recovers it 1:1, so
+    ``strip_prefixes`` never makes the surface ambiguous to parse."""
+    assert len(display.TYPE_BY_DISPLAY) == len(display.DISPLAY_NAME) == len(VOCAB_TYPES)
+    for ttype, name in display.DISPLAY_NAME.items():
+        assert display.TYPE_BY_DISPLAY[name] is ttype
+
+
+def test_decode_slot_bijection() -> None:
+    """Every decoded int slot round-trips ``encode_slot(decode_slot(v)) == v``
+    over its full ``IntSlot`` domain (values with no decoding are skipped)."""
+    for ttype in VOCAB_TYPES:
+        for slot_name, slot in ttype.slots.items():
+            if not isinstance(slot, IntSlot):
+                continue
+            for value in range(int(slot.lo), int(slot.hi)):
+                word = display.decode_slot(ttype.name, slot_name, value)
+                if word is None:
+                    continue
+                got = display.encode_slot(ttype.name, slot_name, word)
+                assert got == value, (ttype.name, slot_name, value, word, got)
+
+
+def test_grammar_coverage_friendly() -> None:
+    """Every type round-trips render->parse under the full figure knobs
+    (stripped prefixes + decoded values), preserving the row stream."""
+    for ttype in VOCAB_TYPES:
+        if ttype in _CARRIERS:
+            continue
+        stream, _ = _representative_stream(ttype)
+        rows = [token_to_row(t) for t in stream]
+        text = surface.render(stream, **_FRIENDLY)
+        back = surface.parse(text, **_FRIENDLY)
+        rows2 = [token_to_row(Token(t, dict(v))) for t, v in back]
+        assert rows2 == rows, f"{ttype.name}: friendly render/parse changed the rows"
+
+
+def test_back_height_sentinel_round_trip() -> None:
+    """The ``-4096`` "no back sector" height renders as ``none`` and re-encodes
+    to the identical carrier (the representative-stream coverage uses a mid-range
+    carrier, so the sentinel path needs its own check)."""
+    carrier = encode_float(ValueRange.R4, BACK_HEIGHT_SENTINEL)
+    stream = [(SEG_BACK_FLOOR, {}), (VALUE, {"v": carrier})]
+    text = surface.render(stream, decode_values=True)
+    assert "back.floor(none)" in text
+    back = surface.parse(text, decode_values=True)
+    assert back == [(SEG_BACK_FLOOR, {}), (VALUE, {"v": carrier})]

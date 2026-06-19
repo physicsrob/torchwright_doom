@@ -37,6 +37,7 @@ from __future__ import annotations
 
 from typing import Iterable, Mapping, Sequence
 
+from . import display
 from ..marker_ranges import ANGLE_MARKERS, MARKER_RANGE
 from ..tokens import Token, TokenType
 from ..value_ranges import ValueRange, decode_float, encode_float
@@ -218,10 +219,17 @@ def _slot_value_str(
     value: int | float,
     wall_names: Sequence[str] | None,
     flat_names: Sequence[str] | None,
+    decode_values: bool,
 ) -> str:
-    """The displayed value for one int slot (WAD name for texture/flat slots)."""
-    kind = _TEXTURE_SLOTS.get((type_name, slot_name))
+    """The displayed value for one int slot: a decoded word (``portal``, ``ss5``,
+    ``yes``) when ``decode_values`` and the slot has a known meaning, else a WAD
+    name for texture/flat slots, else the raw integer."""
     ivalue = int(value)
+    if decode_values:
+        decoded = display.decode_slot(type_name, slot_name, ivalue)
+        if decoded is not None:
+            return decoded
+    kind = _TEXTURE_SLOTS.get((type_name, slot_name))
     if kind == "wall" and wall_names is not None:
         return _NO_TEXTURE if ivalue == 0 else wall_names[ivalue - 1]
     if kind == "flat" and flat_names is not None:
@@ -235,7 +243,12 @@ def _parse_slot(
     text: str,
     wall_names: Sequence[str] | None,
     flat_names: Sequence[str] | None,
+    decode_values: bool,
 ) -> int:
+    if decode_values:
+        encoded = display.encode_slot(type_name, slot_name, text)
+        if encoded is not None:
+            return encoded
     kind = _TEXTURE_SLOTS.get((type_name, slot_name))
     if kind == "wall" and wall_names is not None and not _looks_int(text):
         if text == _NO_TEXTURE:
@@ -257,23 +270,36 @@ def _format_token(
     carrier: str | None,
     wall_names: Sequence[str] | None,
     flat_names: Sequence[str] | None,
+    strip_prefixes: bool,
+    decode_values: bool,
 ) -> str:
     """One token in functional style: ``TYPE(arg, ...)`` (bare ``TYPE`` if it has
-    no args). Int slots are positional for ``_POSITIONAL_TYPE_NAMES`` (where the
-    type name already says what the value is) and ``name=value`` otherwise; a
-    marker's de-quantized ``carrier`` is the trailing positional arg."""
-    positional = ttype.name in _POSITIONAL_TYPE_NAMES
+    no args). The type name is the short alias under ``strip_prefixes``. Int
+    slots are positional for ``_POSITIONAL_TYPE_NAMES`` (where the type name
+    already says what the value is), for ``display.DECODE_POSITIONAL`` types when
+    decoding (where the decoded word is self-evident), and ``name=value``
+    otherwise; a marker's de-quantized ``carrier`` is the trailing positional
+    arg."""
+    name = display.DISPLAY_NAME[ttype] if strip_prefixes else ttype.name
+    positional = ttype.name in _POSITIONAL_TYPE_NAMES or (
+        decode_values and ttype.name in display.DECODE_POSITIONAL
+    )
     args: list[str] = []
     for slot_name in ttype.slots:
         sval = _slot_value_str(
-            ttype.name, slot_name, values[slot_name], wall_names, flat_names
+            ttype.name,
+            slot_name,
+            values[slot_name],
+            wall_names,
+            flat_names,
+            decode_values,
         )
         args.append(sval if positional else f"{slot_name}={sval}")
     if carrier is not None:
         args.append(carrier)
     if not args:
-        return ttype.name
-    return f"{ttype.name}({', '.join(args)})"
+        return name
+    return f"{name}({', '.join(args)})"
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +315,8 @@ def render(
     flat_names: Sequence[str] | None = None,
     physical_values: bool = True,
     angle_degrees: bool = False,
+    strip_prefixes: bool = False,
+    decode_values: bool = False,
 ) -> str:
     """Render a token stream to canonical readable text.
 
@@ -303,6 +331,10 @@ def render(
         render WAD names instead of raw ids.
       * ``physical_values`` — ``False`` renders the raw ``[-1, 1]`` carrier.
       * ``angle_degrees`` — ``True`` renders BAM angles as degrees.
+      * ``strip_prefixes`` — drop the ``node.`` / ``seg.`` entity prefix from
+        type names (see :mod:`.display`).
+      * ``decode_values`` — render opaque integer slots / sentinels as their
+        source-shaped words (see :mod:`.display`).
     """
     toks = [_norm(t) for t in tokens]
     lines: list[str] = []
@@ -329,13 +361,29 @@ def render(
         if i + 1 < n and toks[i + 1][0] in (VALUE, ANGLE_VALUE):
             ctype, cvals = toks[i + 1]
             carrier = _render_carrier(
-                ttype, ctype, cvals, origin, physical_values, angle_degrees
+                ttype,
+                ctype,
+                cvals,
+                origin,
+                physical_values,
+                angle_degrees,
+                decode_values,
             )
             i += 1
 
         if ttype.name in _HEADER_TYPE_NAMES:
             flush()
-        current.append(_format_token(ttype, values, carrier, wall_names, flat_names))
+        current.append(
+            _format_token(
+                ttype,
+                values,
+                carrier,
+                wall_names,
+                flat_names,
+                strip_prefixes,
+                decode_values,
+            )
+        )
         i += 1
 
     flush()
@@ -349,6 +397,7 @@ def _render_carrier(
     origin: tuple[float, float],
     physical_values: bool,
     angle_degrees: bool,
+    decode_values: bool,
 ) -> str:
     if carrier_type is VALUE:
         range_id = MARKER_RANGE.get(marker)
@@ -356,9 +405,14 @@ def _render_carrier(
             raise ValueError(f"VALUE follows non-marker {marker.name!r}")
         carrier = float(carrier_values["v"])
         if physical_values:
-            return _shortest_value(
-                range_id, carrier, _origin_shift(marker.name, origin)
-            )
+            shift = _origin_shift(marker.name, origin)
+            if decode_values:
+                word = display.decode_sentinel(
+                    marker.name, decode_float(range_id, carrier) + shift
+                )
+                if word is not None:
+                    return word
+            return _shortest_value(range_id, carrier, shift)
         return repr(carrier)
     if marker not in ANGLE_MARKERS:
         raise ValueError(f"ANGLE_VALUE follows non-angle-marker {marker.name!r}")
@@ -405,6 +459,8 @@ def parse(
     flat_names: Sequence[str] | None = None,
     physical_values: bool = True,
     angle_degrees: bool = False,
+    strip_prefixes: bool = False,
+    decode_values: bool = False,
 ) -> list[tuple[TokenType, dict[str, int | float]]]:
     """Inverse of :func:`render`: readable text -> ``(TokenType, values)`` list.
 
@@ -413,9 +469,10 @@ def parse(
     :func:`render` and must match the render settings for a byte-exact round
     trip.
     """
+    type_lookup = display.TYPE_BY_DISPLAY if strip_prefixes else _TYPE_BY_NAME
     out: list[tuple[TokenType, dict[str, int | float]]] = []
     for name, args in _scan(text):
-        ttype = _TYPE_BY_NAME.get(name)
+        ttype = type_lookup.get(name)
         if ttype is None:
             raise ValueError(f"unknown token keyword: {name!r}")
         slot_values: dict[str, int | float] = {}
@@ -424,7 +481,7 @@ def parse(
             if "=" in arg:
                 key, value = arg.split("=", 1)
                 slot_values[key] = _parse_slot(
-                    ttype.name, key, value, wall_names, flat_names
+                    ttype.name, key, value, wall_names, flat_names, decode_values
                 )
             else:
                 bare.append(arg)
@@ -436,7 +493,12 @@ def parse(
         for index, value in enumerate(bare):
             if index < len(unfilled):
                 slot_values[unfilled[index]] = _parse_slot(
-                    ttype.name, unfilled[index], value, wall_names, flat_names
+                    ttype.name,
+                    unfilled[index],
+                    value,
+                    wall_names,
+                    flat_names,
+                    decode_values,
                 )
             elif carrier_word is None:
                 carrier_word = value
@@ -448,7 +510,14 @@ def parse(
             continue
         range_id = MARKER_RANGE.get(ttype)
         if range_id is not None:
-            if physical_values:
+            sentinel = (
+                display.encode_sentinel(ttype.name, carrier_word)
+                if decode_values
+                else None
+            )
+            if sentinel is not None:
+                carrier = encode_float(range_id, sentinel)
+            elif physical_values:
                 physical = float(carrier_word) - _origin_shift(ttype.name, origin)
                 carrier = encode_float(range_id, physical)
             else:

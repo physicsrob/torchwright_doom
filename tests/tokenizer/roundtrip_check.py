@@ -84,13 +84,24 @@ def run(trace_path: str) -> dict:
         wall_names=DEFAULT_ASSET_CONFIG.wall_names,
         flat_names=DEFAULT_ASSET_CONFIG.flat_names,
     )
+    # The full human-facing figure config: stripped entity prefixes + decoded
+    # values (enums, booleans, BSP child ids, bbox region code, sentinels) on
+    # top of WAD names, degrees, and WAD coords. The hardest round-trip.
+    friendly = {
+        **names,
+        "strip_prefixes": True,
+        "decode_values": True,
+        "angle_degrees": True,
+    }
     legs = {
         "prompt_scene_relative": (prompt_rows, names),
         "prompt_wad_coords": (prompt_rows, {**names, "origin": origin}),
         "prompt_degrees": (prompt_rows, {**names, "angle_degrees": True}),
         "prompt_raw_carrier": (prompt_rows, {"physical_values": False}),
+        "prompt_friendly": (prompt_rows, {**friendly, "origin": origin}),
         "rollout_scene_relative": (rollout_rows, names),
         "rollout_degrees": (rollout_rows, {**names, "angle_degrees": True}),
+        "rollout_friendly": (rollout_rows, friendly),
     }
     results = {}
     ok = True
