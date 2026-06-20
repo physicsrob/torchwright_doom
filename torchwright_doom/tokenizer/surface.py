@@ -156,22 +156,29 @@ _Y_COORD_MARKERS: frozenset[str] = frozenset(
 # Indented "semantic layout" (the ``indent`` formatter option). A header opens a
 # block and its fields pack into aligned columns beneath it. The header itself is
 # indented by its nesting level (``_HEADER_LEVEL[name] * _INDENT_UNIT`` spaces);
-# its field rows take that same base indent, so a block reads as the tree it is.
+# its field rows take that same base indent plus a ``_FIELD_INDENT`` hang, so a
+# block reads as the tree it is.
 #
-# ``_INDENT_STOPS`` are character columns measured from column 0; per block they
-# are shifted by the base indent. A field starts at the first stop at/after the
-# end of the previous field (so a wide field bumps the next one to a later stop,
-# keeping columns aligned). A new row starts at a group boundary (the
-# dotted-prefix changes) or when the field would cross ``_INDENT_MAXW``.
-# ``_INDENT_MAXW`` is an ABSOLUTE cap: the base indent eats into it (a field's
-# room is ``_INDENT_MAXW - base``) and any shifted stop past the cap drops out,
-# so deep blocks pack fewer fields per row but the line stays within budget. A
-# lone field longer than its room still prints (and may exceed the cap) — the
-# layout never splits a token. Pure whitespace, so encode ignores it and the id
-# stream is unchanged; ``base == 0`` reproduces the un-nested layout byte-for-byte.
+# Every block is laid on ONE uniform column grid: each column is as wide as its
+# widest cell in the whole block plus a ``_COL_GUTTER`` gutter, so the gutters run
+# as straight uninterrupted channels down the block and every row's columns line
+# up. The column count is the largest that still fits the ``_INDENT_MAXW`` cap, so
+# a block with wider values simply uses fewer, wider columns. ``_INDENT_MAXW`` is
+# an ABSOLUTE cap: a row never crosses it (a lone field wider than its room still
+# prints — the layout never splits a token). Pure whitespace, so encode ignores it
+# and the id stream is unchanged; ``base == 0`` reproduces the un-nested layout.
+# See :func:`_layout_fields`.
 _INDENT_UNIT = 2  # spaces of indentation per nesting level
-_INDENT_STOPS = (4, 20, 36)
-_INDENT_MAXW = 60
+_FIELD_INDENT = 4  # fields hang this far beyond their header's base indent
+_COL_GUTTER = 2  # spaces between adjacent columns (one uniform gutter, block-wide)
+_INDENT_MAXW = 60  # absolute right margin (hard cap)
+# When a block is too wide for one grid, a run of >= _UNIFORM_MIN consecutive plain
+# cells whose widths span <= _UNIFORM_SLACK (a pixel flow) is split off as its own
+# balanced grid, so a stray wide marker never widens the flow's columns; and a
+# fall-back sub-grid never merges rows that would pad a cell beyond _MAX_PAD.
+_UNIFORM_SLACK = 4
+_UNIFORM_MIN = 2
+_MAX_PAD = 12
 
 
 # ---------------------------------------------------------------------------
@@ -444,50 +451,312 @@ def _scan_units(flat: str) -> list[tuple[str, str]]:
     return out
 
 
+# Scalar field families that pair by their trailing index: members of one family
+# sharing an index sit on one row. ``angle1``+``theta1`` (one seg-projection
+# endpoint per line); the bbox corner coords (``bx1``+``by1``) and corner angles
+# (``bangle1``+``btheta1``) each pair too. Keyed by base name (trailing digits
+# stripped) -> family tag. Other digit-suffixed scalars (``child1``/``child0``)
+# are NOT here, so they keep packing together.
+_PAIR_FAMILY: dict[str, str] = {
+    "angle": "at",
+    "theta": "at",  # seg-projection endpoint angles
+    "bx": "bxy",
+    "by": "bxy",  # bbox corner coords
+    "bangle": "bat",
+    "btheta": "bat",  # bbox corner angles
+}
+
+
 def _field_group(field: str) -> str | None:
     """Row-break key: the dotted prefix before a field's last segment
-    (``bbox1.top`` -> ``bbox1``, ``v1.x`` -> ``v1``), or ``None`` for a scalar
-    field (no dot) so consecutive scalars pack together. Each distinct group
-    starts a fresh row."""
+    (``bbox1.top`` -> ``bbox1``, ``v1.x`` -> ``v1``); for an indexed pair-family
+    scalar, the family tag + the trailing index (so ``angle1``/``theta1`` share a
+    row, but ``angle2`` starts a new one); else ``None`` for a plain scalar (no
+    dot) so consecutive scalars pack together. Each distinct group starts a fresh
+    row."""
     name = field.split("(", 1)[0]
-    return name.rsplit(".", 1)[0] if "." in name else None
+    if "." in name:
+        return name.rsplit(".", 1)[0]
+    base = name.rstrip("0123456789")
+    if base != name:
+        family = _PAIR_FAMILY.get(base)
+        if family is not None:
+            return family + name[len(base) :]  # e.g. "at1", "bxy2", "bat1"
+    return None
+
+
+def _glues_to_prev(field: str, prev_field: str | None) -> bool:
+    """Whether ``field`` should sit on the same row as the field before it (placed
+    tight, one space after), because it is the *detail* of that field:
+
+    * a ``screenRange`` details the plane-mark / clip-update it follows,
+    * a ``bboxClipScan`` trails the bbox corners it tests (one merges onto the
+      last corner-angle row; a run of them flows on, wrapping at the cap), and
+    * a scale value follows its ``.den`` denominator (``ds.scale1.den ds.scale1``).
+
+    Pure layout — the glue still honours the ``_INDENT_MAXW`` cap (the caller
+    falls back to a normal wrap if it would overflow)."""
+    if prev_field is None:
+        return False
+    name = field.split("(", 1)[0]
+    if name in ("screenRange", "bboxClipScan"):
+        return True  # keep-with-previous: a detail of the field before it
+    prev_name = prev_field.split("(", 1)[0]
+    return prev_name.endswith(".den")  # keep-with-next: the den's value
+
+
+# A cell: a primary field plus the keep-with details glued to it (e.g. a marker
+# and its ``screenRange``; a ``.den`` denominator and its value). A cell is laid
+# out atomically — its fields stay together, in order, on one row. ``group`` is the
+# primary's :func:`_field_group` row-break key.
+_Cell = tuple  # (primary: str, tail: list[str], group: str | None)
+
+# A field placement on a row: ``[text, col]`` — ``col`` is the character column the
+# field starts at, filled in once the grid is known. A list so ``col`` is mutable.
+_Placement = list
+
+
+def _build_cells(fields: Sequence[str]) -> list[_Cell]:
+    """Group the fields into cells: a primary field collects the run of keep-with
+    details glued to it (:func:`_glues_to_prev`) — so a ``.den`` value or a
+    ``screenRange`` rides its owner across a field-group boundary. Glue is
+    cap-unaware here; an over-long detail run is wrapped in :func:`_greedy_rows`."""
+    cells: list[_Cell] = []
+    prev: str | None = None
+    for field in fields:
+        if cells and _glues_to_prev(field, prev):
+            cells[-1][1].append(field)
+        else:
+            cells.append((field, [], _field_group(field)))
+        prev = field
+    return cells
+
+
+def _runs(cells: Sequence[_Cell]) -> list[list[_Cell]]:
+    """Split cells into maximal runs of the same field group. A group boundary
+    always starts a new row, so the agreed pairings (seg ``angle``/``theta``, the
+    bbox corners) and the dotted sub-blocks stay intact."""
+    runs: list[list[_Cell]] = []
+    for cell in cells:
+        if runs and runs[-1][0][2] == cell[2]:
+            runs[-1].append(cell)
+        else:
+            runs.append([cell])
+    return runs
+
+
+def _split_sizes(n: int, r: int) -> list[int]:
+    """Split ``n`` cells into ``r`` balanced contiguous rows (sizes differ by at
+    most one, the larger rows first) — so a run fills its rows evenly instead of
+    dangling a lone leftover cell."""
+    sizes, placed = [], 0
+    for i in range(r):
+        size = -(-(n - placed) // (r - i))  # ceil of the remaining even share
+        sizes.append(size)
+        placed += size
+    return sizes
+
+
+def _cell_row(cells: Sequence[_Cell]) -> list[_Placement]:
+    """Flatten a chunk of cells into a row of placements — each cell's primary then
+    its glued details, in stream order."""
+    return [[f, 0] for cell in cells for f in (cell[0], *cell[1])]
+
+
+def _balanced_rows(
+    runs: Sequence[Sequence[_Cell]], cols_per_row: int
+) -> list[list[_Placement]]:
+    """Lay the block's runs into rows of at most ``cols_per_row`` cells, each run
+    balanced across its rows (:func:`_split_sizes`); a group boundary still starts a
+    fresh row. Cells stay atomic, so a row may hold more *fields* than
+    ``cols_per_row`` when a cell carries glued details. Columns are assigned later."""
+    rows: list[list[_Placement]] = []
+    for run in runs:
+        r = -(-len(run) // cols_per_row)  # fewest rows holding <= cols_per_row cells
+        start = 0
+        for size in _split_sizes(len(run), r):
+            rows.append(_cell_row(run[start : start + size]))
+            start += size
+    return rows
+
+
+def _greedy_rows(runs: Sequence[Sequence[_Cell]], left: int) -> list[list[_Placement]]:
+    """Fall-back row builder for a block too wide for any single uniform grid: pack
+    each run's cells onto a row until the next cell would cross the cap, then wrap.
+    A cell stays whole — its glued details ride its primary on one row — so a marker
+    keeps its ``screenRange`` beside it. (Only a lone cell wider than a full row
+    spills its detail run onto continuation rows.) A group boundary starts a fresh
+    row. Columns are assigned later."""
+
+    def width(row: list[_Placement]) -> int:
+        return left + sum(len(p[0]) for p in row) + _COL_GUTTER * (len(row) - 1)
+
+    rows: list[list[_Placement]] = []
+    for run in runs:
+        row: list[_Placement] = []
+        for primary, tail, _group in run:
+            cell = len(primary) + sum(_COL_GUTTER + len(d) for d in tail)
+            if row and width(row) + _COL_GUTTER + cell > _INDENT_MAXW:
+                rows.append(row)  # the whole cell won't fit — wrap it as a unit
+                row = []
+            row.append([primary, 0])
+            for detail in tail:
+                if row and width(row) + _COL_GUTTER + len(detail) > _INDENT_MAXW:
+                    rows.append(row)  # cell alone exceeds a row: spill the rest
+                    row = [[detail, 0]]
+                else:
+                    row.append([detail, 0])
+        if row:
+            rows.append(row)
+    return rows
+
+
+def _grid(rows: Sequence[list[_Placement]], left: int) -> tuple[list[int], int]:
+    """Column starts for one uniform grid over ``rows`` (each column as wide as its
+    widest cell, ``_COL_GUTTER`` between), and the cap overshoot of the widest row
+    (``<= 0`` if it fits)."""
+    ncol = max((len(r) for r in rows), default=0)
+    cols: list[int] = []
+    colw: list[int] = []
+    x = left
+    for k in range(ncol):
+        widest = max(len(r[k][0]) for r in rows if len(r) > k)
+        if k:
+            x = cols[k - 1] + colw[k - 1] + _COL_GUTTER
+        cols.append(x)
+        colw.append(widest)
+    over = max((cols[len(r) - 1] + len(r[-1][0]) for r in rows if r), default=0)
+    return cols, over - _INDENT_MAXW
+
+
+def _grid_pad(rows: Sequence[list[_Placement]]) -> int:
+    """The widest gap between a cell and its uniform column — how far the most
+    over-padded cell sits from filling its column."""
+    ncol = max((len(r) for r in rows), default=0)
+    pad = 0
+    for k in range(ncol):
+        widths = [len(r[k][0]) for r in rows if len(r) > k]
+        pad = max(pad, max(widths) - min(widths))
+    return pad
+
+
+def _assign(rows: Iterable[list[_Placement]], cols: Sequence[int]) -> None:
+    for row in rows:
+        for k, placement in enumerate(row):
+            placement[1] = cols[k]
+
+
+def _split_grids(rows: list[list[_Placement]], left: int) -> None:
+    """Cut ``rows`` into consecutive uniform sub-grids, assigning columns within
+    each — so columns stay straight within a section even where the whole block is
+    too wide for one grid. A row joins the current sub-grid only while it still fits
+    the cap and no cell would be padded past ``_MAX_PAD`` (so a wide marker never
+    swallows a narrow neighbour into a sparse column)."""
+    i = 0
+    while i < len(rows):
+        j = i + 1
+        while j < len(rows) and (
+            _grid(rows[i : j + 1], left)[1] <= 0
+            and _grid_pad(rows[i : j + 1]) <= _MAX_PAD
+        ):
+            j += 1
+        cols, _ = _grid(rows[i:j], left)
+        _assign(rows[i:j], cols)
+        i = j
+
+
+def _render_row(row: list[_Placement]) -> str:
+    text = ""
+    for field, col in row:
+        pad = col - len(text)
+        if pad < 1 and text:  # a too-wide field overflowed; never let two touch
+            pad = 1
+        text += " " * max(pad, 0) + field
+    return text
+
+
+def _fit_grid(
+    runs: Sequence[Sequence[_Cell]], left: int
+) -> list[list[_Placement]] | None:
+    """Lay ``runs`` as ONE uniform grid using the largest cell-count-per-row that
+    still fits the cap (fewer, wider columns as values grow), or ``None`` if no
+    column count fits. Above ~room/narrowest nothing fits, so bound the search
+    there rather than at the cell count."""
+    ceiling = max(1, (_INDENT_MAXW - left + _COL_GUTTER) // (1 + _COL_GUTTER))
+    upper = min(max((len(run) for run in runs), default=1), ceiling)
+    for cols_per_row in range(upper, 0, -1):
+        rows = _balanced_rows(runs, cols_per_row)
+        cols, over = _grid(rows, left)
+        if over <= 0:
+            _assign(rows, cols)
+            return rows
+    return None
+
+
+def _sections(run: Sequence[_Cell]) -> list[tuple[str, list[_Cell]]]:
+    """Segment a run's cells into sections: a ``"grid"`` section is a run of at least
+    ``_UNIFORM_MIN`` consecutive plain cells whose widths span at most
+    ``_UNIFORM_SLACK`` (a pixel flow), laid as its own balanced grid; a ``"flow"``
+    section is everything else (markers and glued details), packed greedily. This
+    keeps a pixel flow's columns straight without a stray wide marker stretching
+    them."""
+    out: list[tuple[str, list[_Cell]]] = []
+    i, n = 0, len(run)
+    while i < n:
+        if not run[i][1]:  # plain cell — try to open a similar-width grid run
+            lo = hi = len(run[i][0])
+            j = i
+            while j < n and not run[j][1]:
+                w = len(run[j][0])
+                if max(hi, w) - min(lo, w) > _UNIFORM_SLACK:
+                    break
+                lo, hi, j = min(lo, w), max(hi, w), j + 1
+            if j - i >= _UNIFORM_MIN:
+                out.append(("grid", list(run[i:j])))
+                i = j
+                continue
+        if out and out[-1][0] == "flow":
+            out[-1][1].append(run[i])
+        else:
+            out.append(("flow", [run[i]]))
+        i += 1
+    return out
+
+
+def _fallback_rows(
+    runs: Sequence[Sequence[_Cell]], left: int
+) -> list[list[_Placement]]:
+    """Lay a block too wide for one grid as a sequence of sections (:func:`_sections`):
+    each pixel-flow section as its own balanced grid, each marker/detail section
+    greedily, cut into the fewest consecutive uniform sub-grids (:func:`_split_grids`)
+    so a run of ``label + detail`` rows still lines up."""
+    rows: list[list[_Placement]] = []
+    for run in runs:
+        for kind, cells in _sections(run):
+            grid = _fit_grid([cells], left) if kind == "grid" else None
+            if grid is None:
+                grid = _greedy_rows([cells], left)
+                _split_grids(grid, left)
+            rows.extend(grid)
+    return rows
 
 
 def _layout_fields(fields: Sequence[str], base: int = 0) -> list[str]:
-    """Pack a header's fields into aligned rows beneath it, indented by ``base``
-    spaces (the header's nesting level). Stops are ``base + _INDENT_STOPS``,
-    filtered to those still under the absolute ``_INDENT_MAXW`` cap; the hang
-    indent is the first surviving stop. Stream order is preserved — the layout
-    only inserts whitespace, never reorders. ``base == 0`` is the original
-    un-nested layout byte-for-byte."""
-    stops = [base + s for s in _INDENT_STOPS if base + s < _INDENT_MAXW]
-    if not stops:  # base too deep for any stop; keep a single hang column
-        stops = [base + _INDENT_STOPS[0]]
-    hang = stops[0]
-    rows: list[str] = []
-    row = ""
-    prev_group: str | None = None
-    for field in fields:
-        group = _field_group(field)
-        cursor = len(row) + 1 if row else hang
-        stop = next((s for s in stops if s >= cursor), None)
-        wrap = (
-            not row
-            or group != prev_group
-            or stop is None
-            or stop + len(field) > _INDENT_MAXW
-        )
-        if wrap:
-            if row:
-                rows.append(row)
-            row = " " * hang + field
-        else:
-            assert stop is not None  # narrowed by `wrap`
-            row += " " * (stop - len(row)) + field
-        prev_group = group
-    if row:
-        rows.append(row)
-    return rows
+    """Lay a header's fields into ONE uniform column grid beneath it, indented
+    ``base + _FIELD_INDENT`` spaces. Every column is as wide as its widest cell in
+    the block, so the gutters run straight down the whole block and every row lines
+    up; the column count is the largest that still fits the ``_INDENT_MAXW`` cap
+    (fewer, wider columns as a block's values grow). Fields glue into cells
+    (keep-with details ride their owner) and split into runs at each field-group
+    boundary; a run balances its cells across rows. A block too wide for any single
+    grid — a wall column's wide ``wallColU`` and ``wallSpanMeta`` lines beside its
+    pixel flow — falls back to per-section grids (:func:`_fallback_rows`), each
+    internally straight-guttered. Stream order is preserved — only whitespace is
+    inserted. ``base == 0`` is the un-nested layout."""
+    left = base + _FIELD_INDENT
+    runs = _runs(_build_cells(fields))
+    rows = _fit_grid(runs, left) or _fallback_rows(runs, left)
+    return [_render_row(r) for r in rows]
 
 
 def format(flat: str, *, indent: bool = False) -> str:
