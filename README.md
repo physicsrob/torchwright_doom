@@ -41,6 +41,8 @@ geometry, sorting, or arithmetic. (See `CLAUDE.md`.)
   the graph-debugging tool sequence.
 - **`GLOSSARY.md`** — plain-English definitions of the coined vocabulary
   (carrier, head, marker, owner, subcontext, visplane, flat, …).
+- **`PROTOCOL.md`** — the pixel protocol: the exact per-frame token
+  sequence (prefill + every AR phase), in the readable-surface token names.
 - **`protocol_registry.render_protocol_table()`** — the generated table of
   the token protocol (every token type, its phase, role, and dispatch
   wiring), for a top-down view of the AR protocol.
