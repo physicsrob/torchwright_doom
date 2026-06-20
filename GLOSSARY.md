@@ -77,6 +77,33 @@ here.
   emit time. `emit_derived_zero` is the shared tail stamped after dispatch
   selection.
 
+- **token-naming convention (provenance)** — a token's *name* advertises
+  where it comes from, so a reader can tell a faithful DOOM operation from
+  invented sandbox scaffolding at a glance:
+  - **real DOOM functions** keep the engine's identifier verbatim, prefix
+    and case intact: `R_PointOnSide`, `R_Subsector`, `R_AddLine`,
+    `R_StoreWallRange`, `R_CheckPlane`, `R_MakeSpans`, `R_MapPlane`,
+    `ST_Drawer`. If DOOM's C source spells it `R_*` / `ST_*`, so do we.
+  - **engine nouns** — the data structures DOOM operates on — are
+    lowercase, struct-style: `node`, `seg`, `drawseg`, `boxpos`, `bbox`,
+    `visplane`, `pixel`.
+  - **invented protocol tokens** — scaffolding with no DOOM counterpart,
+    added to make the render expressible as an autoregressive stream — are
+    lowerCamelCase: `noOp`, `nextSeg`, `bspFront`, `bspCheckBack`,
+    `bspReturn`, `clipScan`, `segKpart`, `planeMark`, `hasBacksector`,
+    `pointOnSideResult`.
+  - **fields** of a record are dotted-lowercase under their owner:
+    `node.x`, `seg.front.floor`, `drawseg.scale1.den`.
+
+  This convention is **load-bearing for the readable surface's honesty
+  guard** (`tokenizer/display.py`): a value-in-name relabel (folding a
+  slot into the word, e.g. `hasBacksector(flag=1)` → `twoSided`) is allowed
+  **only** for invented protocol tokens — never for a real DOOM call, whose
+  name must stay literally what DOOM calls it. So `R_CheckPlane`'s `kind`
+  renders positionally (`R_CheckPlane(floor, 0)`), it is not folded into a
+  `floorCheckPlane`. A reader can therefore trust every `R_*` / `ST_*` they
+  see is a real engine operation, not a prettified sandbox token.
+
 ## Type and identity matching (attention)
 
 - **E8 code** — the fixed 8-number code in every token's embedding that

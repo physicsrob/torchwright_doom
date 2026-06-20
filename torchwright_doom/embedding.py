@@ -677,9 +677,12 @@ def build_doom_embedding(input_name: str = "token_ids") -> Embedding:
 
 
 def _row_label(t: TokenType, values: Mapping[str, int | float]) -> str:
-    if not values:
-        return t.name
-    parts = [
-        f"{k}={v:g}" if isinstance(v, float) else f"{k}={v}" for k, v in values.items()
-    ]
-    return f"{t.name}({','.join(parts)})"
+    """The HF ``WordLevel`` vocab label / the ``Embedding`` node's debug name for
+    one row — the shared per-id label (:func:`.tokenizer.display.token_label`),
+    called **config-free** (``wall_names=flat_names=None``) so the vocab labels
+    stay asset-independent. Cosmetic only: the labels are *not* in
+    ``vocab_fingerprint`` (which hashes name + slots + n_rows), so the prettier
+    spelling never re-keys ids."""
+    from .tokenizer.display import token_label
+
+    return token_label(t, values)

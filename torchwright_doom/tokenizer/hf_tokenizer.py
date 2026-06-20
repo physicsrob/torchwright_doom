@@ -93,6 +93,14 @@ class DoomTokenizer(PreTrainedTokenizer):
         self._label_to_id: dict[str, int] = {
             label: row for row, label in enumerate(self._id_to_label)
         }
+        # The WordLevel map is a bijection only if every row has a UNIQUE label.
+        # The pretty per-id labels (aliases / decoded words / value-in-name tags)
+        # make injectivity load-bearing, so guard it loud here rather than let a
+        # collision silently collapse two rows onto one id.
+        assert len(self._label_to_id) == len(self._id_to_label), (
+            "token labels are not injective — two rows share a label; see "
+            "tokenizer.display.token_label"
+        )
         config = asset_config or DEFAULT_ASSET_CONFIG
         # Surface knobs for the stock view: scene-relative coords, BAM angles,
         # readable WAD texture names. None changes the id stream.
@@ -134,17 +142,22 @@ class DoomTokenizer(PreTrainedTokenizer):
     # --- contextual string layer (surface) --------------------------------
 
     def _tokenize(self, text: str, **kwargs) -> list[str]:
-        """Readable text -> context-free row labels (the WordLevel pieces)."""
+        """Readable text -> context-free row labels (the WordLevel pieces). Uses
+        the grammar's :func:`surface.encode`, which ignores whitespace — so a
+        formatted (header-laid-out) figure tokenizes the same as the flat
+        stream."""
         labels = []
-        for ttype, values in surface.parse(text, **self._knobs):
+        for ttype, values in surface.encode(text, **self._knobs):
             row = token_to_row(Token(ttype, dict(values)))
             labels.append(self._id_to_label[row])
         return labels
 
     def convert_tokens_to_string(self, tokens: list[str]) -> str:
-        """Row labels -> readable surface text (de-quantized, header-laid-out)."""
+        """Row labels -> the **flat** vanilla surface text (de-quantized, single
+        spaces). The grammar's :func:`surface.decode`; the blog figure adds the
+        whitespace layout separately via :func:`surface.format`."""
         toks = [row_to_token(self._label_to_id[label]) for label in tokens]
-        return surface.render(toks, **self._knobs)
+        return surface.decode(toks, **self._knobs)
 
     # --- serialization -----------------------------------------------------
 

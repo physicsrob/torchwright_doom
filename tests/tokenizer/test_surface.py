@@ -96,17 +96,33 @@ def test_marker_tables_reference_real_types() -> None:
     assert not ({VALUE, ANGLE_VALUE} & (set(MARKER_RANGE) | set(ANGLE_MARKERS)))
 
 
-# --- display layer (strip_prefixes + decode_values knobs) ------------------
+# --- display layer (always-on pretty per-id labels) ------------------------
 
-_FRIENDLY = dict(_NAMES, strip_prefixes=True, decode_values=True, angle_degrees=True)
+_FRIENDLY = dict(_NAMES, angle_degrees=True)
 
 
 def test_display_alias_is_a_bijection() -> None:
-    """Every type has a display name and the inverse map recovers it 1:1, so
-    ``strip_prefixes`` never makes the surface ambiguous to parse."""
+    """Every type has a display name and the inverse map recovers it 1:1, so the
+    aliased type names never make the surface ambiguous to parse."""
     assert len(display.TYPE_BY_DISPLAY) == len(display.DISPLAY_NAME) == len(VOCAB_TYPES)
     for ttype, name in display.DISPLAY_NAME.items():
         assert display.TYPE_BY_DISPLAY[name] is ttype
+
+
+def test_token_label_is_injective() -> None:
+    """No two rows share a :func:`display.token_label` — the WordLevel id<->label
+    map is a bijection only if labels are unique. The pretty relabels (aliases,
+    decoded words, value-in-name tags) make this load-bearing; the old raw
+    ``TYPE(slot=value)`` label was trivially unique."""
+    seen: dict[str, tuple[str, dict]] = {}
+    for ttype, values in TOKEN_VOCAB.row_to_token:
+        label = display.token_label(ttype, values)
+        if label in seen:
+            raise AssertionError(
+                f"label collision {label!r}: {seen[label]} and "
+                f"{(ttype.name, dict(values))}"
+            )
+        seen[label] = (ttype.name, dict(values))
 
 
 def test_decode_slot_bijection() -> None:
@@ -144,7 +160,7 @@ def test_back_height_sentinel_round_trip() -> None:
     carrier, so the sentinel path needs its own check)."""
     carrier = encode_float(ValueRange.R4, BACK_HEIGHT_SENTINEL)
     stream = [(SEG_BACK_FLOOR, {}), (VALUE, {"v": carrier})]
-    text = surface.render(stream, decode_values=True)
+    text = surface.render(stream)
     assert "back.floor(none)" in text
-    back = surface.parse(text, decode_values=True)
+    back = surface.parse(text)
     assert back == [(SEG_BACK_FLOOR, {}), (VALUE, {"v": carrier})]

@@ -1,36 +1,40 @@
-"""The readable surface grammar: ``render(tokens) -> text`` and
-``parse(text) -> tokens``, byte-exact at the token level.
+"""The readable surface: a **vanilla tokenizer** plus a **whitespace formatter**.
 
-Three tiers of readability, in increasing contextual reach:
+Two cleanly separable pieces, composed into the public ``render`` / ``parse``:
 
-1. **Baked context-free labels** (the bulk; pure lookup). Each token renders in
-   functional style — ``TYPE(arg, ...)`` (bare ``TYPE`` when it has no args).
-   Int slots are ``name=value`` (``seg(i=41, is_first_of_ss=0)``), except for a
-   small set of self-evident types whose args are bare positional
-   (``pixel(143, 2)``). Texture / flat slots render their WAD names. No
-   neighbour is consulted.
+1. **The grammar** — ``decode(tokens) -> flat text`` / ``encode(text) -> tokens``,
+   byte-exact at the token id level and **newline-free** (tokens separated by
+   single spaces). It applies the per-id labels (:func:`.display.token_label`)
+   plus the **one contextual rule**: a ``VALUE`` / ``ANGLE_VALUE`` carrier folds
+   into the *preceding marker's* parens as its trailing positional arg,
+   de-quantized through that marker's range (``marker_ranges.MARKER_RANGE``). The
+   carrier stores only a ``[-1, 1]`` number; the marker chooses how to read it —
+   so this is normal "vanilla" detokenizer behaviour (cf. a BPE byte-merge), one
+   well-contained table-driven rule, not a third grammar. This is what the HF
+   tokenizer uses; it is fully reversible.
 
-2. **One contextual rule — continuous values.** A ``VALUE`` token's id encodes
-   only a ``[-1, 1]`` carrier; its physical meaning needs the *preceding
-   marker's* range (``marker_ranges.MARKER_RANGE``). So a marked field renders
-   as ``marker(<physical>)`` — the de-quantized value as the marker's trailing
-   positional arg. The ``physical_values=False`` knob falls back to the raw
-   carrier; both re-encode to the same id, so the knob never changes the stream.
+2. **The formatter** — ``format(flat) -> laid-out text``. It owns ALL layout: a
+   new line at each "header" token (indented by its nesting level under
+   ``indent``) with the following tokens packed into aligned columns beneath it.
+   Pure whitespace — :func:`encode` ignores it (``_scan`` drops whitespace and
+   ``#`` comments) — so layout never affects the id stream.
 
-3. **Line layout by header-break.** A new line starts at each "header" token
-   type (``_HEADER_TYPE_NAMES``); the following tokens join onto it with
-   spaces. Pure whitespace layout — reversible because parse ignores it.
+Byte-exactness is anchored at the value level: a de-quantized carrier renders as
+the *shortest decimal that re-quantizes to the same carrier level* (so
+``encode(decode(v)) == v``). There is no lossy display knob; the figure shows the
+reversible shortest-decimal (``1383.98``), never a rounded ``1384`` that could
+re-encode to a neighbouring level.
 
-Byte-exactness is anchored at the value level by emitting the *shortest decimal
-that re-quantizes to the same carrier level* (so ``encode(decode(v)) == v``).
-Parse is tolerant (whitespace / newlines / ``#`` comments ignored, slot fields
-order-free by name); render is canonical (fixed order, header breaks).
+The kept knobs are all reversible and audience-specific (none change the
+re-encoded id stream): ``wall_names`` / ``flat_names`` (WAD asset names; ``None``
+⇒ raw ids), ``angle_degrees`` (degrees vs BAM), ``origin`` (WAD vs scene-relative
+coordinates), ``physical_values`` (physical vs raw ``[-1, 1]`` carrier). ``indent``
+is a formatter option, not a grammar knob.
 
-Imports only :mod:`.tokens`, :mod:`.value_ranges`, the :mod:`.vocab` registry,
-and the shared :mod:`.marker_ranges` table — no graph nodes at import or call
-time (mirrors ``tokens_bridge``'s discipline). Texture names are passed in (not
-imported) so the module stays asset-agnostic; they are a reversible display
-knob, not part of the WordLevel id<->label core.
+Imports only :mod:`.display` (the per-id labels), :mod:`.tokens`,
+:mod:`.value_ranges`, the :mod:`.vocab` registry, and the shared
+:mod:`.marker_ranges` table — no graph nodes at import or call time. Texture names
+are passed in (not imported) so the module stays asset-agnostic.
 """
 
 from __future__ import annotations
@@ -45,81 +49,77 @@ from ..vocab import ANGLE_BAM, ANGLE_VALUE, VALUE, VOCAB_TYPES
 
 TokenLike = Token | tuple[TokenType, Mapping[str, int | float]]
 
-# Name -> TokenType for the whole vocab (the keyword set the parser recognises).
+# Name -> TokenType for the whole vocab (header lookup + marker-table sanity).
 _TYPE_BY_NAME: dict[str, TokenType] = {t.name: t for t in VOCAB_TYPES}
-
-# (type_name, slot_name) -> asset kind for slots that render as WAD names.
-_TEXTURE_SLOTS: dict[tuple[str, str], str] = {
-    ("seg.texture.mid", "tex_id"): "wall",
-    ("seg.texture.upper", "tex_id"): "wall",
-    ("seg.texture.lower", "tex_id"): "wall",
-    ("planeDef", "flat_id"): "flat",
-}
-_NO_TEXTURE = "none"  # tex_id == 0: the "-" / empty side
-
-# Types whose int slots render as bare positional args (``pixel(143, 2)``)
-# rather than ``name=value`` — the type name already says what each value is, so
-# the names would be noise. Everything else stays named (``seg(i=41,
-# is_first_of_ss=0)``). Layout only — parse maps positional args back by
-# declaration order — so this set is freely tunable. Carriers are always
-# positional (one value, named by the marker type).
-_POSITIONAL_TYPE_NAMES: frozenset[str] = frozenset(
-    {
-        "pixel",
-        "seg.texture.mid",
-        "seg.texture.upper",
-        "seg.texture.lower",
-    }
-)
 
 # The 16-bit VALUE carrier: 65536 levels evenly over [-1, 1] (65535 steps).
 _VALUE_STEPS = 65535
 
-# Header token types: a new display line starts at each (the following tokens
-# join onto it). Layout only — parse ignores line breaks, so this set is freely
+# Header token types -> their nesting LEVEL: a new display line starts at each
+# header (the following non-header tokens join onto it). Layout only — keyed on
+# canonical ``TokenType.name``, mapped to display aliases in HEADER_DISPLAY_LEVEL
+# below. ``encode`` ignores whitespace and line breaks, so this table is freely
 # tunable without affecting the id stream. Curated for entity-per-line density:
 # one line per player block / node / subsector / seg / plane (prompt), and per
 # traversal step / wall column / span action (AR output).
-_HEADER_TYPE_NAMES: frozenset[str] = frozenset(
-    {
-        # --- prompt ---
-        "viewx",  # opens the player block (viewy/viewz/viewangle join it)
-        "node",
-        "SSECTOR",
-        "seg",
-        "planeDef",
-        "ssFloorPlane",  # ssCeilingPlane joins it
-        "begin",
-        # --- AR: traversal + visibility ---
-        "noOp",
-        "R_PointOnSide",  # pointOnSideResult is its child (the call's result)
-        "boxpos",
-        "bspFront",
-        "bspCheckBack",
-        "bspReturn",
-        "R_Subsector",
-        "R_AddLine",
-        "nextSeg",
-        "drawseg.x2",
-        # --- AR: wall range + columns ---
-        "R_StoreWallRange",
-        "drawseg.meta",
-        "R_CheckPlane",
-        "setCursorX",
-        # --- AR: flat pass ---
-        "R_DrawPlanes",
-        "R_DrawPlanes.nextPlane",
-        "R_DrawPlanes.nextVp",
-        "visplaneBegin",
-        "R_MakeSpans.col",
-        "R_MapPlane.row",
-        # --- AR: weapon + status bar + terminal ---
-        "R_DrawPlayerSprites",
-        "ST_Drawer",
-        "ST_Drawer.item",
-        "done",
-    }
-)
+#
+# The level drives the ``indent`` knob's per-block indentation (level *
+# ``_INDENT_UNIT`` spaces; see _layout_fields). Levels are a SHALLOW STATIC phase
+# hierarchy (0..2 here), not live recursion depth: BSP traversal nests to
+# N_DEPTH_MAX=16, which the fixed ``_INDENT_MAXW`` budget cannot show as
+# whitespace, so real depth stays in the ``depth=`` slot as a number. Keep the
+# deepest level small enough that ``level * _INDENT_UNIT`` plus a typical field
+# stays under ``_INDENT_MAXW``. ``setCursorX`` is held at level 2 in every
+# context (wall column, flat span, weapon/HUD) so it never prints left of a
+# parent header — it has no sub-headers of its own, so that can't invert.
+_HEADER_LEVEL: dict[str, int] = {
+    # --- prompt ---
+    "viewx": 0,  # opens the player block (viewy/viewz/viewangle join it)
+    "node": 0,
+    "SSECTOR": 0,
+    "seg": 1,  # segs nest under their subsector
+    "planeDef": 0,
+    "ssFloorPlane": 0,  # ssCeilingPlane joins it
+    "begin": 0,
+    # --- AR: traversal spine + visibility ---
+    "noOp": 0,
+    "R_PointOnSide": 0,  # pointOnSideResult is its child (the call's result)
+    "bspFront": 0,
+    "bspCheckBack": 0,
+    "bspReturn": 0,
+    "R_Subsector": 0,
+    "boxpos": 1,  # bbox visibility check, under bspCheckBack
+    "R_AddLine": 1,  # seg projection, under its subsector
+    "nextSeg": 1,
+    "drawseg.x2": 1,
+    # --- AR: wall range + columns ---
+    "R_StoreWallRange": 1,  # one visible run, under the seg
+    "drawseg.meta": 2,  # wall-range setup detail
+    "R_CheckPlane": 2,
+    "setCursorX": 2,  # wall column, under the range (see note above)
+    # --- AR: flat pass ---
+    "R_DrawPlanes": 0,
+    "R_DrawPlanes.nextPlane": 1,
+    "R_DrawPlanes.nextVp": 1,
+    "visplaneBegin": 1,
+    "R_MakeSpans.col": 2,
+    "R_MapPlane.row": 2,  # sibling of setCursorX so a span's setCursorX never inverts
+    # --- AR: weapon + status bar + terminal ---
+    "R_DrawPlayerSprites": 0,
+    "ST_Drawer": 0,
+    "ST_Drawer.item": 1,
+    "done": 0,
+}
+
+#: Header DISPLAY name -> nesting level. The formatter scans flat text (which
+#: carries display aliases) and looks the leading word up here. Built from
+#: ``_HEADER_LEVEL`` (canonical) via the alias map; the alias is a bijection, so
+#: no two headers collide on one display name.
+HEADER_DISPLAY_LEVEL: dict[str, int] = {
+    display.DISPLAY_NAME[_TYPE_BY_NAME[name]]: level
+    for name, level in _HEADER_LEVEL.items()
+}
+assert len(HEADER_DISPLAY_LEVEL) == len(_HEADER_LEVEL), "header alias collision"
 
 # Markers whose physical value is an absolute x / y map coordinate, shifted by
 # the scene origin (centroid) under the WAD-coordinate display knob. Deltas,
@@ -153,13 +153,23 @@ _Y_COORD_MARKERS: frozenset[str] = frozenset(
     }
 )
 
-# Indented "semantic layout" (the ``indent`` knob). A header opens a block and
-# its fields pack into aligned columns beneath it. ``_INDENT_STOPS`` are
-# absolute character columns: a field starts at the first stop at/after the end
-# of the previous field (so a wide field bumps the next one to a later stop,
+# Indented "semantic layout" (the ``indent`` formatter option). A header opens a
+# block and its fields pack into aligned columns beneath it. The header itself is
+# indented by its nesting level (``_HEADER_LEVEL[name] * _INDENT_UNIT`` spaces);
+# its field rows take that same base indent, so a block reads as the tree it is.
+#
+# ``_INDENT_STOPS`` are character columns measured from column 0; per block they
+# are shifted by the base indent. A field starts at the first stop at/after the
+# end of the previous field (so a wide field bumps the next one to a later stop,
 # keeping columns aligned). A new row starts at a group boundary (the
-# dotted-prefix changes), when no stop is left before ``_INDENT_MAXW``, or when
-# the stops are exhausted. Pure whitespace — parse ignores it.
+# dotted-prefix changes) or when the field would cross ``_INDENT_MAXW``.
+# ``_INDENT_MAXW`` is an ABSOLUTE cap: the base indent eats into it (a field's
+# room is ``_INDENT_MAXW - base``) and any shifted stop past the cap drops out,
+# so deep blocks pack fewer fields per row but the line stays within budget. A
+# lone field longer than its room still prints (and may exceed the cap) — the
+# layout never splits a token. Pure whitespace, so encode ignores it and the id
+# stream is unchanged; ``base == 0`` reproduces the un-nested layout byte-for-byte.
+_INDENT_UNIT = 2  # spaces of indentation per nesting level
 _INDENT_STOPS = (4, 20, 36)
 _INDENT_MAXW = 60
 
@@ -200,7 +210,7 @@ def _fmt_decimal(value: float, places: int) -> str:
 
 def _shortest_value(range_id: ValueRange, carrier: float, shift: float) -> str:
     """Shortest decimal of the de-quantized physical that re-encodes to the
-    same carrier level — guaranteeing ``parse(render(v)) == v`` at the id."""
+    same carrier level — guaranteeing ``encode(decode(v)) == v`` at the id."""
     target = _level(carrier)
     physical = decode_float(range_id, carrier) + shift
     for places in range(0, 10):
@@ -210,13 +220,11 @@ def _shortest_value(range_id: ValueRange, carrier: float, shift: float) -> str:
     return repr(physical)  # full precision fallback (always round-trips)
 
 
-def _shortest_angle(bam: int, degrees: bool, clean_integers: bool = False) -> str:
+def _shortest_angle(bam: int, degrees: bool) -> str:
     if not degrees:
         return str(int(bam))
     target = int(bam)
     physical = target * 360.0 / ANGLE_BAM
-    if clean_integers:
-        return str(round(physical))
     for places in range(0, 10):
         candidate = round(physical, places)
         if round(candidate * ANGLE_BAM / 360.0) == target:
@@ -224,140 +232,12 @@ def _shortest_angle(bam: int, degrees: bool, clean_integers: bool = False) -> st
     return repr(physical)
 
 
-def _slot_value_str(
-    type_name: str,
-    slot_name: str,
-    value: int | float,
-    wall_names: Sequence[str] | None,
-    flat_names: Sequence[str] | None,
-    decode_values: bool,
-) -> str:
-    """The displayed value for one int slot: a decoded word (``portal``, ``ss5``,
-    ``yes``) when ``decode_values`` and the slot has a known meaning, else a WAD
-    name for texture/flat slots, else the raw integer."""
-    ivalue = int(value)
-    if decode_values:
-        decoded = display.decode_slot(type_name, slot_name, ivalue)
-        if decoded is not None:
-            return decoded
-    kind = _TEXTURE_SLOTS.get((type_name, slot_name))
-    if kind == "wall" and wall_names is not None:
-        return _NO_TEXTURE if ivalue == 0 else wall_names[ivalue - 1]
-    if kind == "flat" and flat_names is not None:
-        return flat_names[ivalue]
-    return str(ivalue)
-
-
-def _parse_slot(
-    type_name: str,
-    slot_name: str,
-    text: str,
-    wall_names: Sequence[str] | None,
-    flat_names: Sequence[str] | None,
-    decode_values: bool,
-) -> int:
-    if decode_values:
-        encoded = display.encode_slot(type_name, slot_name, text)
-        if encoded is not None:
-            return encoded
-    kind = _TEXTURE_SLOTS.get((type_name, slot_name))
-    if kind == "wall" and wall_names is not None and not _looks_int(text):
-        if text == _NO_TEXTURE:
-            return 0
-        return wall_names.index(text) + 1
-    if kind == "flat" and flat_names is not None and not _looks_int(text):
-        return flat_names.index(text)
-    return int(text)
-
-
-def _looks_int(text: str) -> bool:
-    body = text[1:] if text[:1] in "+-" else text
-    return body.isdigit()
-
-
-def _format_token(
-    ttype: TokenType,
-    values: Mapping[str, int | float],
-    carrier: str | None,
-    wall_names: Sequence[str] | None,
-    flat_names: Sequence[str] | None,
-    strip_prefixes: bool,
-    decode_values: bool,
-) -> str:
-    """One token in functional style: ``TYPE(arg, ...)`` (bare ``TYPE`` if it has
-    no args). The type name is the short alias under ``strip_prefixes``. Int
-    slots are positional for ``_POSITIONAL_TYPE_NAMES`` (where the type name
-    already says what the value is), for ``display.DECODE_POSITIONAL`` types when
-    decoding (where the decoded word is self-evident), and ``name=value``
-    otherwise; a marker's de-quantized ``carrier`` is the trailing positional
-    arg."""
-    name = display.DISPLAY_NAME[ttype] if strip_prefixes else ttype.name
-    positional = ttype.name in _POSITIONAL_TYPE_NAMES or (
-        decode_values and ttype.name in display.DECODE_POSITIONAL
-    )
-    args: list[str] = []
-    for slot_name in ttype.slots:
-        sval = _slot_value_str(
-            ttype.name,
-            slot_name,
-            values[slot_name],
-            wall_names,
-            flat_names,
-            decode_values,
-        )
-        args.append(sval if positional else f"{slot_name}={sval}")
-    if carrier is not None:
-        args.append(carrier)
-    if not args:
-        return name
-    return f"{name}({', '.join(args)})"
-
-
-def _field_group(field: str) -> str | None:
-    """Row-break key: the dotted prefix before a field's last segment
-    (``bbox1.top`` -> ``bbox1``, ``v1.x`` -> ``v1``), or ``None`` for a scalar
-    field (no dot) so consecutive scalars pack together. Each distinct group
-    starts a fresh row."""
-    name = field.split("(", 1)[0]
-    return name.rsplit(".", 1)[0] if "." in name else None
-
-
-def _layout_fields(fields: Sequence[str]) -> list[str]:
-    """Pack a header's fields into aligned ``<= _INDENT_MAXW`` rows at the
-    ``_INDENT_STOPS`` tab stops (see the constant). Stream order is preserved —
-    the layout only inserts whitespace, never reorders."""
-    rows: list[str] = []
-    row = ""
-    prev_group: str | None = None
-    for field in fields:
-        group = _field_group(field)
-        cursor = len(row) + 1 if row else _INDENT_STOPS[0]
-        stop = next((s for s in _INDENT_STOPS if s >= cursor), None)
-        wrap = (
-            not row
-            or group != prev_group
-            or stop is None
-            or stop + len(field) > _INDENT_MAXW
-        )
-        if wrap:
-            if row:
-                rows.append(row)
-            row = " " * _INDENT_STOPS[0] + field
-        else:
-            assert stop is not None  # narrowed by `wrap`
-            row += " " * (stop - len(row)) + field
-        prev_group = group
-    if row:
-        rows.append(row)
-    return rows
-
-
 # ---------------------------------------------------------------------------
-# render
+# the grammar: decode (tokens -> flat text)
 # ---------------------------------------------------------------------------
 
 
-def render(
+def decode(
     tokens: Iterable[TokenLike],
     *,
     origin: tuple[float, float] = (0.0, 0.0),
@@ -365,99 +245,45 @@ def render(
     flat_names: Sequence[str] | None = None,
     physical_values: bool = True,
     angle_degrees: bool = False,
-    strip_prefixes: bool = False,
-    decode_values: bool = False,
-    indent: bool = False,
-    clean_integers: bool = False,
 ) -> str:
-    """Render a token stream to canonical readable text.
+    """Detokenize a token stream to **flat** readable text (single spaces, no
+    line breaks). Each token becomes its per-id label (:func:`.display.token_label`);
+    a ``VALUE`` / ``ANGLE_VALUE`` carrier folds into the preceding marker's parens
+    as its trailing positional arg, de-quantized through the marker's range.
 
     ``tokens`` are ``Token`` instances or ``(TokenType, values)`` tuples,
-    *including* the ``VALUE`` / ``ANGLE_VALUE`` carriers in stream order — each
-    carrier folds into its marker's parens as the trailing positional arg.
-
-    Knobs (none change the re-encoded id stream):
-      * ``origin`` — subset centroid; with it, x/y coordinate markers render as
-        raw WAD units instead of scene-relative.
-      * ``wall_names`` / ``flat_names`` — asset name tables; texture/flat slots
-        render WAD names instead of raw ids.
-      * ``physical_values`` — ``False`` renders the raw ``[-1, 1]`` carrier.
-      * ``angle_degrees`` — ``True`` renders BAM angles as degrees.
-      * ``strip_prefixes`` — drop the ``node.`` / ``seg.`` entity prefix from
-        type names (see :mod:`.display`).
-      * ``decode_values`` — render opaque integer slots / sentinels as their
-        source-shaped words (see :mod:`.display`).
-      * ``indent`` — semantic layout: each header token opens a block on its own
-        line and its fields pack into aligned columns beneath it (tab stops at
-        ``_INDENT_STOPS``, rows kept under ``_INDENT_MAXW``, a new row at each
-        dotted-prefix group). Pure whitespace (parse ignores it), so it never
-        changes the id stream.
-      * ``clean_integers`` — round each de-quantized carrier to the nearest whole
-        number (``1383.98`` -> ``1384``), dropping the sub-quantum carrier
-        residue. Unlike the others this is **not** byte-exact (the integer may
-        re-encode to a neighbouring carrier level); it is a figure convenience,
-        and must be applied at format time (not by post-processing the text) so
-        column widths under ``indent`` stay correct.
+    *including* the carriers in stream order. Reversible: :func:`encode` recovers
+    the identical id stream under matching knobs.
     """
     toks = [_norm(t) for t in tokens]
-    lines: list[str] = []
-    current: list[str] = []
-
-    def flush() -> None:
-        if not current:
-            return
-        if indent and len(current) > 1:
-            head, *fields = current
-            lines.append(head)
-            lines.extend(_layout_fields(fields))
-        else:
-            lines.append(" ".join(current))
-        current.clear()
-
-    i = 0
-    n = len(toks)
+    units: list[str] = []
+    i, n = 0, len(toks)
     while i < n:
         ttype, values = toks[i]
         if ttype is VALUE or ttype is ANGLE_VALUE:
             raise ValueError(f"carrier {ttype.name!r} at {i} has no preceding marker")
 
-        # Marker-lookahead for the single contextual rule: if the next token is a
-        # carrier, it is *this* token's (carriers only ever follow their marker),
-        # and we de-quantize it through this marker's binding. A marker type like
-        # setCursorY only carries a value in some contexts — keying on whether a
-        # carrier actually follows handles both.
+        # Marker-lookahead for the one contextual rule: if the next token is a
+        # carrier, it is *this* token's (carriers only ever follow their marker).
+        # A marker type like setCursorY only carries a value in some contexts —
+        # keying on whether a carrier actually follows handles both.
         carrier: str | None = None
         if i + 1 < n and toks[i + 1][0] in (VALUE, ANGLE_VALUE):
             ctype, cvals = toks[i + 1]
             carrier = _render_carrier(
-                ttype,
-                ctype,
-                cvals,
-                origin,
-                physical_values,
-                angle_degrees,
-                decode_values,
-                clean_integers,
+                ttype, ctype, cvals, origin, physical_values, angle_degrees
             )
             i += 1
 
-        if ttype.name in _HEADER_TYPE_NAMES:
-            flush()
-        current.append(
-            _format_token(
-                ttype,
-                values,
-                carrier,
-                wall_names,
-                flat_names,
-                strip_prefixes,
-                decode_values,
-            )
+        name, args = display.token_fields(
+            ttype, values, wall_names=wall_names, flat_names=flat_names
         )
+        if carrier is not None:
+            args = [*args, carrier]
+        units.append(name if not args else f"{name}({', '.join(args)})")
         i += 1
 
-    flush()
-    return "\n".join(lines)
+    return " ".join(units)
 
 
 def _render_carrier(
@@ -467,8 +293,6 @@ def _render_carrier(
     origin: tuple[float, float],
     physical_values: bool,
     angle_degrees: bool,
-    decode_values: bool,
-    clean_integers: bool,
 ) -> str:
     if carrier_type is VALUE:
         range_id = MARKER_RANGE.get(marker)
@@ -478,21 +302,18 @@ def _render_carrier(
         if physical_values:
             shift = _origin_shift(marker.name, origin)
             physical = decode_float(range_id, carrier) + shift
-            if decode_values:
-                word = display.decode_sentinel(marker.name, physical)
-                if word is not None:
-                    return word
-            if clean_integers:
-                return str(round(physical))
+            word = display.decode_sentinel(marker.name, physical)
+            if word is not None:
+                return word
             return _shortest_value(range_id, carrier, shift)
         return repr(carrier)
     if marker not in ANGLE_MARKERS:
         raise ValueError(f"ANGLE_VALUE follows non-angle-marker {marker.name!r}")
-    return _shortest_angle(int(carrier_values["angle"]), angle_degrees, clean_integers)
+    return _shortest_angle(int(carrier_values["angle"]), angle_degrees)
 
 
 # ---------------------------------------------------------------------------
-# parse
+# the grammar: encode (text -> tokens)
 # ---------------------------------------------------------------------------
 
 
@@ -500,7 +321,8 @@ def _scan(text: str) -> list[tuple[str, list[str] | None]]:
     """Split readable text into ``(type_name, args)`` units. ``args`` is the
     comma-separated list inside ``(...)`` (possibly empty), or ``None`` for a
     bare slotless type. Whitespace, newlines, and ``#`` comments are ignored;
-    spaces inside the parens (``pixel(143, 2)``) are fine."""
+    spaces inside the parens (``pixel(143, 2)``) are fine — this is what makes
+    the whitespace formatter reversible (its layout is dropped here)."""
     body = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
     out: list[tuple[str, list[str] | None]] = []
     i, n = 0, len(body)
@@ -523,7 +345,7 @@ def _scan(text: str) -> list[tuple[str, list[str] | None]]:
     return out
 
 
-def parse(
+def encode(
     text: str,
     *,
     origin: tuple[float, float] = (0.0, 0.0),
@@ -531,34 +353,26 @@ def parse(
     flat_names: Sequence[str] | None = None,
     physical_values: bool = True,
     angle_degrees: bool = False,
-    strip_prefixes: bool = False,
-    decode_values: bool = False,
-    indent: bool = False,
-    clean_integers: bool = False,
 ) -> list[tuple[TokenType, dict[str, int | float]]]:
-    """Inverse of :func:`render`: readable text -> ``(TokenType, values)`` list.
+    """Inverse of :func:`decode`: readable text -> ``(TokenType, values)`` list.
 
-    Tolerant of whitespace, newlines, and ``#`` comments; named args are
-    order-free, positional args map back in declaration order. The knobs mirror
-    :func:`render` and must match the render settings for a byte-exact round
-    trip — except ``indent`` (pure layout) and ``clean_integers`` (a one-way,
-    non-byte-exact figure convenience), which are accepted but ignored here: an
-    integer carrier word like ``1384`` parses through the normal numeric path.
-    """
-    del indent, clean_integers  # display-only; parse needs no special handling
-    type_lookup = display.TYPE_BY_DISPLAY if strip_prefixes else _TYPE_BY_NAME
+    Tolerant of whitespace, newlines, and ``#`` comments (so the formatter's
+    layout is invisible here); named args are order-free, positional args map
+    back in declaration order. The knobs mirror :func:`decode` and must match the
+    decode settings for a byte-exact round trip."""
     out: list[tuple[TokenType, dict[str, int | float]]] = []
     for name, args in _scan(text):
-        ttype = type_lookup.get(name)
-        if ttype is None:
+        resolved = display.resolve_name(name)
+        if resolved is None:
             raise ValueError(f"unknown token keyword: {name!r}")
-        slot_values: dict[str, int | float] = {}
+        ttype, preset = resolved
+        slot_values: dict[str, int | float] = dict(preset)
         bare: list[str] = []
         for arg in args or ():
             if "=" in arg:
                 key, value = arg.split("=", 1)
-                slot_values[key] = _parse_slot(
-                    ttype.name, key, value, wall_names, flat_names, decode_values
+                slot_values[key] = display.parse_slot(
+                    ttype.name, key, value, wall_names, flat_names
                 )
             else:
                 bare.append(arg)
@@ -569,13 +383,8 @@ def parse(
         carrier_word: str | None = None
         for index, value in enumerate(bare):
             if index < len(unfilled):
-                slot_values[unfilled[index]] = _parse_slot(
-                    ttype.name,
-                    unfilled[index],
-                    value,
-                    wall_names,
-                    flat_names,
-                    decode_values,
+                slot_values[unfilled[index]] = display.parse_slot(
+                    ttype.name, unfilled[index], value, wall_names, flat_names
                 )
             elif carrier_word is None:
                 carrier_word = value
@@ -587,11 +396,7 @@ def parse(
             continue
         range_id = MARKER_RANGE.get(ttype)
         if range_id is not None:
-            sentinel = (
-                display.encode_sentinel(ttype.name, carrier_word)
-                if decode_values
-                else None
-            )
+            sentinel = display.encode_sentinel(ttype.name, carrier_word)
             if sentinel is not None:
                 carrier = encode_float(range_id, sentinel)
             elif physical_values:
@@ -611,3 +416,174 @@ def parse(
                 f"token {ttype.name!r} has a value {carrier_word!r} but is not a marker"
             )
     return out
+
+
+# ---------------------------------------------------------------------------
+# the whitespace formatter: format (flat text -> laid-out text)
+# ---------------------------------------------------------------------------
+
+
+def _scan_units(flat: str) -> list[tuple[str, str]]:
+    """Re-segment flat grammar output into ``(leading_name, unit_text)`` pairs,
+    each unit's exact substring preserved verbatim (so re-emitting it adds only
+    whitespace). ``leading_name`` is the word before any ``(`` — what the header
+    lookup keys on."""
+    out: list[tuple[str, str]] = []
+    i, n = 0, len(flat)
+    while i < n:
+        if flat[i].isspace():
+            i += 1
+            continue
+        start = i
+        while i < n and not flat[i].isspace() and flat[i] != "(":
+            i += 1
+        name = flat[start:i]
+        if i < n and flat[i] == "(":
+            i = flat.index(")", i) + 1
+        out.append((name, flat[start:i]))
+    return out
+
+
+def _field_group(field: str) -> str | None:
+    """Row-break key: the dotted prefix before a field's last segment
+    (``bbox1.top`` -> ``bbox1``, ``v1.x`` -> ``v1``), or ``None`` for a scalar
+    field (no dot) so consecutive scalars pack together. Each distinct group
+    starts a fresh row."""
+    name = field.split("(", 1)[0]
+    return name.rsplit(".", 1)[0] if "." in name else None
+
+
+def _layout_fields(fields: Sequence[str], base: int = 0) -> list[str]:
+    """Pack a header's fields into aligned rows beneath it, indented by ``base``
+    spaces (the header's nesting level). Stops are ``base + _INDENT_STOPS``,
+    filtered to those still under the absolute ``_INDENT_MAXW`` cap; the hang
+    indent is the first surviving stop. Stream order is preserved — the layout
+    only inserts whitespace, never reorders. ``base == 0`` is the original
+    un-nested layout byte-for-byte."""
+    stops = [base + s for s in _INDENT_STOPS if base + s < _INDENT_MAXW]
+    if not stops:  # base too deep for any stop; keep a single hang column
+        stops = [base + _INDENT_STOPS[0]]
+    hang = stops[0]
+    rows: list[str] = []
+    row = ""
+    prev_group: str | None = None
+    for field in fields:
+        group = _field_group(field)
+        cursor = len(row) + 1 if row else hang
+        stop = next((s for s in stops if s >= cursor), None)
+        wrap = (
+            not row
+            or group != prev_group
+            or stop is None
+            or stop + len(field) > _INDENT_MAXW
+        )
+        if wrap:
+            if row:
+                rows.append(row)
+            row = " " * hang + field
+        else:
+            assert stop is not None  # narrowed by `wrap`
+            row += " " * (stop - len(row)) + field
+        prev_group = group
+    if row:
+        rows.append(row)
+    return rows
+
+
+def format(flat: str, *, indent: bool = False) -> str:
+    """Lay out flat grammar text: a new line at each header token, the following
+    tokens joined onto it. With ``indent``, each header opens a block on its own
+    line indented by its nesting level (``_HEADER_LEVEL`` * ``_INDENT_UNIT``
+    spaces) and its fields pack into aligned columns beneath it; without it, each
+    header group is one space-joined line. Pure whitespace — :func:`encode`
+    ignores it — so it never changes the id stream."""
+    lines: list[str] = []
+    group: list[str] = []
+    base = 0  # leading indent of the current header group (the indent option)
+
+    def flush() -> None:
+        if not group:
+            return
+        pad = " " * base if indent else ""
+        if indent and len(group) > 1:
+            head, *fields = group
+            lines.append(pad + head)
+            lines.extend(_layout_fields(fields, base))
+        else:
+            lines.append(pad + " ".join(group))
+        group.clear()
+
+    for name, unit in _scan_units(flat):
+        level = HEADER_DISPLAY_LEVEL.get(name)
+        if level is not None:
+            flush()
+            base = _INDENT_UNIT * level
+        group.append(unit)
+
+    flush()
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# composed public API: render / parse
+# ---------------------------------------------------------------------------
+
+
+def render(
+    tokens: Iterable[TokenLike],
+    *,
+    origin: tuple[float, float] = (0.0, 0.0),
+    wall_names: Sequence[str] | None = None,
+    flat_names: Sequence[str] | None = None,
+    physical_values: bool = True,
+    angle_degrees: bool = False,
+    indent: bool = False,
+) -> str:
+    """Render a token stream to canonical readable text — the grammar's flat
+    detokenization (:func:`decode`) laid out by the whitespace :func:`format`ter.
+
+    Knobs (none change the re-encoded id stream):
+      * ``origin`` — subset centroid; with it, x/y coordinate markers render as
+        raw WAD units instead of scene-relative.
+      * ``wall_names`` / ``flat_names`` — asset name tables; texture/flat slots
+        render WAD names instead of raw ids.
+      * ``physical_values`` — ``False`` renders the raw ``[-1, 1]`` carrier.
+      * ``angle_degrees`` — ``True`` renders BAM angles as degrees.
+      * ``indent`` — semantic nesting layout (see :func:`format`).
+    """
+    flat = decode(
+        tokens,
+        origin=origin,
+        wall_names=wall_names,
+        flat_names=flat_names,
+        physical_values=physical_values,
+        angle_degrees=angle_degrees,
+    )
+    return format(flat, indent=indent)
+
+
+def parse(
+    text: str,
+    *,
+    origin: tuple[float, float] = (0.0, 0.0),
+    wall_names: Sequence[str] | None = None,
+    flat_names: Sequence[str] | None = None,
+    physical_values: bool = True,
+    angle_degrees: bool = False,
+    indent: bool = False,
+) -> list[tuple[TokenType, dict[str, int | float]]]:
+    """Inverse of :func:`render`: readable text -> ``(TokenType, values)`` list.
+    Whitespace / layout is ignored (so the formatter is invisible), so this is
+    just :func:`encode`; the knobs mirror :func:`render` (pass the same dict to
+    both) and must match the render settings for a byte-exact round trip.
+    ``indent`` is accepted for symmetry and ignored — layout never reaches the
+    id stream."""
+    del indent  # layout is dropped by `encode`'s whitespace-agnostic scan
+    return encode(
+        text,
+        origin=origin,
+        wall_names=wall_names,
+        flat_names=flat_names,
+        physical_values=physical_values,
+        angle_degrees=angle_degrees,
+    )

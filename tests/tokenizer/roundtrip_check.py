@@ -84,13 +84,12 @@ def run(trace_path: str) -> dict:
         wall_names=DEFAULT_ASSET_CONFIG.wall_names,
         flat_names=DEFAULT_ASSET_CONFIG.flat_names,
     )
-    # The full human-facing figure config: stripped entity prefixes + decoded
-    # values (enums, booleans, BSP child ids, bbox region code, sentinels) on
-    # top of WAD names, degrees, and WAD coords. The hardest round-trip.
+    # The full human-facing figure config: WAD names, degrees, and the nesting
+    # indent. The pretty labels (stripped prefixes + decoded enums/booleans/BSP
+    # child ids/bbox region codes/sentinels) are always on now, so they need no
+    # knob. The hardest round-trip — the formatted figure re-encodes exactly.
     friendly = {
         **names,
-        "strip_prefixes": True,
-        "decode_values": True,
         "angle_degrees": True,
         "indent": True,
     }
