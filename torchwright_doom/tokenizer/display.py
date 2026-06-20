@@ -64,11 +64,17 @@ from ..vocab import BACK_HEIGHT_SENTINEL, N_NODES_MAX, VOCAB_TYPES
 # type aliases (drop the redundant entity prefix; short common words)
 # ---------------------------------------------------------------------------
 
-# The leading entity segments we drop: the line's header already names the
-# entity. The bbox./drawseg./R_* families are intentionally NOT stripped — their
-# prefix is meaningful and keeping it avoids the only collisions (e.g.
-# ``bbox.angle1`` vs the seg-projection ``angle1``).
+# The leading entity segments we drop entirely: the line's header already names
+# the entity. The ``R_*`` family keeps its prefix (it is a real DOOM call name).
+# The ``bbox.`` / ``drawseg.`` families can't drop the prefix (``bbox.angle1``
+# would collide with the seg-projection ``angle1``), but the long form bloats
+# every field, so they are *shortened* to a unique stub instead (see below).
 _STRIP_PREFIXES = ("node.", "seg.")
+
+# Long, repetitive family prefixes shortened to a unique stub (collision-free):
+# ``bbox.`` fuses to ``b`` (``bbox.x1`` -> ``bx1``); ``drawseg.`` -> ``ds.``
+# (``drawseg.scale1.den`` -> ``ds.scale1.den``).
+_SHORTEN_PREFIXES = (("bbox.", "b"), ("drawseg.", "ds."))
 
 
 def _alias_for(name: str) -> str:
@@ -76,7 +82,9 @@ def _alias_for(name: str) -> str:
     relabels: drop the entity prefix (``node.`` / ``seg.``); drop the default
     ``front.`` qualifier so a front height reads ``floor`` / ``ceil`` while the
     neighbour stays qualified (``back.floor`` / ``back.ceil``); shorten the two
-    common words ``ceiling`` → ``ceil`` and ``SSECTOR`` → ``ss``."""
+    common words ``ceiling`` → ``ceil`` and ``SSECTOR`` → ``ss``; and shorten the
+    long ``bbox.`` / ``drawseg.`` family prefixes (``bbox.x1`` → ``bx1``,
+    ``drawseg.scale1`` → ``ds.scale1``)."""
     for pre in _STRIP_PREFIXES:
         if name.startswith(pre):
             name = name[len(pre) :]
@@ -86,6 +94,10 @@ def _alias_for(name: str) -> str:
     name = name.replace("ceiling", "ceil")
     if name == "SSECTOR":
         name = "ss"
+    for pre, stub in _SHORTEN_PREFIXES:
+        if name.startswith(pre):
+            name = stub + name[len(pre) :]
+            break
     return name
 
 

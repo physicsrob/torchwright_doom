@@ -183,12 +183,10 @@ procedure bbox_check(n, d) -> bool:
     if the boxpos is the center cell:           # fast-pass: trivially visible
         return true
 
-    bbox.x1(<region>, <first corner x>) bbox.y1(<region>, <first corner y>)
-    bbox.angle1(<first corner world angle>)
-    bbox.theta1(<first corner view angle>)
-    bbox.x2(<region>, <second corner x>) bbox.y2(<region>, <second corner y>)
-    bbox.angle2(<second corner world angle>)
-    bbox.theta2(<second corner view angle>)
+    bx1(<region>, <first corner x>) by1(<region>, <first corner y>)
+    bangle1(<first corner world angle>) btheta1(<first corner view angle>)
+    bx2(<region>, <second corner x>) by2(<region>, <second corner y>)
+    bangle2(<second corner world angle>) btheta2(<second corner view angle>)
 
     if the bbox projects to an empty screen range:
         return false
@@ -203,10 +201,10 @@ procedure bbox_check(n, d) -> bool:
     return false
 ```
 
-The `bbox.x*` / `bbox.y*` corner markers each fold a `value` (range R0);
-the `bbox.angle*` / `bbox.theta*` markers each fold an `angleValue`. Each
-`bbox.x1/y1/x2/y2` also carries the `boxpos` region in its int slot so the
-corner pick is self-describing.
+The `bbox.` family prefix is shortened to `b` (`bbox.x1` → `bx1`). The `bx*` /
+`by*` corner markers each fold a `value` (range R0); the `bangle*` / `btheta*`
+markers each fold an `angleValue`. Each `bx1/by1/bx2/by2` also carries the
+`boxpos` region in its int slot so the corner pick is self-describing.
 
 ## Seg projection
 
@@ -250,13 +248,14 @@ procedure horizontal_visible_run_scan(i):
                 clipScan(x)                      # final closing scan -> seg dead-ends (nextSeg)
                 return
             continue
-        drawseg.x2(<run stop>)
+        ds.x2(<run stop>)
         wall_range_setup(i, x, <run stop>)
         x = <first x after the stored range>     # if past the end, the seg closes without nextSeg
 ```
 
 `clipScan(x)` is the semantic source of the visible-run start `x1`;
-`drawseg.x2` carries the run's right edge `x2`. `R_StoreWallRange` (below)
+`ds.x2` (the `drawseg.x2` marker, prefix shortened to `ds.`) carries the run's
+right edge `x2`. `R_StoreWallRange` (below)
 repeats neither — consumers recover them from these rows. Solid and
 closed-door segs extend the solid-interval set; open portals clip against
 it but do not extend it.
@@ -276,15 +275,15 @@ procedure wall_range_setup(i, x1, x2):
     segDcTmidUpper(<upper dc_texturemid>)        # value, R4
     segDcTmidLower(<lower dc_texturemid>)        # value, R4
 
-    drawseg.meta(i=i, wall_kind=<solid|closed|portal>, silhouette=<none|bottom|top|both>)
+    ds.meta(i=i, wall_kind=<solid|closed|portal>, silhouette=<none|bottom|top|both>)
 
-    drawseg.scale1.den(<den>)   drawseg.scale1(<scale at x1>)
-    drawseg.scale2.den(<den>)   drawseg.scale2(<scale at x2>)
-    drawseg.scalestep.den(<den>) drawseg.scalestep(<per-column step>)
-    drawseg.bsilheight(<bottom silhouette height>)
-    drawseg.tsilheight(<top silhouette height>)
+    ds.scale1.den(<den>)   ds.scale1(<scale at x1>)    # `.den` pairs with its value
+    ds.scale2.den(<den>)   ds.scale2(<scale at x2>)
+    ds.scalestep.den(<den>) ds.scalestep(<per-column step>)
+    ds.bsilheight(<bottom silhouette height>)
+    ds.tsilheight(<top silhouette height>)
 
-    drawseg.uPhase(<view_angle - rw_normalangle>)   # angleValue
+    ds.uPhase(<view_angle - rw_normalangle>)   # angleValue
 
     for kind in the plane(s) this range opens (ceiling, floor):
         for vp in 0 .. <selected instance>:
@@ -296,14 +295,15 @@ procedure wall_range_setup(i, x1, x2):
 
 `segKpart`'s `pat` indexes the K-part tables that map a span ordinal
 (0,1,2) to a wall part (mid / upper / lower) — the wall-column loop uses
-it to know which part each `wallSpanMeta` ordinal refers to. The eight
-`drawseg.scale*` / `drawseg.*silheight` markers each fold a `value` (ranges
-R5–R9); `drawseg.uPhase` folds an `angleValue`.
+it to know which part each `wallSpanMeta` ordinal refers to. The `drawseg.`
+family prefix is shortened to `ds.` (`drawseg.scale1` → `ds.scale1`); the eight
+`ds.scale*` / `ds.*silheight` markers each fold a `value` (ranges R5–R9);
+`ds.uPhase` folds an `angleValue`.
 
 `R_CheckPlane` is the runtime-visplane assignment: for each plane the range
 opens, it scans visplane instances `vp = 0, 1, ...` until it reaches the
 one this range belongs to, and `R_CheckPlane.result` records that
-selection. It runs *after* `drawseg.uPhase` and *before* the first
+selection. It runs *after* `ds.uPhase` and *before* the first
 column's `setCursorX`. (`R_CheckPlane` corresponds to DOOM's
 `R_CheckPlane`/`R_FindPlane`.)
 
@@ -338,7 +338,7 @@ procedure wall_column_loop(i, x1, x2):
 
 `setCursorX`, `wallColU`, `setCursorY`, and `pixel` carry no seg id or
 range endpoints — they are scoped by the active `R_StoreWallRange` /
-`drawseg.x2` and the current column. `planeMark` omits `x`; the extracted
+`ds.x2` and the current column. `planeMark` omits `x`; the extracted
 mark column is the active `setCursorX`.
 
 `wallSpanMeta(y, ordinal)` replaces the old scheme of recovering span
