@@ -265,6 +265,129 @@ def render_remote(
     return {"summary": summary, "files": files}
 
 
+@app.function(
+    gpu=_RENDER_GPU,
+    cpu=8,
+    memory=131072,
+    timeout=5400,
+    volumes={
+        "/artifacts": RENDER_VOLUME,
+        "/root/.cache/torchwright_doom/compiled": CACHE_VOLUME,
+    },
+)
+def hf_export_remote(
+    config_name: str,
+    config_text: str,
+    cache_subdir: str,
+    n_steps: int,
+) -> dict:
+    """Convert the compiled DOOM artifact to a native HF bundle + prove parity.
+
+    Runs on the render GPU: the densified fp32 weights (~28 GB) plus the parity
+    rollout's KV cache need a big card. The full bundle (safetensors) is written
+    to RENDER_VOLUME (durable, ~28 GB — never synced back); only ``config.json``
+    and the parity/export report return to the local entrypoint.
+    """
+    import sys
+
+    if "/root" not in sys.path:
+        sys.path.insert(0, "/root")
+
+    import torch
+
+    from torchwright_doom.inference.config import (
+        apply_screen_env,
+        load_render_config,
+    )
+
+    config_path = _write_shipped_config(config_name, config_text)
+    config = load_render_config(config_path)
+    # Screen env BEFORE any vocab/embedding/scene/fixture import (the DOOM vocab
+    # is screen-sized at import time).
+    apply_screen_env(config)
+
+    from torchwright_doom.inference import hf_export
+
+    CACHE_VOLUME.reload()
+    cache_dir = f"/root/.cache/torchwright_doom/compiled/{cache_subdir}"
+    onnx_path = f"{cache_dir}/model.onnx"
+    save_dir = f"/artifacts/hf/{cache_subdir}"
+
+    # Build the parity prefill from the DOOM fixture (post-apply_screen_env).
+    from tests.prefill_fixture import TINY_BSP_SCENE, row_index
+
+    prefill_ids = [row_index(tt, vals) for tt, vals in TINY_BSP_SCENE]
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    parity = hf_export.check_parity(
+        cache_dir,
+        prefill_ids,
+        max_positions=n_steps,
+        device=device,
+        expiring_types=tuple(config.expiring_types),
+    )
+    export = hf_export.export_bundle(onnx_path, save_dir, config)
+    RENDER_VOLUME.commit()
+
+    from pathlib import Path as _P
+
+    config_json = (_P(save_dir) / "config.json").read_text()
+    files = sorted(p.name for p in _P(save_dir).glob("*") if p.is_file())
+    return {
+        "parity": parity,
+        "export": export,
+        "config_json": config_json,
+        "bundle_files": files,
+        "remote_bundle": save_dir,
+    }
+
+
+@app.local_entrypoint()
+def hf_export(
+    config: str = "configs/e1m1.yaml",
+    n_steps: int = 256,
+    out_dir: str = "out/hf_export",
+    verbose_compile: bool = False,
+):
+    """``make hf-export`` — convert the compiled DOOM artifact to a native HF
+    bundle on Modal and prove token-identical parity vs the ONNX oracle.
+
+    Compiles on a cache miss (same 64-CPU path as ``make compile``), then runs
+    the GPU export+parity. The 28 GB safetensors bundle stays in RENDER_VOLUME;
+    ``config.json`` + the report mirror to ``out_dir`` locally.
+    """
+    config_path = Path(config)
+    config_text = config_path.read_text()
+    cache_subdir = _compile_on_modal(config_path, verbose_compile)
+
+    print(f"[local] launching hf_export_remote cache_subdir={cache_subdir}")
+    result = hf_export_remote.remote(
+        config_path.name, config_text, cache_subdir, n_steps
+    )
+
+    local_dir = _HERE / out_dir
+    local_dir.mkdir(parents=True, exist_ok=True)
+    (local_dir / "config.json").write_text(result["config_json"])
+    import json as _json
+
+    (local_dir / "report.json").write_text(
+        _json.dumps(
+            {"parity": result["parity"], "export": result["export"]}, indent=2
+        )
+    )
+    parity = result["parity"]
+    print("\n=== HF export parity ===")
+    print(f"  token_identical: {parity['token_identical']}")
+    print(f"  first_divergence: {parity['first_divergence']}")
+    print(
+        f"  rows: oracle={parity['n_oracle_rows']} hf={parity['n_hf_rows']} "
+        f"(max_positions={parity['max_positions']}, prefill_len={parity['prefill_len']})"
+    )
+    print(f"  device: {parity['device']}  oracle_stopped: {parity['oracle_stopped']}")
+    print(f"\n[local] bundle files (remote {result['remote_bundle']}): {result['bundle_files']}")
+    print(f"[local] config.json + report.json -> {local_dir}")
+
+
 @app.local_entrypoint()
 def main(
     # Run-knob defaults live in the config's ``run:`` section — run_config
