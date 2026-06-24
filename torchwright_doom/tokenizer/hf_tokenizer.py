@@ -102,6 +102,7 @@ class DoomTokenizer(PreTrainedTokenizer):
             "tokenizer.display.token_label"
         )
         config = asset_config or DEFAULT_ASSET_CONFIG
+        self._asset_config = config
         # Surface knobs for the stock view: scene-relative coords, BAM angles,
         # readable WAD texture names. None changes the id stream.
         self._knobs: dict[str, Any] = dict(
@@ -160,6 +161,31 @@ class DoomTokenizer(PreTrainedTokenizer):
         return surface.decode(toks, **self._knobs)
 
     # --- serialization -----------------------------------------------------
+
+    def save_pretrained(
+        self,
+        save_directory: str | os.PathLike,
+        legacy_format: bool | None = None,
+        filename_prefix: str | None = None,
+        push_to_hub: bool = False,
+        **kwargs,
+    ) -> tuple[str, ...]:
+        """Emit the **self-contained, torch-free** tokenizer bundle: the standalone
+        ``tokenization_doom.DoomTokenizer`` plus the two frozen JSON artifacts,
+        loadable with only ``transformers`` (+ ``trust_remote_code``). Delegates to
+        :func:`freeze.export_bundle`, which freezes the pretty vocab + carrier
+        tables and routes ``custom_object_save`` through the standalone class.
+
+        This is deliberately *not* the ``PreTrainedTokenizer`` default (which would
+        copy *this* file — and so torch — into the bundle). The in-package
+        :meth:`save_vocabulary` still writes the tiny identity card for the
+        in-package self-reload validation path. The base-class ``legacy_format`` /
+        ``push_to_hub`` knobs don't apply to the frozen bundle and are ignored."""
+        from . import freeze
+
+        return tuple(
+            freeze.export_bundle(str(save_directory), asset_config=self._asset_config)
+        )
 
     def save_vocabulary(
         self, save_directory: str, filename_prefix: str | None = None
