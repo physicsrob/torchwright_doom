@@ -280,27 +280,19 @@ the graph by `table_lookup_2d`.
 
 ## Runtime
 
-The production runtime (`inference/`) drives the compiled transformer
-through the same autoregressive loop any chat model uses; these terms name
-its host-side machinery.
+The production runtime (`inference/`) loads the compiled artifact as a
+native HuggingFace `TorchwrightForCausalLM` and drives it through the same
+autoregressive loop any chat model uses; these terms name its host-side
+machinery.
 
-- **windowed KV cache** — a fixed-size key/value cache (`model.cache_window`
-  slots). Every committed row is either *permanent* (resident for the whole
-  run) or *expiring* (its slot may be recycled once the window fills),
-  decided purely by the row's token type (`kv_cache.py`; the certified
-  expiring set and its invariant are in `CLAUDE.md`, "Windowed KV cache").
+- **HF runtime** — `inference/hf_runtime.py` (`HfTokenRuntime`): the sole
+  production renderer. It converts the ONNX artifact to a standard
+  `transformers` causal LM (`convert_onnx_to_hf`) and steps it greedily over
+  a stock unbounded `DynamicCache` (the duck-typed `HfCache`), behind the
+  `generation.TokenRuntime` row-id seam.
 
-- **recycle** — reuse of an expiring row's cache slot once the window
-  fills. `alloc_slot` refuses to recycle a slot younger than the worst
-  certified read scope, so a still-needed expiring row is never evicted
-  (`kv_cache.min_recycle_distance_for`).
-
-- **writtenness mask** — the in-graph signal of which cache rows hold real
-  committed values vs unwritten slots, so the host's slot placement stays
-  invisible to the graph math (`compiled_model.py`, `kv_cache.py`).
-
-- **speculative decode / draft / reuse buffer** — the spec-decode loop
-  runs a cheap draft pass to propose several next tokens, then verifies
-  them in one batched model pass and keeps the accepted prefix. A partially
-  rejected draft tail is often still correct one step later, so it is held
-  in a *reuse buffer* and re-offered (`generation.spec_decode_rollout`).
+- **KV cache** — the unbounded host-owned key/value cache: slot == position,
+  the committed prefix is `[:length]`, committing raises `length`
+  (`kv_cache.py`). The earlier windowed / expiring / speculative-decode
+  machinery was retired with the move to the HF runtime (see `CLAUDE.md`,
+  "Production runtime").

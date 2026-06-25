@@ -16,7 +16,6 @@ from .config import (
     compile_cache_dir,
     resolve_wad_path,
 )
-from .onnx_runtime import OnnxTokenRuntime
 from .tokens_bridge import row_index
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -154,42 +153,6 @@ def load_debug_session(
         asset_config=config.asset_config(), wad_path=wad_path
     )
     return OnnxDebugSession(str(onnx_path), next_token, pos, providers=providers)
-
-
-def load_cached_runtime(
-    cache_dir: str | Path,
-    *,
-    enable_profiling: bool = False,
-    profile_dir: str | Path | None = None,
-    attention_buckets: list[int] | None = None,
-    expiring_types: tuple[str, ...] | None = None,
-) -> OnnxTokenRuntime:
-    import os
-
-    from .onnx_runtime import env_flag
-
-    providers = ["CPUExecutionProvider"] if env_flag("TWDOOM_FORCE_CPU") else None
-    # Windowed-cache expiry policy (runtime knob, no recompile): token
-    # type names whose rows may be recycled once the window fills.
-    # Resolution order: TWDOOM_EXPIRING_TYPES (comma-separated, ad-hoc
-    # override) > the ``expiring_types`` argument (the config field,
-    # RenderConfig.expiring_types) > pixel-only.  Default: pixel rows
-    # only — they publish no channels and are read only at offset <= 3,
-    # so evicting old ones is safe by construction; everything else
-    # stays resident.
-    env_types = os.environ.get("TWDOOM_EXPIRING_TYPES")
-    if env_types is not None:
-        expiring_types = tuple(t.strip() for t in env_types.split(",") if t.strip())
-    elif expiring_types is None:
-        expiring_types = ("pixel",)
-    return OnnxTokenRuntime(
-        Path(cache_dir) / "model.onnx",
-        providers=providers,
-        enable_profiling=enable_profiling,
-        profile_dir=profile_dir,
-        attention_buckets=attention_buckets,
-        expiring_types=expiring_types,
-    )
 
 
 def _write_render_meta(

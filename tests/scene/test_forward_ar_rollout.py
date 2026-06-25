@@ -123,11 +123,10 @@ def _compiled_rollout(prefill_ids: list[int], device) -> list[int]:
     """Free-run the compiled transformer: ids in, argmax out, id fed back.
 
     The gate owns its own AR loop: the shipped rollout harness
-    (``inference.generation``) speaks only the production owned-``KVCache``
-    protocol (and is covered there by ``tests/inference/test_spec_decode_logic.py``
-    + ``test_windowed_cache.py``), while ``compile_headless`` threads
-    grow-per-step KV tuples.  This test's job is the compiled-vs-exact-math
-    trajectory, so it drives ``compiled.step`` directly.
+    (``inference.generation``) threads a host-owned cache through ``step``,
+    while ``compile_headless`` threads grow-per-step KV tuples.  This test's
+    job is the compiled-vs-exact-math trajectory, so it drives
+    ``compiled.step`` directly.
     """
     compiled, _ = _build_compiled(device, d=_D, d_head=_D_HEAD, max_layers=200)
     terminal = row_index(NO_OP, {})

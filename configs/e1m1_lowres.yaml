@@ -15,10 +15,7 @@ region: {x1: 627.2, y1: -3760.0, x2: 1395.2, y2: -2800.0}
 textures:
   wall: [BROWN1, BROWN144, COMPUTE2, DOOR3, DOORSTOP, LITE3, STARTAN3, STEP6, SUPPORT2]
   flat: [CEIL3_5, FLAT14, FLAT5_5, FLOOR4_8, FLOOR7_1, F_SKY1]
-expiring_types: [pixel, setCursorX, setCursorY, setCursorDirectionX, setCursorDirectionY, wallColU, screenY, wallSpanMeta, clipUpdate, R_MapPlane.row]
 run:
-  mode: spec_decode
   max_positions: 61440
-  draft_window: 8
   prefill_chunk_size: 128
   pose: {x: 1056.0, y: -3616.0, angle: 64, viewz: 41.0}

@@ -1,25 +1,19 @@
 # THE config — the single committed configuration (see CLAUDE.md, "One
 # configuration").  Experiments copy it to /tmp and override CONFIG=.
 #
-# Render-job defaults (pose, mode, max positions, draft window, prefill
-# chunk) live in the config's `run:` section — NOT here.  The Makefile
-# passes a flag only when the variable is set explicitly
-# (e.g. `make run RENDER_MODE=pure_ar`), so it can never hold a stale
-# copy of a default.
+# Render-job defaults (pose, max positions, prefill chunk) live in the
+# config's `run:` section — NOT here.  The Makefile passes a flag only when
+# the variable is set explicitly (e.g. `make run RENDER_MAX_POSITIONS=8000`),
+# so it can never hold a stale copy of a default.
 CONFIG ?= configs/e1m1.yaml
 OUT_DIR ?= out/render
 # Modal GPU for render_remote (read at modal_render.py import as an env
-# var).  b200 | a100-80gb — B200 is the default: the captured decode is
-# bandwidth-bound (B200's ~4x HBM bandwidth maps ~directly to step time,
-# measured 14.3 ms + 0.522 us/slot x S_eff per width-1 step).  With the
-# windowed cache (~11.4 GB KV + ~17 GB weights) the A100 also has slack.
+# var).  b200 | a100-80gb — B200 is the default: the full frame is ~28 GB
+# fp32 weights plus a growing unbounded KV cache, and B200's 192 GB + high
+# HBM bandwidth render it fastest.
 RENDER_GPU ?= b200
 RENDER_PROGRESS_EVERY ?= 250
 PNG_ZOOM ?= 8
-# Attention-window bucket table (stride bucketing): comma-separated S_eff
-# list, e.g. RENDER_ATTENTION_BUCKETS=16384,32768,49152,65536.  A RUNTIME
-# knob (no recompile); empty = quarters of the model's cache_stride.
-RENDER_ATTENTION_BUCKETS ?=
 
 # Verbose compile is ON by default (streams the compiler's per-layer detail +
 # head-pruning summary to stdout); opt out with VERBOSE_COMPILE=0.
@@ -27,8 +21,6 @@ VERBOSE_COMPILE ?= 1
 _RENDER_VERBOSE_COMPILE := $(if $(filter-out 0,$(VERBOSE_COMPILE)),--verbose-compile)
 _RENDER_PNG := $(if $(PNG),--png)
 _RENDER_COMPARE := $(if $(COMPARE),--compare)
-_RENDER_PROFILE := $(if $(PROFILE),--profile)
-_RENDER_BUCKETS := $(if $(RENDER_ATTENTION_BUCKETS),--attention-buckets $(RENDER_ATTENTION_BUCKETS))
 _RENDER_COMPILE_ARGS = $(strip \
 	--config $(CONFIG) \
 	$(_RENDER_VERBOSE_COMPILE) \
@@ -39,18 +31,14 @@ _RENDER_RUN_ARGS = $(strip \
 	$(if $(RENDER_Y),--y $(RENDER_Y)) \
 	$(if $(RENDER_ANGLE),--angle $(RENDER_ANGLE)) \
 	$(if $(RENDER_VIEWZ),--viewz $(RENDER_VIEWZ)) \
-	$(if $(RENDER_MODE),--mode $(RENDER_MODE)) \
 	--out-dir $(OUT_DIR) \
 	$(if $(RENDER_MAX_POSITIONS),--max-positions $(RENDER_MAX_POSITIONS)) \
-	$(if $(RENDER_DRAFT_WINDOW),--draft-window $(RENDER_DRAFT_WINDOW)) \
 	$(if $(PREFILL_CHUNK_SIZE),--prefill-chunk-size $(PREFILL_CHUNK_SIZE)) \
 	--progress-every $(RENDER_PROGRESS_EVERY) \
 	--png-zoom $(PNG_ZOOM) \
 	$(_RENDER_PNG) \
 	$(_RENDER_COMPARE) \
 	$(_RENDER_VERBOSE_COMPILE) \
-	$(_RENDER_PROFILE) \
-	$(_RENDER_BUCKETS) \
 )
 _RENDER_MODAL_ARGS = $(strip \
 	$(_RENDER_RUN_ARGS) \
@@ -107,6 +95,31 @@ render-run run:
 .PHONY: render-run-local run-local
 render-run-local run-local:
 	uv run python -m torchwright_doom.inference run $(_RENDER_RUN_ARGS)
+
+# The production correctness gate is `make run COMPARE=1` (it scores the HF
+# render's coverage / within-option color against the pydoom reference and
+# writes the diff PNG). ~30 min/frame on the render GPU; too heavy for
+# per-commit `make test`, run manually.
+
+# Convert the compiled artifact to a native HF bundle (safetensors +
+# trust-remote-code modeling/config + DoomTokenizer) on Modal; the bundle is
+# the Hub publish path.
+.PHONY: hf-export
+hf-export:
+	@bash -c ' \
+		LOGFILE=/tmp/torchwright_doom-hf-export-$$(date +%Y%m%d-%H%M%S).log ; \
+		ln -sfn "$$LOGFILE" /tmp/torchwright_doom-hf-export.log ; \
+		echo "=== Log file: $$LOGFILE ===" | tee "$$LOGFILE" ; \
+		echo "=== HF export on Modal ===" | tee -a "$$LOGFILE" ; \
+		start=$$(date +%s) ; \
+		RENDER_GPU=$(RENDER_GPU) uv run modal run modal_render.py::hf_export \
+			--config $(CONFIG) $(_RENDER_VERBOSE_COMPILE) \
+			2>&1 | tee -a "$$LOGFILE" ; \
+		rc=$${PIPESTATUS[0]} ; \
+		end=$$(date +%s) ; \
+		echo "=== HF export finished in $$((end - start))s (exit $$rc) ===" | tee -a "$$LOGFILE" ; \
+		exit $$rc \
+	'
 
 .PHONY: test
 test: lint

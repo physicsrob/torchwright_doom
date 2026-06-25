@@ -1,13 +1,15 @@
 """Compile + render on Modal, with artifact sync-back.
 
     uv run modal run modal_render.py --config configs/e1m1.yaml
-    uv run modal run modal_render.py --config configs/e1m1.yaml --mode both --png --compare
+    uv run modal run modal_render.py --config configs/e1m1.yaml --png --compare
 
 Two remote stages: ``compile_remote`` (CPU-only, 64 cores so CP-SAT's parallel
 search gets real width; writes the ONNX into the cache volume) and
-``render_remote`` (A100-80GB — the full frame's KV footprint is too large for
-the local L4). The compile cache key is computed on the LOCAL machine because
-it embeds submodule git SHAs that don't exist inside a Modal container.
+``render_remote`` (a big GPU — the native HF model is ~28 GB fp32 weights plus
+an unbounded KV cache over the full frame). The render loads the artifact as a
+native ``TorchwrightForCausalLM`` (the production runtime). The compile cache
+key is computed on the LOCAL machine because it embeds submodule git SHAs that
+don't exist inside a Modal container.
 Artifacts (generated/reference/diff PNGs + token_dump.json) are written to a
 ``modal.Volume`` (durable; inspect later with ``modal volume get``) *and*
 returned so the local entrypoint mirrors them to ``out/<run>/`` on disk —
@@ -243,6 +245,8 @@ def render_remote(
     if "/root" not in sys.path:
         sys.path.insert(0, "/root")  # make the /root-mounted packages importable
 
+    import torch
+
     from torchwright_doom.inference.cli import run_config
 
     kwargs = {**kwargs, "config_path": _write_shipped_config(config_name, config_text)}
@@ -253,7 +257,8 @@ def render_remote(
     # container is render-only and never compiles.
     CACHE_VOLUME.reload()
     cache_dir = f"/root/.cache/torchwright_doom/compiled/{cache_subdir}"
-    kwargs = {**kwargs, "cache_dir": cache_dir}
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    kwargs = {**kwargs, "cache_dir": cache_dir, "device": device}
 
     out_dir = f"/artifacts/{run_id}"
     summary = run_config(out_dir=out_dir, **kwargs)
@@ -279,21 +284,18 @@ def hf_export_remote(
     config_name: str,
     config_text: str,
     cache_subdir: str,
-    n_steps: int,
 ) -> dict:
-    """Convert the compiled DOOM artifact to a native HF bundle + prove parity.
+    """Convert the compiled DOOM artifact to a native HF bundle.
 
-    Runs on the render GPU: the densified fp32 weights (~28 GB) plus the parity
-    rollout's KV cache need a big card. The full bundle (safetensors) is written
-    to RENDER_VOLUME (durable, ~28 GB — never synced back); only ``config.json``
-    and the parity/export report return to the local entrypoint.
+    Runs on the render GPU: the densified fp32 weights (~28 GB) need a big card.
+    The full bundle (safetensors) is written to RENDER_VOLUME (durable, ~28 GB —
+    never synced back); only ``config.json`` and the export report return to the
+    local entrypoint.
     """
     import sys
 
     if "/root" not in sys.path:
         sys.path.insert(0, "/root")
-
-    import torch
 
     from torchwright_doom.inference.config import (
         apply_screen_env,
@@ -313,19 +315,6 @@ def hf_export_remote(
     onnx_path = f"{cache_dir}/model.onnx"
     save_dir = f"/artifacts/hf/{cache_subdir}"
 
-    # Build the parity prefill from the DOOM fixture (post-apply_screen_env).
-    from tests.prefill_fixture import TINY_BSP_SCENE, row_index
-
-    prefill_ids = [row_index(tt, vals) for tt, vals in TINY_BSP_SCENE]
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    parity = hf_export.check_parity(
-        cache_dir,
-        prefill_ids,
-        max_positions=n_steps,
-        device=device,
-        expiring_types=tuple(config.expiring_types),
-    )
     export = hf_export.export_bundle(onnx_path, save_dir, config)
     RENDER_VOLUME.commit()
 
@@ -334,7 +323,6 @@ def hf_export_remote(
     config_json = (_P(save_dir) / "config.json").read_text()
     files = sorted(p.name for p in _P(save_dir).glob("*") if p.is_file())
     return {
-        "parity": parity,
         "export": export,
         "config_json": config_json,
         "bundle_files": files,
@@ -345,25 +333,23 @@ def hf_export_remote(
 @app.local_entrypoint()
 def hf_export(
     config: str = "configs/e1m1.yaml",
-    n_steps: int = 256,
     out_dir: str = "out/hf_export",
     verbose_compile: bool = False,
 ):
     """``make hf-export`` — convert the compiled DOOM artifact to a native HF
-    bundle on Modal and prove token-identical parity vs the ONNX oracle.
+    bundle on Modal (the Hub publish path).
 
     Compiles on a cache miss (same 64-CPU path as ``make compile``), then runs
-    the GPU export+parity. The 28 GB safetensors bundle stays in RENDER_VOLUME;
-    ``config.json`` + the report mirror to ``out_dir`` locally.
+    the GPU export. The 28 GB safetensors bundle stays in RENDER_VOLUME;
+    ``config.json`` + the report mirror to ``out_dir`` locally. Correctness is
+    gated separately by ``make hf-render`` (the full render vs pydoom).
     """
     config_path = Path(config)
     config_text = config_path.read_text()
     cache_subdir = _compile_on_modal(config_path, verbose_compile)
 
     print(f"[local] launching hf_export_remote cache_subdir={cache_subdir}")
-    result = hf_export_remote.remote(
-        config_path.name, config_text, cache_subdir, n_steps
-    )
+    result = hf_export_remote.remote(config_path.name, config_text, cache_subdir)
 
     local_dir = _HERE / out_dir
     local_dir.mkdir(parents=True, exist_ok=True)
@@ -371,123 +357,18 @@ def hf_export(
     import json as _json
 
     (local_dir / "report.json").write_text(
-        _json.dumps(
-            {"parity": result["parity"], "export": result["export"]}, indent=2
-        )
+        _json.dumps({"export": result["export"]}, indent=2)
     )
-    parity = result["parity"]
-    print("\n=== HF export parity ===")
-    print(f"  token_identical: {parity['token_identical']}")
-    print(f"  first_divergence: {parity['first_divergence']}")
+    print("\n=== HF export ===")
+    export = result["export"]
+    print(f"  vocab_size: {export['vocab_size']}  n_layers: {export['n_layers']}")
     print(
-        f"  rows: oracle={parity['n_oracle_rows']} hf={parity['n_hf_rows']} "
-        f"(max_positions={parity['max_positions']}, prefill_len={parity['prefill_len']})"
+        f"  bos_token_id: {export['bos_token_id']}  eos_token_id: {export['eos_token_id']}"
     )
-    print(f"  device: {parity['device']}  oracle_stopped: {parity['oracle_stopped']}")
-    print(f"\n[local] bundle files (remote {result['remote_bundle']}): {result['bundle_files']}")
+    print(
+        f"\n[local] bundle files (remote {result['remote_bundle']}): {result['bundle_files']}"
+    )
     print(f"[local] config.json + report.json -> {local_dir}")
-
-
-@app.function(
-    gpu=_RENDER_GPU,
-    cpu=8,
-    memory=131072,
-    timeout=7200,
-    volumes={
-        "/artifacts": RENDER_VOLUME,
-        "/root/.cache/torchwright_doom/compiled": CACHE_VOLUME,
-    },
-)
-def hf_render_remote(
-    config_name: str,
-    config_text: str,
-    cache_subdir: str,
-    max_positions: int,
-    png_zoom: int,
-) -> dict:
-    """Render one full DOOM frame with the native HF model and score it against
-    the pydoom reference renderer (the production ground-truth gate).
-
-    Runs on the render GPU (full ~42k-token greedy rollout, ~28 GB fp32 weights +
-    growing unbounded KV cache). The generated/reference/diff PNGs sync back.
-    """
-    import sys
-    from pathlib import Path as _P
-
-    if "/root" not in sys.path:
-        sys.path.insert(0, "/root")
-
-    import torch
-
-    from torchwright_doom.inference.config import (
-        apply_screen_env,
-        load_render_config,
-    )
-
-    config_path = _write_shipped_config(config_name, config_text)
-    config = load_render_config(config_path)
-    apply_screen_env(config)  # BEFORE any vocab/scene import
-
-    from torchwright_doom.inference import hf_export
-
-    CACHE_VOLUME.reload()
-    cache_dir = f"/root/.cache/torchwright_doom/compiled/{cache_subdir}"
-    out_dir = f"/artifacts/hf_render/{cache_subdir}"
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    report = hf_export.render_frame(
-        cache_dir,
-        config,
-        out_dir,
-        device=device,
-        max_positions=max_positions,
-        base_dir=str(_P(config_path).parent),
-        png_zoom=png_zoom,
-        progress_every=1000,
-    )
-    RENDER_VOLUME.commit()
-
-    files = {p.name: p.read_bytes() for p in sorted(_P(out_dir).glob("*.png"))}
-    return {"report": report, "files": files}
-
-
-@app.local_entrypoint()
-def hf_render(
-    config: str = "configs/e1m1.yaml",
-    max_positions: int | None = None,
-    out_dir: str = "out/hf_render",
-    png_zoom: int = 8,
-    verbose_compile: bool = False,
-):
-    """``make hf-render`` — render one full frame with the native HF model on
-    Modal and compare it to the pydoom reference (same gate as production).
-
-    Compiles on a cache miss, then runs the GPU rollout + decode + compare. The
-    generated/reference/diff PNGs mirror to ``out_dir`` locally.
-    """
-    config_path = Path(config)
-    config_text = config_path.read_text()
-    cache_subdir = _compile_on_modal(config_path, verbose_compile)
-
-    from torchwright_doom.inference.config import load_render_config
-
-    rc = load_render_config(config_path)
-    mp = rc.run.max_positions if max_positions is None else max_positions
-
-    print(f"[local] launching hf_render_remote cache_subdir={cache_subdir} max_positions={mp}")
-    result = hf_render_remote.remote(
-        config_path.name, config_text, cache_subdir, mp, png_zoom
-    )
-
-    local_dir = _HERE / out_dir
-    local_dir.mkdir(parents=True, exist_ok=True)
-    for name, data in result["files"].items():
-        (local_dir / name).write_bytes(data)
-    r = result["report"]
-    print("\n=== HF render ===")
-    print(f"  rows: {r['n_rows']}  stopped: {r['stopped']}  in {r['seconds']:.0f}s")
-    print("\n" + r["report_text"])
-    print(f"\n[local] frames -> {local_dir} : {sorted(result['files'])}")
 
 
 @app.local_entrypoint()
@@ -499,19 +380,15 @@ def main(
     y: float | None = None,
     angle: int | None = None,
     viewz: float | None = None,
-    mode: str | None = None,
     out_dir: str = "out/render",
     run_name: str = "",
     max_positions: int | None = None,
-    draft_window: int | None = None,
     prefill_chunk_size: int | None = None,
     progress_every: int = 250,
     png: bool = False,
     compare: bool = False,
     png_zoom: int = 8,
     verbose_compile: bool = False,
-    profile: bool = False,
-    attention_buckets: str = "",
 ):
     config_path = Path(config)
     # Shipped by VALUE (see _write_shipped_config): /tmp variant configs
@@ -534,10 +411,9 @@ def main(
     rid_x = run.pose.x if x is None else x
     rid_y = run.pose.y if y is None else y
     rid_angle = run.pose.angle if angle is None else angle
-    rid_mode = run.mode if mode is None else mode
     run_id = (
         run_name
-        or f"{config_path.stem}__x{rid_x:g}_y{rid_y:g}_a{rid_angle}__{rid_mode}"
+        or f"{config_path.stem}__x{rid_x:g}_y{rid_y:g}_a{rid_angle}"
         f"__{int(time.time())}"
     )
     kwargs = dict(
@@ -545,19 +421,13 @@ def main(
         y=y,
         angle=angle,
         viewz=viewz,
-        mode=mode,
         max_positions=max_positions,
-        draft_window=draft_window,
         prefill_chunk_size=prefill_chunk_size,
         progress_every=progress_every,
         png=png,
         compare_images=compare,
         png_zoom=png_zoom,
         verbose_compile=verbose_compile,
-        profile=profile,
-        # Comma-separated stride-bucket table; run_config parses it.  A
-        # runtime knob — deliberately NOT in the compile payload/key.
-        attention_buckets=attention_buckets or None,
     )
     print(f"[local] launching render_remote run_id={run_id} kwargs={kwargs}")
     result = render_remote.remote(

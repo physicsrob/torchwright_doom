@@ -1,24 +1,22 @@
-"""History-conditioned AR drafter for the implementation.
+"""The reference AR-token state machine for the implementation.
 
-State-machine drafter for AR-phase token prediction. The drafter holds
-explicit protocol state, advances it on each ``consume(actual)``, and
-returns the canonical next emission via ``next_draft()``. There is no
-precomputed plan — every prediction is conditioned on the history fed
-in via ``consume``, so a structural divergence (e.g. an FOV-edge bbox
-the implementation visits but exact math culls) costs one mispredict
-instead of cascading through the rollout.
+State machine for AR-phase token prediction. It holds explicit protocol
+state, advances it on each ``consume(actual)``, and returns the canonical
+next emission via ``next_draft()``. There is no precomputed plan — every
+prediction is conditioned on the history fed in via ``consume``, so a
+structural divergence (e.g. an FOV-edge bbox the implementation visits but
+exact math culls) costs one mispredict instead of cascading through the
+rollout.
 
 Public contract:
 
 - ``ARDrafter(scene, state)`` — constructor.
 - ``next_draft() -> Token | None`` — peek the canonical next emission.
 - ``consume(actual)`` — advance state by what the impl actually emitted.
-- ``snapshot()`` / ``rollback(snap)`` — for the runtime's draft-decode
-  K-batch lookahead. O(state-size); no consume-history replay.
 
-The main consumers are ``test_pixel_render`` (fresh-rollout validation)
-and the runtime's ``CacheWithReferenceFallback`` (consume-aware fallback
-after warm-cache exhaustion / divergence).
+Its public entry point is :func:`expected_ar_tokens` — the canonical token
+sequence the graph gates teacher-force and compare against. (The speculative
+decode path this once also drove is retired.)
 
 **Numerical-divergence philosophy.** The implementation uses PWL
 approximations — the drafter does not try to mirror them. ``consume``
@@ -2722,7 +2720,15 @@ class _FlatScanState:
 
 
 class ARDrafter:
-    """State-machine drafter with O(1)-style snapshot/rollback."""
+    """The reference AR-token state machine: the plain-Python generator that
+    emits DOOM's render-token stream one token at a time (``next_draft`` /
+    ``consume``).
+
+    This is the engine behind :func:`expected_ar_tokens` — the canonical token
+    sequence the graph gates teacher-force and compare against. The speculative
+    decode path it once also served is retired; it is now purely the reference
+    renderer's token-level counterpart.
+    """
 
     def __init__(self, scene: Scene, state: GameState) -> None:
         md = scene.map_data
@@ -2852,30 +2858,6 @@ class ARDrafter:
         if actual.type == DONE or flat_scan.done:
             self._done_consumed = True
 
-    def snapshot(self):
-        return copy.deepcopy(
-            (
-                self._ctx,
-                self._side_idx,
-                self._side_phase,
-                self._direction_y_emitted,
-                self._root_started,
-                self._flat_scan,
-                self._done_consumed,
-            )
-        )
-
-    def rollback(self, snap) -> None:
-        (
-            self._ctx,
-            self._side_idx,
-            self._side_phase,
-            self._direction_y_emitted,
-            self._root_started,
-            self._flat_scan,
-            self._done_consumed,
-        ) = snap
-
 
 # ---- Public entry points ----------------------------------------------------
 
@@ -2897,150 +2879,3 @@ def expected_ar_tokens(scene: Scene, state: GameState) -> list[Token]:
         # Advance with the prediction itself as feedback (no resync).
         drafter.consume(tok)
     return out
-
-
-class CacheWithReferenceFallback:
-    """Drafter starting from a cached token list, swapping to a
-    consume-aware fallback drafter on the first cache-vs-actual
-    divergence (or when the cache exhausts before the rollout ends).
-
-    Closes ``StaticDrafter``'s wedge case: a one-token misaligned cache
-    rejects every subsequent K-batch, committing only the bonus row,
-    which at K=48 runs (K+1)x slower than per-token AR. This wrapper
-    detects the mismatch on the first divergent ``consume(actual)``,
-    constructs / aligns the fallback drafter by replaying the consume
-    history into it, and from that point on uses the fallback's
-    consume-driven resync (with its own per-batch K) for the rest of
-    the rollout.
-
-    The cached fast path runs at ``k_cached`` (default 48) — the
-    byte-exact-cache regime where every draft accepts. After a swap,
-    the fallback runs at ``k_fallback`` (default 16) — the state-machine
-    fallback keeps structural predictions aligned, so a moderate window
-    reduces Python batch overhead without wasting too much rejected
-    tail. The wrapper enforces the per-mode K by returning ``None``
-    from ``next_draft`` once the in-batch limit hits; the runtime
-    treats that as "no more drafts" and proceeds with however many it
-    got.
-
-    **This silently overrides the ``draft_window`` passed to ``run()``.**
-    ``draft_window`` is only an upper bound (see ``api.forward.run``); the
-    realized batch width is ``min(draft_window, k_cached_or_k_fallback)``.
-    So ``run(..., draft_window=48)`` wrapped in this drafter still batches
-    only ``k_fallback`` (=16) fresh drafts on the cold path — the cap that
-    actually governs cold-path throughput lives *here*, not at the call
-    site.
-
-    Cursor convention: ``_idx`` is the absolute position-in-rollout
-    that both ``cached`` and the fallback's predictions index by.
-    Swapping mid-rollout doesn't require re-aligning the cursor —
-    the same counter advances through either source.
-
-    The fallback is fed only once the swap fires (lazily). Until
-    then the wrapper accumulates the consume history independently;
-    at swap time the history is replayed into the fallback so its
-    next prediction rides on the implementation's actual rollout.
-    Snapshots always capture the fallback's state too, so a
-    spec-phase swap (``next_draft`` notices cache exhaustion mid-
-    batch) is correctly undone by the runtime's rollback even when
-    the snapshot was taken in cached mode.
-    """
-
-    def __init__(
-        self,
-        cached: list[Token] | None,
-        fallback,  # any Drafter — typically ARDrafter
-        *,
-        k_cached: int = 48,
-        k_fallback: int = 16,
-    ) -> None:
-        self._cached = list(cached) if cached else []
-        self._fallback = fallback
-        self._using_fallback = not self._cached
-        self._idx = 0
-        self._in_batch = 0
-        self._consume_history: list[Token] = []
-        self._k_cached = k_cached
-        self._k_fallback = k_fallback
-        self._fallback_start_idx = 0 if self._using_fallback else None
-        self._fallback_reason = "no_cache" if self._using_fallback else None
-
-    def _swap_to_fallback(self, reason: str) -> None:
-        """Replay consume history into the fallback drafter and switch.
-
-        Idempotent; calling after the swap has already fired is a no-op.
-        """
-        if self._using_fallback:
-            return
-        for tok in self._consume_history:
-            self._fallback.consume(tok)
-        self._using_fallback = True
-        self._fallback_start_idx = self._idx
-        self._fallback_reason = reason
-
-    def next_draft(self) -> Token | None:
-        if not self._using_fallback and self._idx >= len(self._cached):
-            self._swap_to_fallback("cache_exhausted")
-        k_limit = self._k_fallback if self._using_fallback else self._k_cached
-        if self._in_batch >= k_limit:
-            return None
-        if self._using_fallback:
-            d = self._fallback.next_draft()
-            if d is None:
-                return None
-            self._in_batch += 1
-            return d
-        self._in_batch += 1
-        return self._cached[self._idx]
-
-    def consume(self, actual: Token) -> None:
-        self._consume_history.append(actual)
-        if not self._using_fallback:
-            if self._idx >= len(self._cached) or self._cached[self._idx] != actual:
-                self._swap_to_fallback("cache_mismatch")
-        else:
-            self._fallback.consume(actual)
-        self._idx += 1
-
-    def stats(self) -> dict[str, object]:
-        fallback_start = self._fallback_start_idx
-        if fallback_start is None:
-            cache_committed = self._idx
-            fallback_committed = 0
-        else:
-            cache_committed = min(self._idx, fallback_start)
-            fallback_committed = max(0, self._idx - fallback_start)
-        return {
-            "cached_tokens": len(self._cached),
-            "committed_tokens": self._idx,
-            "cache_committed_tokens": cache_committed,
-            "fallback_committed_tokens": fallback_committed,
-            "using_fallback": self._using_fallback,
-            "fallback_start_idx": fallback_start,
-            "fallback_reason": self._fallback_reason,
-            "k_cached": self._k_cached,
-            "k_fallback": self._k_fallback,
-        }
-
-    def snapshot(self) -> tuple[int, bool, int, object, int | None, str | None]:
-        self._in_batch = 0
-        return (
-            self._idx,
-            self._using_fallback,
-            len(self._consume_history),
-            self._fallback.snapshot(),
-            self._fallback_start_idx,
-            self._fallback_reason,
-        )
-
-    def rollback(
-        self, snap: tuple[int, bool, int, object, int | None, str | None]
-    ) -> None:
-        idx, using_fb, hist_len, fb_snap, fb_start_idx, fb_reason = snap
-        self._idx = idx
-        self._using_fallback = using_fb
-        del self._consume_history[hist_len:]
-        self._fallback.rollback(fb_snap)
-        self._fallback_start_idx = fb_start_idx
-        self._fallback_reason = fb_reason
-        self._in_batch = 0

@@ -88,9 +88,9 @@ def teacher_forced_scan(
     hard divergence (under the J2 bars) at AR positions ``>= begin``.
 
     ``compiled`` is an :class:`~torchwright.debug.onnx_debug.OnnxDebugSession`
-    (the disabled-memory-planning debug session), **not** the production
-    ``OnnxTokenRuntime``: its ``empty_past()`` takes no ``max_len`` (the bare
-    call below is correct), and it materializes full per-chunk logits.
+    (the disabled-memory-planning debug session), **not** the production HF
+    runtime: its ``empty_past()`` takes no ``max_len`` (the bare call below is
+    correct), and it materializes full per-chunk logits.
 
     The pass threads the KV cache in ``chunk_size``-row chunks — semantically
     identical to one wide forward (same mask geometry; production prefill is

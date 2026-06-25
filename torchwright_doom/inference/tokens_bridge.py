@@ -9,9 +9,9 @@ each id through its in-graph ``Embedding``; ``rows_to_input`` builds that input.
 Decode is ``argmax(out @ W_EMBED.t())`` -> a row index -> ``(TokenType, values)``
 via ``TOKEN_VOCAB.row_to_token``.
 
-The vendored drafter (``torchwright_doom.pydoom``) emits NATIVE ``Token``s, so the
-speculative-decode crossings (:func:`token_to_row`, :func:`row_to_token`) are a
-direct round-trip with no name bridge.
+Native ``Token`` <-> row crossings (:func:`token_to_row`, :func:`row_to_token`)
+are a direct structural round-trip with no name bridge — used by the
+``DoomTokenizer`` (encode/decode) and the bos/eos resolution in ``hf_export``.
 """
 
 from __future__ import annotations
@@ -93,29 +93,23 @@ def rows_to_input(rows) -> torch.Tensor:
     return torch.tensor([[float(r)] for r in rows], dtype=torch.float32)
 
 
-# --- row <-> native Token (the spec-decode accept / correct crossings) ----
+# --- row <-> native Token ---
 #
-# The vendored drafter emits native ``Token``s and the compiled artifact speaks
-# ``W_EMBED`` rows. Token identity is by structure (same type + slot values), so
-# the round-trip is direct.
+# Token identity is by structure (same type + slot values), so the round-trip
+# between a native ``Token`` and its ``W_EMBED`` row index is direct. Used by
+# the ``DoomTokenizer`` and bos/eos resolution.
 
 
 def token_to_row(tok: Token) -> int:
-    """Encode a native ``Token`` to its ``W_EMBED`` row index.
-
-    The speculative-decode accept test is exactly
-    ``predicted_row == token_to_row(drafted_token)`` — "token-identical" means
-    "same row id".
-    """
+    """Encode a native ``Token`` to its ``W_EMBED`` row index."""
     return row_index(tok.type, dict(tok.values))
 
 
 def row_to_token(row: int) -> Token:
     """Decode a ``W_EMBED`` row index back to a native ``Token``.
 
-    Feeds ``drafter.consume`` the model's own correction/bonus emission (the
-    re-sync). Slot values round-trip through the same value-range quantization the
-    drafter encodes with.
+    Slot values round-trip through the same value-range quantization used to
+    encode them.
     """
     rtype, values = TOKEN_VOCAB.row_to_token[row]
     return Token(rtype, dict(values))

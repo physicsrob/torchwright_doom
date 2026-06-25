@@ -91,10 +91,12 @@ Rough layout of `torchwright_doom/`:
   (light levels and colormaps).
 - **Graph infrastructure** — `past` / `attention_handles` (reading
   previously-emitted tokens) and `std` (the helper-op shim).
-- **Runtime** — `inference/` (the production runtime: ONNX session +
-  CUDA-graph capture in `onnx_runtime`, windowed KV cache in
-  `kv_cache`, generation loops in `generation`, compile cache, config,
-  CLI) and `prompt/` (prefill prompt construction from the WAD scene).
+- **Runtime** — `inference/` (the production runtime: the compiled ONNX
+  artifact is loaded as a native HuggingFace `TorchwrightForCausalLM` in
+  `hf_runtime`, driven by the generation loops in `generation` over the
+  unbounded `KVCache` in `kv_cache`; plus `hf_export` (HF bundle + the
+  render-vs-pydoom gate), compile cache, config, CLI) and `prompt/`
+  (prefill prompt construction from the WAD scene).
 
 **Reading path** for one `forward()` pass, read side → write side:
 `vocab` / `tokens` → `embedding` / `extract` → `scene_tokens` /
@@ -165,55 +167,47 @@ stop and use a /tmp variant instead.
 The umbrella Makefile proxies these defaults — change them in lockstep
 or the stale copy bites (it has).
 
-# Windowed KV cache — the protocol invariant
+# Production runtime — a standard HuggingFace transformer
 
-The compiled model uses a fixed-size windowed KV cache
-(`model.cache_window`): every committed row is PERMANENT (resident for
-the whole run) or EXPIRING (its slot recycles once the window fills),
-decided by token type at the inference layer (the
-`expiring_types` config field, default `[pixel]`; the
-`TWDOOM_EXPIRING_TYPES` env var overrides for ad-hoc experiments;
-never a compile parameter).
+The compiled artifact is rendered by loading it as a native
+HuggingFace `TorchwrightForCausalLM` (`inference/hf_runtime.py`,
+`HfTokenRuntime`) and running the validated generation loops in
+`inference/generation.py` over an unbounded KV cache. It is, with no
+asterisk, a standard `transformers` causal LM: integer `input_ids` in,
+logits out, greedy `argmax`, a stock `DynamicCache`. The host copies
+each output token to the next input and blits pixel tokens — the dumb
+host principle, unchanged.
 
-This rests on one protocol invariant: **no attention read may target
-an expiring-type row at long range.** The certified expiring set
-(production default in `configs/e1m1.yaml`; full census in the
-umbrella's `plan_tier1_expiry.md`, gated token-identical at the
-production config 2026-06-12):
+The earlier production engine — an ONNX runtime with a windowed /
+circular KV cache, tier-1 expiry certification, speculative decode, and
+CUDA-graph capture — was **retired**. The HF model is now the sole
+renderer. The trade-offs were accepted deliberately:
 
-- `pixel` — publishes zero channels, read only at offsets <= 3
-- `setCursorY`, `setCursorDirectionX/Y` — publish nothing, offsets <= 2
-- `wallColU` — one value channel, read only at offset -2
-- `setCursorX` — cursor markers, read within one wall column / one
-  flat span (<= ~164 positions)
-- `screenY` — the wall-column state marker, consumed within its own
-  column cycle (<= ~292)
-- `wallSpanMeta` — span-state marker, consumed within its span
-  (<= ~619 conservative)
-- `clipUpdate` — control marker, consumed at distance 1 (the clip
-  record itself lives on the FOLLOWING screenRange row, which is
-  permanent)
-- `R_MapPlane.row` — flat-span marker, read within its pixel run
-  (<= ~128)
+- **greedy only** (no speculative decode),
+- an **unbounded KV cache** (no windowing / slot recycling),
+- **~30 min/frame** and **~28 GB dense fp32 weights**,
 
-Certified NON-expirable, do not add: `screenRange` (per-column clip
-memory + visplane occupancy, read at frame length by the flat pass),
-`planeMark`, the BSP spine, `value` (mixed-provenance payloads), and
-`R_MakeSpans.col`/`.closeSlot` (bounded by one visplane draw, but
-that reach is scene-dependent and ~6.4k positions on the production
-frame — it competes with the recycle pool).
+in exchange for the large complexity reduction and the narrative win.
 
-If you design a protocol change that reads any certified type's
-history at a distance (sprites reading per-column clip state or
-revisiting pixels, post-processing, masked textures), the windowed
-cache breaks SILENTLY at design time and only shows up as token
-divergence in gates — either rethink the read, or remove that type
-from `expiring_types` and re-budget `cache_window`. The same bar
-applies before adding any other type to the expiring set: certify
-that nothing reads that type's rows beyond the resident pool, then
-gate against a pixel-only baseline (the /tmp-variant pattern above;
-pure-AR legs in fresh processes — see plan_tier1_expiry.md "Gate
-findings" for why mode=both legs can't gate this).
+**The compiler's ONNX export and the ONNX→HF convert step are
+unchanged** — the HF path still consumes the ONNX artifact; only the
+ONNX *runtime* went away. `model.cache_window` is still a compile-cache
+key (the windowed scatter stays baked in the ONNX graph), but the HF
+runtime ignores it. `expiring_types` is vestigial (parsed, unread),
+slated for removal in a follow-up.
+
+**Correctness gate.** The graph-level gates
+(`tests/scene/test_flat_pixel_oracle.py`, `test_forward_ar_rollout.py`)
+are runtime-agnostic and stay in `make test`. The runtime-level gate is
+the full HF render scored against pydoom — `make run COMPARE=1` (it scores
+coverage / within-option color and writes the diff PNG), ~30 min on Modal,
+too heavy for per-commit pytest. Run manually at both `configs/e1m1.yaml`
+(320×200) and `configs/e1m1_lowres.yaml` (160×100).
+
+**Known ceiling.** The unbounded cache is why ~30-min single frames fit
+a big GPU today; a much larger frame or a multi-frame / video rollout
+would reintroduce the need for a bounded cache (the reason windowing
+once existed). Record that trade-off if you revisit it.
 
 # Testing
 

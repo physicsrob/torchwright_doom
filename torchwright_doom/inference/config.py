@@ -53,28 +53,12 @@ class ModelConfig:
     # busts every compile-cache key once (it enters the payload via
     # asdict(config.model)) — intended.
     cache_stride: int = 12288
-    # Windowed-cache protocol (the ring plan, ring_idea.md, revised to
-    # the permanent/expiring policy): the committed KV cache becomes a
-    # fixed cache_window-slot host-managed window.  Every committed row
-    # is either PERMANENT (resident for the whole run — the prefill and
-    # all protocol rows) or EXPIRING (recyclable once the window fills
-    # — by default only PIXEL rows, which publish no channels and are
-    # read only at offset <= 3).  Attention width is CONSTANT
-    # (cache_window + pass width) for the whole frame.  None = the
-    # unbounded static cache above.  When set, cache_stride is IGNORED
-    # (the window IS the slot count; the exporter rejects both).
-    # Positions stay absolute and run to max_seq_len regardless.
-    # SIZE IT for the run's permanent rows: prefill + non-expiring
-    # rollout (measured 160x100 e1m1: 3,613 + ~9.5k -> 16384 is
-    # comfortable), plus slack for the resident-pixel pool; the runtime
-    # fails loud on saturation.  Output equals the unbounded cache as
-    # long as no read targets an evicted (expiring-type) row — a far
-    # smaller condition than the old per-channel span condition.
-    # Enters the compile-cache key via asdict like every model field
-    # (and like cache_stride, adding it busts every key once).
-    # The expiring-type set itself is a RUNTIME knob (the top-level
-    # config field RenderConfig.expiring_types, overridable via
-    # TWDOOM_EXPIRING_TYPES), not a compile parameter.
+    # A compile-time parameter the graph still bakes (a windowed-scatter
+    # slot count in the ONNX graph), retained as a compile-cache key so the
+    # committed artifacts don't need a recompile.  The production HF runtime
+    # IGNORES it — the KV cache is unbounded (the windowed/expiring slot
+    # protocol it once configured was retired).  None = no windowed scatter.
+    # Enters the compile-cache key via asdict like every model field.
     cache_window: int | None = None
 
 
@@ -111,24 +95,15 @@ class RunConfig:
     field-by-field; the dataclass defaults apply when a config omits the
     section.  Single-sourcing these here is what removed the Makefile /
     cli.py / modal_render.py three-way default drift (a bare direct
-    invocation used to truncate the frame and silently disable
-    speculative decoding).
+    invocation used to truncate the frame).
     """
 
-    mode: str = "spec_decode"
-    # 61440 covers a full 160x100 frame (25,350 tokens measured) with
-    # ample headroom; the windowed cache bounds SLOTS, not positions, so
-    # the cap is the pos-encoding table (max_seq_len 65536), and an
-    # oversized demand makes empty_past() reject before prefill.
+    # 61440 covers a full 320x200 frame with ample headroom; the cap is the
+    # pos-encoding table (max_seq_len 65536), and an oversized demand makes
+    # empty_past() reject before prefill.
     max_positions: int = 61440
-    # Speculative-decode draft window; the spec/pure contract keeps the
-    # emitted stream equivalent, so speculation is on by default.
-    draft_window: int = 8
-    # 128-row chunks keep the per-layer (n_heads, chunk, S) prefill
-    # logits transient small for the 64k-stride config on an 80 GB A100
-    # (~8.6 GB at nh=128/S=65536; the int32 clamp alone allows 255 rows
-    # = ~17 GB, leaving only ~4 GB headroom there).  Cost: a few extra
-    # seconds of prefill.  Semantically identical to a single pass.
+    # Prefill chunk size: a memory knob that bounds the per-pass transient
+    # activations.  Semantically identical to a single pass.
     prefill_chunk_size: int = 128
     pose: PoseConfig = PoseConfig()
 
@@ -153,14 +128,8 @@ class RenderConfig:
     model: ModelConfig = ModelConfig()
     region: RegionConfig = RegionConfig()
     textures: TextureConfig = TextureConfig()
-    # Windowed-cache expiry policy: token type names whose rows may be
-    # recycled once the window fills (see ModelConfig.cache_window).  A
-    # RUNTIME knob — deliberately NOT part of canonical_compile_payload,
-    # so changing it never recompiles.  TWDOOM_EXPIRING_TYPES (comma-
-    # separated) still overrides at load time for ad-hoc experiments.
-    expiring_types: tuple[str, ...] = ("pixel",)
-    # Render-job runtime defaults (optional ``run:`` section) — also a
-    # RUNTIME knob set, never part of the compile payload.
+    # Render-job runtime defaults (optional ``run:`` section) — a RUNTIME knob
+    # set, never part of the compile payload.
     run: RunConfig = RunConfig()
 
     @property
@@ -177,9 +146,7 @@ class ResolvedRunArgs:
     y: float
     angle: int
     viewz: float
-    mode: str
     max_positions: int
-    draft_window: int
     prefill_chunk_size: int
 
 
@@ -190,17 +157,14 @@ def resolve_run_args(
     y: float | None = None,
     angle: int | None = None,
     viewz: float | None = None,
-    mode: str | None = None,
     max_positions: int | None = None,
-    draft_window: int | None = None,
     prefill_chunk_size: int | None = None,
 ) -> ResolvedRunArgs:
     """Resolve render-job knobs: explicit caller value > config ``run:``.
 
     ``None`` means "the caller didn't say" — every entry point (Makefile,
     modal_render, argparse) passes ``None`` unless the user set the flag,
-    so the config stays the single default source.  An explicit zero (e.g.
-    ``--draft-window 0``) is a real value and overrides the config.
+    so the config stays the single default source.
     """
     run = config.run
     return ResolvedRunArgs(
@@ -208,11 +172,9 @@ def resolve_run_args(
         y=run.pose.y if y is None else float(y),
         angle=run.pose.angle if angle is None else int(angle),
         viewz=run.pose.viewz if viewz is None else float(viewz),
-        mode=run.mode if mode is None else str(mode),
         max_positions=(
             run.max_positions if max_positions is None else int(max_positions)
         ),
-        draft_window=run.draft_window if draft_window is None else int(draft_window),
         prefill_chunk_size=(
             run.prefill_chunk_size
             if prefill_chunk_size is None
@@ -277,11 +239,8 @@ def load_render_config(path: str | Path) -> RenderConfig:
             wall=tuple(str(v) for v in textures.get("wall", WALL_TEXTURE_NAMES)),
             flat=tuple(str(v) for v in textures.get("flat", FLAT_NAMES)),
         ),
-        expiring_types=tuple(str(v) for v in data.get("expiring_types", ["pixel"])),
         run=RunConfig(
-            mode=str(run.get("mode", run_defaults.mode)),
             max_positions=int(run.get("max_positions", run_defaults.max_positions)),
-            draft_window=int(run.get("draft_window", run_defaults.draft_window)),
             prefill_chunk_size=int(
                 run.get("prefill_chunk_size", run_defaults.prefill_chunk_size)
             ),
@@ -379,14 +338,8 @@ def _validate_config(config: RenderConfig) -> None:
         raise ValueError(
             f"model.detail {config.model.detail!r} must be 'low' or 'high'"
         )
-    if config.run.mode not in ("spec_decode", "pure_ar", "both"):
-        raise ValueError(
-            f"run.mode {config.run.mode!r} must be spec_decode | pure_ar | both"
-        )
     if config.run.max_positions < 1:
         raise ValueError(f"run.max_positions {config.run.max_positions} must be >= 1")
-    if config.run.draft_window < 0:
-        raise ValueError(f"run.draft_window {config.run.draft_window} must be >= 0")
     if config.run.prefill_chunk_size < 1:
         raise ValueError(
             f"run.prefill_chunk_size {config.run.prefill_chunk_size} must be >= 1"

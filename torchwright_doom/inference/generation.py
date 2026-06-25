@@ -3,10 +3,11 @@
 :class:`TokenRuntime` is the base every generation loop runs on: the
 abstract trio (``empty_past`` / ``step`` / ``max_safe_prefill_chunk``) is
 exactly the surface the concrete loop methods call, and the loops —
-chunked prefill, pure autoregression, speculative decode — are ordinary
-methods, the way ``model.generate()`` is in every mainstream stack.
-Production is :class:`~torchwright_doom.inference.onnx_runtime.OnnxTokenRuntime`;
-the render logic tests subclass with in-memory transition-table models.
+chunked prefill and pure autoregression — are ordinary methods, the way
+``model.generate()`` is in every mainstream stack. Production is
+:class:`~torchwright_doom.inference.hf_runtime.HfTokenRuntime` (a native
+HuggingFace causal LM); the render logic tests subclass with in-memory
+transition-table models.
 
 ``tokens_bridge`` (and through it the screen-env-dependent vocab) is
 imported lazily inside the loop bodies, so importing this module never
@@ -19,20 +20,32 @@ from __future__ import annotations
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Generic, Protocol, TypeVar
 
 import torch
 
-from .kv_cache import KVCache, commit
+from .kv_cache import commit
 
-# 1024-row prefill chunks bound the per-layer (n_heads, chunk, S) logits
-# transient under the static-S cache (unchunked prefill at n=3613, S=12288
-# peaks ~45 GB on the widest d=4096 layer).  Chunking is semantically
-# identical to a single pass; this is a memory knob, not an algorithm change.
-# Direct-API default only: render jobs resolve their chunk size from the
-# config's ``run.prefill_chunk_size``, and the windowed staging-tail
-# allocation has its own bound (``onnx_runtime.PREFILL_STAGING_BUDGET`` —
-# the two roles used to share this constant).
+
+class _Cache(Protocol):
+    """The cache surface the generation loops touch: the committed position
+    count and the (vestigial, always-``None``) windowing tag."""
+
+    length: int
+    windowed: Any
+
+
+# The cache type a concrete runtime owns: the unbounded
+# :class:`~torchwright_doom.inference.kv_cache.KVCache`, the production HF
+# runtime's duck-typed ``HfCache``, or a test runtime's own. The loops only
+# ever read ``.length`` / ``.windowed`` and thread it through ``step``/``commit``.
+CacheT = TypeVar("CacheT", bound=_Cache)
+
+# 1024-row prefill chunks bound the per-layer transient activations of a
+# single forward pass.  Chunking is semantically identical to a single pass;
+# this is a memory knob, not an algorithm change.  Direct-API default only:
+# render jobs resolve their chunk size from the config's
+# ``run.prefill_chunk_size``.
 DEFAULT_PREFILL_CHUNK_SIZE = 1024
 
 
@@ -47,42 +60,24 @@ class RolloutResult:
 def argmax_rows(outputs: torch.Tensor) -> list[int]:
     """Argmax-decode compiled-step LOGITS to token row ids.
 
-    The artifact owns the unembed — production :class:`OnnxTokenRuntime`
-    and torchwright's ``OnnxDebugSession`` both return logits.  (The
-    in-process ``compile_headless`` gate decodes its embedding-width
-    outputs with its own ``@ W_EMBED.T`` helper:
+    The artifact owns the unembed — the production
+    :class:`~torchwright_doom.inference.hf_runtime.HfTokenRuntime` returns
+    logits.  (The in-process ``compile_headless`` gate decodes its
+    embedding-width outputs with its own ``@ W_EMBED.T`` helper:
     ``tests/scene/test_forward_ar_rollout.py``.)
     """
     return outputs.detach().argmax(dim=-1).cpu().tolist()
 
 
-class Drafter(Protocol):
-    """Speculative-draft source for :meth:`TokenRuntime.spec_decode_rollout`.
-
-    Deliberately a structural Protocol, not an ABC: the production
-    implementation (``torchwright_doom.pydoom``'s ``ARDrafter``) and the second
-    implementation the logic tests carry are two genuine implementers — the case
-    structural typing is for.
-    """
-
-    def next_draft(self) -> Any: ...
-
-    def consume(self, actual: Any) -> None: ...
-
-    def snapshot(self) -> Any: ...
-
-    def rollback(self, snap: Any) -> None: ...
-
-
-class TokenRuntime(ABC):
-    """A token-stepped transformer over a host-owned static :class:`KVCache`.
+class TokenRuntime(ABC, Generic[CacheT]):
+    """A token-stepped transformer over a host-owned cache (``CacheT``).
 
     The abstract trio below is exactly the surface the concrete generation
-    loops call; production is :class:`OnnxTokenRuntime` — the one real
-    runtime — and the render logic tests substitute in-memory
-    transition-table models (``tests/inference/test_spec_decode_logic.py`` /
-    ``test_windowed_cache.py``) by subclassing, so a missing or drifted
-    method is a definition-time error, not a mid-rollout AttributeError.
+    loops call; production is
+    :class:`~torchwright_doom.inference.hf_runtime.HfTokenRuntime` — the one
+    real runtime — and the render logic tests substitute in-memory
+    transition-table models by subclassing, so a missing or drifted method is
+    a definition-time error, not a mid-rollout AttributeError.
 
     Guardrails (keep it this way): the abstract trio is frozen — never add
     an abstract member only a test needs — and the base carries no state
@@ -90,16 +85,16 @@ class TokenRuntime(ABC):
     """
 
     @abstractmethod
-    def empty_past(self, max_len: int) -> KVCache:
+    def empty_past(self, max_len: int) -> CacheT:
         """Allocate (or zero-reset) the run's owned cache for ``max_len`` rows."""
 
     @abstractmethod
     def step(
         self,
         inputs: torch.Tensor,
-        cache: KVCache,
+        cache: CacheT,
         past_len: int | None = None,
-    ) -> tuple[torch.Tensor, KVCache]:
+    ) -> tuple[torch.Tensor, CacheT]:
         """One forward pass: token ids in, per-position outputs + cache out."""
 
     @abstractmethod
@@ -114,7 +109,7 @@ class TokenRuntime(ABC):
         chunk_size: int = DEFAULT_PREFILL_CHUNK_SIZE,
         label: str,
         progress_every: int = 0,
-    ) -> tuple[torch.Tensor, KVCache, int]:
+    ) -> tuple[torch.Tensor, CacheT, int]:
         """Run prefill in large chunks and return ``(last_out, past, n_passes)``.
 
         Allocates the run's single owned cache (``max_cache_len`` rows) up
@@ -146,20 +141,6 @@ class TokenRuntime(ABC):
             )
 
         past = self.empty_past(max_cache_len)
-        ws = past.windowed
-        if ws is not None:
-            if len(prefill_ids) >= ws.window:
-                raise RuntimeError(
-                    f"prefill ({len(prefill_ids)} rows) does not fit the "
-                    f"{ws.window}-slot cache window; raise model.cache_window"
-                )
-            print(
-                f"[{label}] windowed cache: window={ws.window} "
-                f"staging={ws.staging}; prefill ({len(prefill_ids)} rows) "
-                f"and every non-expiring rollout row stay resident; expiring "
-                f"rows recycle slots once the window fills",
-                flush=True,
-            )
         out = None
         offset = 0
         passes = 0
@@ -168,9 +149,7 @@ class TokenRuntime(ABC):
             t0 = time.time()
             out, past = self.step(rows_to_input(chunk), past, past_len=offset)
             offset += len(chunk)
-            # Multi-row batches pend on a windowed cache (the speculative-batch
-            # discipline; prefill rides the same path) — every chunk is fully
-            # accepted, so commit it before the next step.
+            # Commit each fully-decoded chunk before the next step.
             past = commit(past, offset)
             passes += 1
             dt = time.time() - t0
@@ -248,390 +227,3 @@ class TokenRuntime(ABC):
             n_forward_passes=n_passes,
             seconds=time.time() - t0,
         )
-
-    def spec_decode_rollout(
-        self,
-        prefill_ids: list[int],
-        drafter: Drafter,
-        max_positions: int,
-        terminal_row: int,
-        *,
-        draft_window: int = 8,
-        enable_reuse: bool = True,
-        progress_every: int = 0,
-        prefill_chunk_size: int = DEFAULT_PREFILL_CHUNK_SIZE,
-        argmax_fn: Callable[[torch.Tensor], list[int]] | None = None,
-        token_to_row_fn: Callable[[Any], int] | None = None,
-        row_to_token_fn: Callable[[int], Any] | None = None,
-    ) -> tuple[RolloutResult, dict[str, Any]]:
-        """Generate the rollout with speculative decoding. Returns (result, stats).
-
-        Phases:
-
-        1. Prefill once, then argmax the last position to seed the first
-           emitted row; if the drafter's first guess matches that seed,
-           consume it so the drafter and the emitted stream stay aligned.
-        2. Initialize the draft-tail reuse state (``reuse_buffer`` empty,
-           ``reuse_health`` at its start value, ``reuse_probe`` at 0; see
-           the reuse-machinery block comment above the ``_REUSE_*``
-           constants for what these track).
-        3. Main loop, per step: stop on the terminal row or the position
-           cap; otherwise either run a batched draft-verify step
-           (``_spec_step``, when the drafter still has tokens or a reused
-           tail is waiting and there is room for at least one draft) or
-           fall back to a single non-speculative step; then maybe print
-           progress.
-
-        The reuse state (``reuse_buffer``/``reuse_health``/``reuse_probe``)
-        is threaded through ``_spec_step`` and updated from its three
-        trailing return values on every batched step.
-        """
-        from .tokens_bridge import (
-            row_to_token,
-            token_to_row,
-        )
-
-        argmax_fn = argmax_fn or argmax_rows
-        token_to_row_fn = token_to_row_fn or token_to_row
-        row_to_token_fn = row_to_token_fn or row_to_token
-        stats = _new_spec_stats()
-        t0 = time.time()
-
-        # --- prefill once, then seed the first emitted row ---
-        prefill_t0 = time.time()
-        # Cache holds prefill + (max_positions - 1) committed rows; a speculative
-        # batch transiently writes up to draft_window extra rows past cache_len
-        # before committing fewer, so reserve that headroom too.
-        max_cache_len = len(prefill_ids) + max_positions - 1 + max(0, draft_window)
-        out, past, prefill_passes = self.run_prefill(
-            prefill_ids,
-            max_cache_len=max_cache_len,
-            chunk_size=prefill_chunk_size,
-            label="spec_decode",
-            progress_every=progress_every,
-        )
-        stats["forward_passes"] += prefill_passes
-        seed_row = argmax_fn(out[-1:])[0]
-        emitted = [seed_row]
-        if progress_every:
-            print(
-                f"[spec_decode] prefill done in {time.time() - prefill_t0:.1f}s "
-                f"seed_row={seed_row} cache_len={past.length}",
-                flush=True,
-            )
-
-        # Align the drafter to the seed: if its first guess equals the
-        # seed we already emitted, consume it so its cursor matches.
-        first = drafter.next_draft()
-        if first is not None and token_to_row_fn(first) == seed_row:
-            drafter.consume(first)
-
-        # --- initialize draft-tail reuse state ---
-        reuse_buffer: list = []
-        reuse_health = _REUSE_HEALTH_INIT
-        reuse_probe = 0
-        drafter_done = drafter.next_draft() is None
-        last_print = 1
-        last_timed_print = time.time()
-        stopped = "cap"
-
-        # --- main loop: stop on terminal/cap, else batched verify or single step ---
-        while True:
-            next_input_row = emitted[-1]
-            if next_input_row == terminal_row:
-                stopped = "terminal"
-                break
-            if len(emitted) >= max_positions:
-                stopped = "cap"
-                break
-
-            remaining_capacity = max_positions - len(emitted)
-            step_cache_len = past.length
-            step_t0 = time.time()
-            if progress_every and stats["forward_passes"] <= 3:
-                print(
-                    f"[spec_decode] forward start pass={stats['forward_passes'] + 1} "
-                    f"emitted={len(emitted)} cache_len={step_cache_len} "
-                    f"remaining={remaining_capacity}",
-                    flush=True,
-                )
-            # Batched draft-verify step when drafts (reused or fresh) remain
-            # and there is room for at least one; otherwise a plain step.
-            if (
-                not drafter_done
-                and remaining_capacity >= 2
-                and (reuse_buffer or drafter.next_draft() is not None)
-            ):
-                past, reuse_buffer, reuse_health, reuse_probe = _spec_step(
-                    self,
-                    past,
-                    next_input_row,
-                    emitted,
-                    drafter,
-                    min(draft_window, remaining_capacity - 1),
-                    terminal_row,
-                    stats,
-                    reuse_buffer,
-                    reuse_health,
-                    reuse_probe,
-                    enable_reuse,
-                    argmax_fn=argmax_fn,
-                    token_to_row_fn=token_to_row_fn,
-                    row_to_token_fn=row_to_token_fn,
-                )
-                if not reuse_buffer and drafter.next_draft() is None:
-                    drafter_done = True
-            else:
-                reuse_buffer = []
-                past = _single_step(
-                    self, past, next_input_row, emitted, stats, argmax_fn=argmax_fn
-                )
-                if not drafter_done:
-                    drafter.consume(row_to_token_fn(emitted[-1]))
-                    if drafter.next_draft() is None:
-                        drafter_done = True
-
-            step_dt = time.time() - step_t0
-            should_print = progress_every and (
-                len(emitted) - last_print >= progress_every
-                or step_dt >= 5.0
-                or time.time() - last_timed_print >= 30.0
-            )
-            if should_print:
-                last_print = len(emitted)
-                last_timed_print = time.time()
-                print(
-                    f"[spec_decode] {len(emitted)} tokens, {stats['forward_passes']} "
-                    f"forward passes ({time.time() - t0:.1f}s), "
-                    f"last_forward={step_dt:.1f}s, cache_len={past.length}, "
-                    f"accept={stats['accepted_drafts'] / max(1, len(emitted)):.0%} per-tok "
-                    f"(drafts {stats['accepted_drafts']}/{stats['attempted_drafts']})",
-                    flush=True,
-                )
-
-        return (
-            RolloutResult(
-                emitted_rows=emitted,
-                stopped=stopped,
-                n_forward_passes=stats["forward_passes"],
-                seconds=time.time() - t0,
-            ),
-            stats,
-        )
-
-
-# --- draft-tail reuse machinery ---
-#
-# When a batched draft is only partially accepted, the rejected tail
-# (the drafts past the first mismatch, plus the model's own next
-# prediction) is often still the right continuation one step later —
-# the model just mispredicted one token in the middle.  So instead of
-# throwing that tail away, ``_spec_step`` keeps it (``reuse_buffer``)
-# and re-offers it as the front of the next batch's drafts before
-# pulling fresh ones from the drafter.
-#
-# ``reuse_health`` is a confidence counter that gates whether reuse is
-# worth doing at all:
-#   - starts at _REUSE_HEALTH_INIT (4);
-#   - when a reused tail was offered and at least one draft was
-#     accepted, increment by 1, capped at _REUSE_HEALTH_CAP (8);
-#   - when a reused tail was offered but nothing was accepted,
-#     decrement by _REUSE_HEALTH_PENALTY (2), floored at 0;
-#   - reuse is only attempted while health > 0.
-# (The increment/decrement only fire on steps that actually offered a
-# reused tail, so health tracks how well reuse itself is paying off,
-# not the overall accept rate.)
-#
-# ``reuse_probe`` re-probes after reuse has been turned off: once
-# health hits 0, every subsequent step increments the probe counter,
-# and after _REUSE_PROBE_INTERVAL (64) steps health is nudged back to
-# 1 to try reuse again (in case the stream has become predictable
-# again).  Any nonzero health resets the probe counter to 0.
-_REUSE_HEALTH_INIT = 4
-_REUSE_HEALTH_CAP = 8
-_REUSE_HEALTH_PENALTY = 2
-_REUSE_PROBE_INTERVAL = 64
-
-
-def _new_spec_stats() -> dict[str, Any]:
-    return {
-        "batches": 0,
-        "forward_passes": 0,
-        "attempted_drafts": 0,
-        "committed_rows": 0,
-        "accepted_drafts": 0,
-        "full_accepts": 0,
-        "mispredicts": 0,
-        "reject_at_0": 0,
-        "terminal_truncations": 0,
-        "fallback_single_steps": 0,
-        "reused_offered": 0,
-        "reused_accepted": 0,
-        "accept_histogram": {},
-    }
-
-
-def _single_step(
-    compiled: TokenRuntime,
-    past: KVCache,
-    input_row: int,
-    emitted: list[int],
-    stats: dict[str, Any],
-    *,
-    argmax_fn: Callable[[torch.Tensor], list[int]],
-) -> KVCache:
-    from .tokens_bridge import rows_to_input
-
-    out, new_past = compiled.step(rows_to_input([input_row]), past)
-    stats["forward_passes"] += 1
-    stats["fallback_single_steps"] += 1
-    emitted.append(argmax_fn(out[-1:])[0])
-    return new_past
-
-
-def _spec_step(
-    compiled: TokenRuntime,
-    past: KVCache,
-    next_input_row: int,
-    emitted: list[int],
-    drafter: Drafter,
-    max_drafts: int,
-    terminal_row: int,
-    stats: dict[str, Any],
-    reuse_buffer: list,
-    reuse_health: int,
-    reuse_probe: int,
-    enable_reuse: bool,
-    *,
-    argmax_fn: Callable[[torch.Tensor], list[int]],
-    token_to_row_fn: Callable[[Any], int],
-    row_to_token_fn: Callable[[int], Any],
-):
-    """One batched draft-verify step.
-
-    Returns ``(new_past, reuse_tail, reuse_health, reuse_probe)`` — the
-    updated cache, the rejected-tail tokens to re-offer next step (the
-    new ``reuse_buffer``; empty when reuse is off or a terminal row was
-    committed), and the threaded reuse-health and reuse-probe counters
-    (see the reuse-machinery block comment above the ``_REUSE_*``
-    constants).
-
-    Phases:
-
-    1. Snapshot the drafter, then collect up to ``max_drafts`` drafts —
-       reused tail first (only while reuse is on and health > 0), then
-       fresh ones from the drafter.
-    2. If no drafts were collected, roll back and fall back to a single
-       non-speculative step.
-    3. Build the verify batch (the real next input row plus the draft
-       rows), run one forward pass, and find the accept prefix (the run
-       of leading drafts whose argmax matches the prediction).
-    4. Truncate the commit if a terminal row appears within it.
-    5. Update the run stats (batches, accept histogram, reuse tallies, ...).
-    6. Roll the drafter back to the snapshot and replay exactly the
-       committed tokens into both the drafter and the emitted list.
-    7. Update reuse-health and the re-probe counter from this step's
-       accept outcome.
-    8. Build the reuse tail (the rejected drafts plus the model's own
-       next prediction) to offer next step, unless reuse is off or a
-       terminal row was hit.
-    """
-    from .tokens_bridge import rows_to_input
-
-    # --- collect drafts: reused tail first, then fresh from the drafter ---
-    cache_len = past.length
-    snap = drafter.snapshot()
-
-    drafts: list = []
-    if enable_reuse and reuse_health > 0:
-        for r in reuse_buffer:
-            if len(drafts) >= max_drafts:
-                break
-            drafts.append(r)
-            drafter.consume(r)
-    n_reused = len(drafts)
-    while len(drafts) < max_drafts:
-        d = drafter.next_draft()
-        if d is None:
-            break
-        drafts.append(d)
-        drafter.consume(d)
-
-    # --- no drafts available: fall back to a single non-speculative step ---
-    n_drafts = len(drafts)
-    if n_drafts == 0:
-        drafter.rollback(snap)
-        new_past = _single_step(
-            compiled, past, next_input_row, emitted, stats, argmax_fn=argmax_fn
-        )
-        drafter.consume(row_to_token_fn(emitted[-1]))
-        return new_past, [], reuse_health, reuse_probe
-
-    # --- verify batch: run one pass, find the accept prefix ---
-    draft_rows = [token_to_row_fn(d) for d in drafts]
-    batch_rows = [next_input_row] + draft_rows
-    out, new_past = compiled.step(rows_to_input(batch_rows), past)
-    stats["forward_passes"] += 1
-    pred = argmax_fn(out)
-
-    accept = n_drafts
-    for i in range(n_drafts):
-        if pred[i] != draft_rows[i]:
-            accept = i
-            break
-    ncommit = (n_drafts + 1) if accept == n_drafts else (accept + 1)
-
-    # --- truncate the commit at a terminal row, if one appears within it ---
-    terminal_hit = False
-    for i in range(ncommit):
-        emission_row = draft_rows[i] if i < accept else pred[i]
-        if emission_row == terminal_row:
-            ncommit = i + 1
-            terminal_hit = True
-            stats["terminal_truncations"] += 1
-            break
-
-    new_past = commit(new_past, cache_len + ncommit)
-
-    # --- update run stats ---
-    stats["batches"] += 1
-    stats["attempted_drafts"] += n_drafts
-    stats["committed_rows"] += ncommit
-    stats["accepted_drafts"] += min(accept, ncommit)
-    stats["reused_offered"] += n_reused
-    stats["reused_accepted"] += min(accept, n_reused)
-    if accept == n_drafts:
-        stats["full_accepts"] += 1
-    else:
-        stats["mispredicts"] += 1
-        if accept == 0:
-            stats["reject_at_0"] += 1
-    stats["accept_histogram"][accept] = stats["accept_histogram"].get(accept, 0) + 1
-
-    # --- replay exactly the committed tokens into drafter + emitted ---
-    drafter.rollback(snap)
-    for i in range(ncommit):
-        emission_row = draft_rows[i] if i < accept else pred[i]
-        emission_tok = drafts[i] if i < accept else row_to_token_fn(pred[i])
-        drafter.consume(emission_tok)
-        emitted.append(emission_row)
-
-    # --- update reuse-health and the re-probe counter ---
-    if n_reused > 0:
-        if accept > 0:
-            reuse_health = min(_REUSE_HEALTH_CAP, reuse_health + 1)
-        else:
-            reuse_health = max(0, reuse_health - _REUSE_HEALTH_PENALTY)
-    if reuse_health == 0:
-        reuse_probe += 1
-        if reuse_probe >= _REUSE_PROBE_INTERVAL:
-            reuse_health = 1
-            reuse_probe = 0
-    else:
-        reuse_probe = 0
-
-    # --- build the rejected-tail reuse buffer for the next step ---
-    if terminal_hit or not enable_reuse or reuse_health == 0:
-        return new_past, [], reuse_health, reuse_probe
-    reuse_tail = [row_to_token_fn(pred[i]) for i in range(ncommit, n_drafts + 1)]
-    return new_past, reuse_tail, reuse_health, reuse_probe

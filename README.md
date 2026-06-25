@@ -37,7 +37,7 @@ geometry, sorting, or arithmetic. (See `CLAUDE.md`.)
 
 ## Docs
 
-- **`CLAUDE.md`** — full module layout, the windowed-KV-cache invariant, and
+- **`CLAUDE.md`** — full module layout, the production HF runtime, and
   the graph-debugging tool sequence.
 - **`GLOSSARY.md`** — plain-English definitions of the coined vocabulary
   (carrier, head, marker, owner, subcontext, visplane, flat, …).
