@@ -23,6 +23,7 @@ which the caller invokes only after applying the screen env.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -127,7 +128,12 @@ def export_bundle(onnx_path: str | Path, save_dir: str | Path, config) -> dict[s
 
 
 def _greedy_hf(
-    model, prefill_ids: list[int], max_positions: int, terminal_row: int, device
+    model,
+    prefill_ids: list[int],
+    max_positions: int,
+    terminal_row: int,
+    device,
+    progress_every: int = 0,
 ) -> list[int]:
     """Greedy argmax rollout from the native HF model (stock unbounded
     ``DynamicCache``), mirroring :meth:`TokenRuntime.pure_ar_rollout` exactly:
@@ -136,6 +142,7 @@ def _greedy_hf(
     """
     model.eval()
     ids = torch.tensor(prefill_ids, dtype=torch.long, device=device)[None, :]
+    t0 = time.time()
     with torch.no_grad():
         res = model(input_ids=ids, use_cache=True)
         past = res.past_key_values
@@ -147,6 +154,13 @@ def _greedy_hf(
             past = res.past_key_values
             cur = int(res.logits[0, -1].argmax())
             emitted.append(cur)
+            if progress_every and len(emitted) % progress_every == 0:
+                dt = time.time() - t0
+                print(
+                    f"[hf_render] {len(emitted)} tokens ({dt:.0f}s, "
+                    f"{dt / len(emitted) * 1000:.0f} ms/tok)",
+                    flush=True,
+                )
     return emitted
 
 
@@ -220,3 +234,88 @@ def check_parity(
         f"(lens oracle={len(oracle_rows)} hf={len(hf_rows)})"
     )
     return report
+
+
+def render_frame(
+    cache_dir: str | Path,
+    config,
+    out_dir: str | Path,
+    *,
+    device: str = "cpu",
+    max_positions: int,
+    base_dir: str | Path | None = None,
+    x: float | None = None,
+    y: float | None = None,
+    angle: int | None = None,
+    viewz: float | None = None,
+    png_zoom: int = 8,
+    progress_every: int = 500,
+) -> dict[str, Any]:
+    """Render one full DOOM frame with the native HF model and compare it to the
+    pydoom reference renderer — the same ground-truth gate the production runtime
+    passes.
+
+    Converts the artifact to ``TorchwrightForCausalLM`` (fp32), runs the greedy
+    rollout from the pose's prefill to the terminal row (or ``max_positions``),
+    decodes the row stream to pixels, and scores it against the pydoom reference
+    (coverage + within-option color), writing ``generated/reference/diff.png``.
+    Returns a small report dict (no weights, no pixels).
+    """
+    from torchwright.compiler.hf.convert import convert_onnx_to_hf
+
+    from ..vocab import DONE
+    from . import compare as compare_mod
+    from .decode import decode_rows_to_pixels
+    from .tokens_bridge import row_index
+    from .wad_scene import (
+        load_render_scene,
+        pose_from_world,
+        prefill_rows_for,
+        pydoom_scene_for,
+    )
+
+    cache_dir = Path(cache_dir)
+    onnx_path = str(cache_dir / "model.onnx")
+    meta = json.loads(_meta_path(onnx_path).read_text())
+    bos_str, eos_str = _doom_bos_eos_strings(meta)
+    terminal_row = row_index(DONE, {})
+
+    scene = load_render_scene(config, base_dir=base_dir)
+    pose = pose_from_world(scene, x=x, y=y, angle=angle, viewz=viewz)
+    prefill_ids = prefill_rows_for(scene, pose)
+    print(
+        f"[hf_render] prefill={len(prefill_ids)} rows, max_positions={max_positions}",
+        flush=True,
+    )
+
+    model = convert_onnx_to_hf(onnx_path, bos_token=bos_str, eos_token=eos_str)
+    model = model.to(torch.float32).eval()
+    if device != "cpu":
+        model = model.to(device)
+
+    t0 = time.time()
+    hf_rows = _greedy_hf(
+        model, prefill_ids, max_positions, terminal_row, device, progress_every
+    )
+    seconds = time.time() - t0
+    stopped = "terminal" if (hf_rows and hf_rows[-1] == terminal_row) else "cap"
+    print(
+        f"[hf_render] {len(hf_rows)} tokens in {seconds:.0f}s, stopped={stopped}",
+        flush=True,
+    )
+
+    gen = decode_rows_to_pixels(hf_rows, palette=scene.asset_book.palette)
+    py_scene = pydoom_scene_for(scene, pose)
+    py_pose = py_scene.test_poses[0]
+    ref = compare_mod.reference_pixels(py_scene, py_pose)
+    options = compare_mod.reference_options(py_scene, py_pose)
+    report = compare_mod.compare(gen, ref, options)
+    pngs = compare_mod.write_pngs(gen, ref, out_dir, options=options, scale=png_zoom)
+
+    return {
+        "n_rows": len(hf_rows),
+        "stopped": stopped,
+        "seconds": seconds,
+        "report_text": report.format_short(),
+        "pngs": [p.name for p in pngs],
+    }

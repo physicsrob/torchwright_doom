@@ -388,6 +388,108 @@ def hf_export(
     print(f"[local] config.json + report.json -> {local_dir}")
 
 
+@app.function(
+    gpu=_RENDER_GPU,
+    cpu=8,
+    memory=131072,
+    timeout=7200,
+    volumes={
+        "/artifacts": RENDER_VOLUME,
+        "/root/.cache/torchwright_doom/compiled": CACHE_VOLUME,
+    },
+)
+def hf_render_remote(
+    config_name: str,
+    config_text: str,
+    cache_subdir: str,
+    max_positions: int,
+    png_zoom: int,
+) -> dict:
+    """Render one full DOOM frame with the native HF model and score it against
+    the pydoom reference renderer (the production ground-truth gate).
+
+    Runs on the render GPU (full ~42k-token greedy rollout, ~28 GB fp32 weights +
+    growing unbounded KV cache). The generated/reference/diff PNGs sync back.
+    """
+    import sys
+    from pathlib import Path as _P
+
+    if "/root" not in sys.path:
+        sys.path.insert(0, "/root")
+
+    import torch
+
+    from torchwright_doom.inference.config import (
+        apply_screen_env,
+        load_render_config,
+    )
+
+    config_path = _write_shipped_config(config_name, config_text)
+    config = load_render_config(config_path)
+    apply_screen_env(config)  # BEFORE any vocab/scene import
+
+    from torchwright_doom.inference import hf_export
+
+    CACHE_VOLUME.reload()
+    cache_dir = f"/root/.cache/torchwright_doom/compiled/{cache_subdir}"
+    out_dir = f"/artifacts/hf_render/{cache_subdir}"
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    report = hf_export.render_frame(
+        cache_dir,
+        config,
+        out_dir,
+        device=device,
+        max_positions=max_positions,
+        base_dir=str(_P(config_path).parent),
+        png_zoom=png_zoom,
+        progress_every=1000,
+    )
+    RENDER_VOLUME.commit()
+
+    files = {p.name: p.read_bytes() for p in sorted(_P(out_dir).glob("*.png"))}
+    return {"report": report, "files": files}
+
+
+@app.local_entrypoint()
+def hf_render(
+    config: str = "configs/e1m1.yaml",
+    max_positions: int | None = None,
+    out_dir: str = "out/hf_render",
+    png_zoom: int = 8,
+    verbose_compile: bool = False,
+):
+    """``make hf-render`` — render one full frame with the native HF model on
+    Modal and compare it to the pydoom reference (same gate as production).
+
+    Compiles on a cache miss, then runs the GPU rollout + decode + compare. The
+    generated/reference/diff PNGs mirror to ``out_dir`` locally.
+    """
+    config_path = Path(config)
+    config_text = config_path.read_text()
+    cache_subdir = _compile_on_modal(config_path, verbose_compile)
+
+    from torchwright_doom.inference.config import load_render_config
+
+    rc = load_render_config(config_path)
+    mp = rc.run.max_positions if max_positions is None else max_positions
+
+    print(f"[local] launching hf_render_remote cache_subdir={cache_subdir} max_positions={mp}")
+    result = hf_render_remote.remote(
+        config_path.name, config_text, cache_subdir, mp, png_zoom
+    )
+
+    local_dir = _HERE / out_dir
+    local_dir.mkdir(parents=True, exist_ok=True)
+    for name, data in result["files"].items():
+        (local_dir / name).write_bytes(data)
+    r = result["report"]
+    print("\n=== HF render ===")
+    print(f"  rows: {r['n_rows']}  stopped: {r['stopped']}  in {r['seconds']:.0f}s")
+    print("\n" + r["report_text"])
+    print(f"\n[local] frames -> {local_dir} : {sorted(result['files'])}")
+
+
 @app.local_entrypoint()
 def main(
     # Run-knob defaults live in the config's ``run:`` section — run_config
