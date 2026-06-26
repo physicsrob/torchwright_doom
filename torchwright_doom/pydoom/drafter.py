@@ -31,7 +31,6 @@ legally follow.
 
 from __future__ import annotations
 
-import copy
 import math
 from dataclasses import dataclass, replace
 
@@ -512,34 +511,6 @@ class _Context:
     floorclip: list[int]
     side_table: dict[int, int]
     stack: list
-
-    def __deepcopy__(self, memo):
-        """Copy only mutable rollout state; share immutable scene data.
-
-        Draft-decode snapshots are taken once per batch. The scene, map,
-        baked segments, and plane tables are read-only across drafter
-        operation, and copying them pulls in large pydantic object graphs.
-        The mutable state is the horizontal/vertical clip state, side table,
-        and traversal stack.
-        """
-        copied = _Context(
-            scene=self.scene,
-            state=self.state,
-            md=self.md,
-            segments=self.segments,
-            viewz=self.viewz,
-            view_angle_bam=self.view_angle_bam,
-            plane_tables=self.plane_tables,
-            runtime_visplanes=copy.deepcopy(self.runtime_visplanes, memo),
-            solidsegs=[_ClipRange(r.first, r.last) for r in self.solidsegs],
-            ceilingclip=list(self.ceilingclip),
-            floorclip=list(self.floorclip),
-            side_table=dict(self.side_table),
-            stack=[],
-        )
-        memo[id(self)] = copied
-        copied.stack = copy.deepcopy(self.stack, memo)
-        return copied
 
 
 def _child_first_token(is_subsector: bool, idx: int, depth: int) -> Token:
@@ -2662,10 +2633,6 @@ class _FlatScanState:
     advances. This replaces the old precomputed `(_flat_tokens,
     _flat_idx)` plan so a divergent span decomposition re-syncs within
     the visplane instead of cascading.
-
-    snapshot/rollback for the runtime's K-batch lookahead is handled by
-    the parent `ARDrafter` via `copy.deepcopy`, which captures this
-    object's cursor and the per-visplane open-span bookkeeping exactly.
     """
 
     def __init__(self, scene: Scene, state: GameState) -> None:

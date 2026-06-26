@@ -154,7 +154,6 @@ def run_config(
         prefill_rows=prefill_ids,
         emitted_rows=emitted_rows,
         mode="pure_ar",
-        spec_decode_stats=None,
         label=f"{config.map.lower()}__{config.screen[0]}x{config.screen[1]}",
         config={
             "path": str(config_path),

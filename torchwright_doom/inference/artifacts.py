@@ -47,7 +47,6 @@ def build_token_dump(
     prefill_rows: list[int],
     emitted_rows: list[int],
     mode: str,
-    spec_decode_stats: dict[str, Any] | None = None,
     label: str | None = None,
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -72,8 +71,6 @@ def build_token_dump(
         "predicted_next_tokens": rollout_entries,
         "rollout_output_tokens": rollout_entries,
     }
-    if spec_decode_stats is not None:
-        case["spec_decode_stats"] = spec_decode_stats
     if config is not None:
         case["config"] = config
     return {
