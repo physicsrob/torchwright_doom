@@ -35,9 +35,9 @@ def _meta_path(onnx_path: str | Path) -> Path:
 
 
 def _doom_bos_eos_strings(meta: dict) -> tuple[str, str]:
-    """The artifact-vocab strings for the BEGIN / DONE rows.
+    """The artifact-vocab strings for the BOS / DONE rows.
 
-    DOOM's bos/eos are the ``begin`` / ``done`` token *types*, but the converter
+    DOOM's bos/eos are the ``bos`` / ``done`` token *types*, but the converter
     looks the bos/eos up by their string in the artifact's ``meta["vocab"]`` —
     whose labels (``value(v=-1)`` ...) are the compiler's, not the tokenizer's.
     So resolve the rows from the token types and read the compiler's label at
@@ -46,16 +46,16 @@ def _doom_bos_eos_strings(meta: dict) -> tuple[str, str]:
     """
     from ..inference.tokens_bridge import token_to_row
     from ..tokens import Token
-    from ..vocab import BEGIN, DONE
+    from ..vocab import BOS, DONE
 
     vocab: list[str] = list(meta["vocab"])
-    begin_row = token_to_row(Token(BEGIN, {}))
+    bos_row = token_to_row(Token(BOS, {}))
     done_row = token_to_row(Token(DONE, {}))
-    bos_str, eos_str = vocab[begin_row], vocab[done_row]
+    bos_str, eos_str = vocab[bos_row], vocab[done_row]
     assert vocab.count(bos_str) == 1, f"bos label {bos_str!r} not unique in vocab"
     assert vocab.count(eos_str) == 1, f"eos label {eos_str!r} not unique in vocab"
     # The converter must map these strings back to exactly these rows.
-    assert vocab.index(bos_str) == begin_row
+    assert vocab.index(bos_str) == bos_row
     assert vocab.index(eos_str) == done_row
     return bos_str, eos_str
 

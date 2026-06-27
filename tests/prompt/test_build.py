@@ -8,6 +8,7 @@ from torchwright_doom.prompt.build import build_prompt
 from torchwright_doom.prompt.scenes import E1M1_START_ROOM, load
 from torchwright_doom.vocab import (
     BEGIN,
+    BOS,
     NODE,
     PLAYER_X_MARK,
     PROMPT_TYPES,
@@ -30,7 +31,10 @@ def test_prompt_endpoints_and_counts() -> None:
     md, state = load(E1M1_START_ROOM)
     tokens = build_prompt(md, state)
 
-    assert tokens[0].type is PLAYER_X_MARK
+    # Position 0 is the BOS anchor; the player-x marker follows it. BEGIN still
+    # closes the prompt as the prompt->AR boundary.
+    assert tokens[0].type is BOS
+    assert tokens[1].type is PLAYER_X_MARK
     assert tokens[-1].type is BEGIN
 
     type_counts = Counter(t.type for t in tokens)
@@ -39,7 +43,9 @@ def test_prompt_endpoints_and_counts() -> None:
     assert type_counts[SS] == len(md.subsectors)
     assert type_counts[SEG] == len(md.segs)
 
-    declared = set(PROMPT_TYPES)
+    # BOS is emitted by build_prompt but deliberately excluded from PROMPT_TYPES
+    # (it is appended last in VOCAB_TYPES for E8 append-safety; see vocab.py).
+    declared = {BOS, *PROMPT_TYPES}
     for typ in type_counts:
         assert typ in declared, f"unexpected token type: {typ.name}"
 

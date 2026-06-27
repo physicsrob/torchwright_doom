@@ -35,6 +35,7 @@ from ..vocab import (
     BBOX_TOP_BACK,
     BBOX_TOP_FRONT,
     BEGIN,
+    BOS,
     N_NODES_MAX,
     NODE,
     NODE_BACK_CHILD,
@@ -192,6 +193,12 @@ def build_prompt(
     plane_tables = build_plane_tables(md, flat_ids=asset_config.flat_id_by_name)
     tokens: list[Token] = []
     name_to_id = {"-": 0, "": 0, **asset_config.wall_id_by_name}
+
+    # Position 0: a true beginning-of-sequence anchor. Inert (dispatches to
+    # NO_OP); every downstream read is content-addressed or uses relative
+    # offsets, so this +1 shift of the prompt is harmless. BEGIN still closes
+    # the prompt below as the prompt->AR boundary.
+    tokens.append(Token(BOS))
 
     _marked(tokens, PLAYER_X_MARK, state.x)
     _marked(tokens, PLAYER_Y_MARK, state.y)

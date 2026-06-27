@@ -38,6 +38,7 @@ from .vocab import (
     BBOX_WORLD_ANGLE_MARK_A,
     BBOX_WORLD_ANGLE_MARK_B,
     BEGIN,
+    BOS,
     CLIP_UPDATE,
     DONE,
     DRAWSEG_BSILHEIGHT,
@@ -265,6 +266,12 @@ PROTOCOL_ENTRIES: tuple[ProtocolEntry, ...] = (
     # but are routed by previous-token context in both prefill and AR positions.
     _carrier(VALUE, predicate="is_value", branch="value", order=24),
     _carrier(ANGLE_VALUE, predicate="is_angle_value", branch="angle", order=25),
+    # Position-0 anchor. A true beginning-of-sequence token emitted first in
+    # every sequence (prompt/build.py). Inert: it dispatches to no_op and its
+    # prefill-position prediction is discarded. Read during prefill but owned by
+    # main, not a scene fact (so it is not replayed as a scene payload; it is
+    # replayed verbatim like every other prefill input).
+    _inert(BOS, phase="prefill", owner="main"),
     # Scene/player prefill rows.
     _inert(PLAYER_X_MARK, payload_group="scene_value"),
     _inert(PLAYER_Y_MARK, payload_group="scene_value"),

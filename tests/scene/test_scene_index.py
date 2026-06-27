@@ -23,6 +23,7 @@ from torchwright_doom.value_ranges import ValueRange
 from torchwright_doom.vocab import (
     ANGLE_VALUE,
     BEGIN,
+    BOS,
     NODE,
     NODE_PX,
     NODE_PY,
@@ -42,6 +43,7 @@ _ANGLE = 512
 
 def _scene_and_inputs():
     seq = [
+        (BOS, {}),
         (PLAYER_X_MARK, {}),
         value(ValueRange.R1, 100.0),
         (PLAYER_Y_MARK, {}),

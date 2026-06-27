@@ -31,14 +31,14 @@ from ..constants import COLUMN_COUNT, PIXEL_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH
 from ..embedding import TOKEN_VOCAB, _row_label
 from ..inference.tokens_bridge import row_to_token, token_to_row
 from ..tokens import FloatSlot, IntSlot, Token
-from ..vocab import BEGIN, DONE, VOCAB_TYPES
+from ..vocab import BOS, DONE, VOCAB_TYPES
 from . import surface
 
 VOCAB_FILES_NAMES = {"vocab_file": "doom_vocab.json"}
 
 # Special tokens map onto existing rows — never appended ids (so nothing shifts):
 _EOS = _row_label(DONE, {})  # "done" — the generation stop (cli.py)
-_BOS = _row_label(BEGIN, {})  # "begin" — the prompt/gen boundary (build appends it)
+_BOS = _row_label(BOS, {})  # "bos" — the position-0 anchor (build_prompt prepends it)
 
 
 def screen_config() -> dict[str, int]:
@@ -113,8 +113,8 @@ class DoomTokenizer(PreTrainedTokenizer):
         if vocab_file is not None:
             _validate_vocab_file(vocab_file)
 
-        # bos is the prompt/gen boundary but is NOT auto-prepended: build_prompt
-        # already appends it, so build_inputs_with_special_tokens stays identity
+        # bos is the position-0 anchor but is NOT auto-prepended: build_prompt
+        # already prepends it, so build_inputs_with_special_tokens stays identity
         # (the PreTrainedTokenizer default). No unk token (the stream is always
         # in-vocab). pad == eos.
         super().__init__(

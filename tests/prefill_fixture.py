@@ -19,6 +19,7 @@ from torchwright_doom.tokens import TokenType
 from torchwright_doom.value_ranges import ValueRange
 from torchwright_doom.vocab import (
     BEGIN,
+    BOS,
     NODE,
     NODE_BACK_CHILD,
     NODE_DX,
@@ -34,9 +35,11 @@ from torchwright_doom.vocab import (
 )
 
 # Smallest scene that exercises the whole renderer spine: one BSP node (root=0,
-# both children subsectors) and one subsector/seg, ending at BEGIN (the AR seed).
-# Shared by the whole-forward compile gate and the free-running rollout gate.
+# both children subsectors) and one subsector/seg. Starts at BOS (the position-0
+# anchor) and ends at BEGIN (the AR seed). Shared by the whole-forward compile
+# gate and the free-running rollout gate.
 TINY_BSP_SCENE: list[tuple[TokenType, dict]] = [
+    (BOS, {}),
     (PLAYER_X_MARK, {}),
     value(ValueRange.R1, 100.0),
     (PLAYER_Y_MARK, {}),

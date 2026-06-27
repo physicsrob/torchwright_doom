@@ -33,6 +33,7 @@ from torchwright_doom.scene_index import SceneIndex
 from torchwright_doom.value_ranges import ValueRange
 from torchwright_doom.vocab import (
     BEGIN,
+    BOS,
     NODE,
     NODE_DX,
     NODE_DY,
@@ -56,6 +57,7 @@ _ATOL = 5.0
 
 def test_scene_index_compiles_and_matches_oracle(device) -> None:
     seq = [
+        (BOS, {}),
         (PLAYER_X_MARK, {}),
         value(ValueRange.R1, 100.0),
         (PLAYER_Y_MARK, {}),
@@ -142,6 +144,7 @@ def test_side_test_cross_product_compiles_exact(device) -> None:
     the check exercises both outcomes rather than passing trivially on a constant.
     """
     seq = [
+        (BOS, {}),
         (PLAYER_X_MARK, {}),
         value(ValueRange.R1, 100.0),
         (PLAYER_Y_MARK, {}),

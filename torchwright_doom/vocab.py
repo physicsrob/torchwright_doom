@@ -25,7 +25,10 @@ chains across re-embedding boundaries. Screen-column tokens carry
 per-column one-hot derived columns (``x_oh_*``) for direct
 attention-keyed addressing.
 
-The umbrella ``scripts/vocab_diff.py`` pins the contract.
+``tests/protocol/test_protocol_registry.py`` pins the contract (every vocab
+type is registered exactly once, and the registry size tracks ``VOCAB_TYPES``);
+the tokenizer's ``vocab_fingerprint`` (``tokenizer/hf_tokenizer.py``) catches
+any type/slot/screen drift in a saved bundle.
 """
 
 from __future__ import annotations
@@ -809,4 +812,22 @@ AR_TYPES = [
 ]
 
 
-VOCAB_TYPES = PROMPT_TYPES + AR_TYPES
+# ---------------------------------------------------------------------------
+# Section 5: BOS
+# ---------------------------------------------------------------------------
+
+# A true beginning-of-sequence token: emitted at position 0 of every sequence
+# (see prompt/build.py) as a content-free anchor. It is inert — it dispatches to
+# NO_OP and its prefill-position prediction is discarded (protocol_registry).
+#
+# It is a prompt-side token semantically (read during prefill; vocab_phase
+# "prefill"), but it is appended LAST here — after AR_TYPES — purely for E8
+# append-safety. A type's position in VOCAB_TYPES sets only its E8 identity code
+# (embedding.py Layout.e8_indices), which is decoupled from its semantic phase.
+# Appending preserves every existing type's identity code and token id; inserting
+# BOS into PROMPT_TYPES would shift every AR type's code and rebuild the embedding
+# table. So BOS does NOT join PROMPT_TYPES — it is spliced onto VOCAB_TYPES here.
+BOS = TokenType("bos")
+
+
+VOCAB_TYPES = PROMPT_TYPES + AR_TYPES + [BOS]

@@ -25,7 +25,7 @@ from torchwright_doom.inference.tokens_bridge import (
 from torchwright_doom.tokenizer import surface
 from torchwright_doom.tokenizer.hf_tokenizer import DoomTokenizer
 from torchwright_doom.tokens import Token
-from torchwright_doom.vocab import BEGIN, DONE, VOCAB_TYPES
+from torchwright_doom.vocab import BOS, DONE, VOCAB_TYPES
 
 _BY_NAME = {t.name: t for t in VOCAB_TYPES}
 
@@ -49,7 +49,7 @@ def run(trace_path: str) -> dict:
     checks["vocab_size"] = tok.vocab_size == len(tok._id_to_label)
     # Special tokens map onto existing rows; none appended (len == vocab_size).
     checks["eos_is_done"] = tok.eos_token_id == row_index(DONE, {})
-    checks["bos_is_begin"] = tok.bos_token_id == row_index(BEGIN, {})
+    checks["bos_is_bos"] = tok.bos_token_id == row_index(BOS, {})
     checks["pad_is_eos"] = tok.pad_token_id == tok.eos_token_id
     checks["no_unk"] = tok.unk_token is None
     checks["no_id_shift"] = len(tok) == tok.vocab_size
