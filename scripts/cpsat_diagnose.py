@@ -96,7 +96,6 @@ def _warm_start(graph, output_node, pos, d, d_head, rmap, computed, max_layers):
         clusters=None,
         admission_budget_fraction=0.4,
         policy=SchedulingPolicy(),
-        overlay_pinned_inputs=set(),
         output_node=output_node,
         max_layers=max_layers,
     )

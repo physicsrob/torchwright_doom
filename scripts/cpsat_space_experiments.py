@@ -368,7 +368,6 @@ def main() -> None:
         clusters=None,
         admission_budget_fraction=0.4,
         policy=policy,
-        overlay_pinned_inputs=set(),
         output_node=output_node,
         max_layers=200,
     )
