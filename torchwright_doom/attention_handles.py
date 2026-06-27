@@ -241,11 +241,7 @@ class RecentMarkerHandle:
         """Read ``value`` from the most recent row where this marker was active.
 
         This is a long-range recency read (it defaults to ``MATCH_GAIN_LONG``).
-        Per the windowed KV cache, the marker channel it lands on must be a
-        PERMANENT (non-expiring) published channel: matching an expiring-type
-        row beyond the resident window reads a recycled slot and returns a
-        wrong value SILENTLY. See CLAUDE.md "Windowed KV cache — the protocol
-        invariant".
+        The KV cache is unbounded, so any matched row stays readable.
         """
         return past.pick_most_recent(
             constant(1.0),
@@ -282,11 +278,7 @@ class RecentKeyHandle:
         """Read ``value`` from the most recent row whose key matches ``query``.
 
         This is a long-range recency read (it defaults to ``MATCH_GAIN_LONG``).
-        Per the windowed KV cache, the key channel it lands on must be a
-        PERMANENT (non-expiring) published channel: matching an expiring-type
-        row beyond the resident window reads a recycled slot and returns a
-        wrong value SILENTLY. See CLAUDE.md "Windowed KV cache — the protocol
-        invariant".
+        The KV cache is unbounded, so any matched row stays readable.
         """
         return past.pick_most_recent(
             query,

@@ -164,17 +164,8 @@ class GraphPast:
         content gap that gain is safe up to roughly 37,500 positions;
         the facade default remains the underlying op default, ``200.0``.
 
-        Windowed-KV-cache invariant. A recency read can reach arbitrarily
-        far back, so the row it lands on may be older than the cache
-        window. Every committed row is either PERMANENT (resident for the
-        whole run) or EXPIRING (its slot recycles once the window fills),
-        decided by token type at the inference layer. A long-range recency
-        read may target ONLY a permanent (non-expiring) published channel:
-        if it matches an expiring-type row that sits beyond the resident
-        window, that row is already gone and the windowed cache produces a
-        wrong value SILENTLY — no error, only token divergence in gates.
-        Any long read distance must be certified per CLAUDE.md "Windowed KV
-        cache — the protocol invariant" before relying on it here.
+        A recency read can reach arbitrarily far back; the KV cache is
+        unbounded, so every committed row stays readable for the whole run.
         """
         self._check_node(query, "pick_most_recent query")
         key_node = self._check_handle(key, "pick_most_recent key")
@@ -191,14 +182,8 @@ class GraphPast:
     def attend_to_offset(self, value: PastHandle, delta_pos: int = -1) -> Node:
         """Read ``value`` at a fixed causal offset.
 
-        Same windowed-KV-cache invariant as :meth:`pick_most_recent`: a
-        committed row is PERMANENT (resident for the whole run) or EXPIRING
-        (its slot recycles once the window fills). A small fixed offset (the
-        previous few rows) stays inside the resident window and is safe even
-        on an expiring-type row; an offset that can reach beyond the window
-        may target ONLY a permanent published channel, or the read returns a
-        wrong value SILENTLY once that row's slot has recycled. Certify any
-        deep offset per CLAUDE.md "Windowed KV cache — the protocol invariant".
+        The KV cache is unbounded, so any causal offset stays readable for
+        the whole run.
         """
         if not isinstance(delta_pos, int):
             raise TypeError(

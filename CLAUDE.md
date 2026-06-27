@@ -191,9 +191,7 @@ in exchange for the large complexity reduction and the narrative win.
 
 **The compiler's ONNX export and the ONNX→HF convert step are
 unchanged** — the HF path still consumes the ONNX artifact; only the
-ONNX *runtime* went away. `model.cache_window` is still a compile-cache
-key (the windowed scatter stays baked in the ONNX graph), but the HF
-runtime ignores it. `expiring_types` is vestigial (parsed, unread),
+ONNX *runtime* went away. `expiring_types` is vestigial (parsed, unread),
 slated for removal in a follow-up.
 
 **Correctness gate.** The graph-level gates
@@ -206,8 +204,9 @@ too heavy for per-commit pytest. Run manually at both `configs/e1m1.yaml`
 
 **Known ceiling.** The unbounded cache is why ~30-min single frames fit
 a big GPU today; a much larger frame or a multi-frame / video rollout
-would reintroduce the need for a bounded cache (the reason windowing
-once existed). Record that trade-off if you revisit it.
+would reintroduce the need for a bounded cache. The earlier windowed
+cache has been removed, so that would be a from-scratch re-add, not a
+dormant switch — record the trade-off if you revisit it.
 
 # Testing
 

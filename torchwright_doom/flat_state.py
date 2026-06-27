@@ -614,9 +614,8 @@ class WeaponPassState:
        the painted-row base (the most-recent weapon ``SET_CURSOR_Y``) are each
        recovered through a recency marker scoped to the weapon phase
        (``and_(is_set_cursor_*, weapon_seen)``). The recovery reads stay within
-       one weapon column (<= the sprite bbox height), far inside the windowed KV
-       cache, so ``DRAW_PLANES_BEGIN``/``setCursorX``/``setCursorY`` keep their
-       certified expiry — no cache change.
+       one weapon column (<= the sprite bbox height); the unbounded KV cache
+       keeps every recovered row readable.
     """
 
     weapon_begin_row: RecentMarkerHandle
@@ -709,7 +708,7 @@ class HudPassState:
        and the painted-row base (most-recent HUD ``SET_CURSOR_Y``), each scoped
        to the HUD phase (``and_(is_set_cursor_*, hud_seen)``) so they cannot
        match the earlier passes' cursor rows. The reads stay within one patch
-       column (<= the patch height), far inside the windowed KV cache.
+       column (<= the patch height); the KV cache is unbounded.
 
     The bar paints at native screen resolution (one host pixel per screen column,
     ``w = 1``), so the column is the raw ``cursor_x`` — no ``column_from_screen_x``

@@ -40,16 +40,13 @@ from .generation import TokenRuntime
 class HfCache:
     """Duck-typed stand-in for :class:`~.kv_cache.KVCache` over a HF cache.
 
-    The generation loops only read ``.windowed`` (always ``None`` here — there
-    is no slot-recycling policy on the unbounded HF path) and ``.length`` (the
-    committed position count); the actual key/value tensors live in the wrapped
-    ``transformers.DynamicCache``. ``commit`` just raises ``length`` (its
-    ``flush_pending`` is a no-op when ``windowed is None``).
+    The generation loops only read ``.length`` (the committed position count);
+    the actual key/value tensors live in the wrapped
+    ``transformers.DynamicCache``. ``commit`` just raises ``length``.
     """
 
     dynamic: Any  # transformers.DynamicCache
     length: int = 0
-    windowed: None = None
 
 
 class HfTokenRuntime(TokenRuntime[HfCache]):

@@ -20,7 +20,7 @@ from __future__ import annotations
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Callable, Generic, Protocol, TypeVar
+from typing import Callable, Generic, Protocol, TypeVar
 
 import torch
 
@@ -29,16 +29,15 @@ from .kv_cache import commit
 
 class _Cache(Protocol):
     """The cache surface the generation loops touch: the committed position
-    count and the (vestigial, always-``None``) windowing tag."""
+    count."""
 
     length: int
-    windowed: Any
 
 
 # The cache type a concrete runtime owns: the unbounded
 # :class:`~torchwright_doom.inference.kv_cache.KVCache`, the production HF
 # runtime's duck-typed ``HfCache``, or a test runtime's own. The loops only
-# ever read ``.length`` / ``.windowed`` and thread it through ``step``/``commit``.
+# ever read ``.length`` and thread it through ``step``/``commit``.
 CacheT = TypeVar("CacheT", bound=_Cache)
 
 # 1024-row prefill chunks bound the per-layer transient activations of a
