@@ -53,10 +53,14 @@ def _build_cmd(module: str, script: str, args: str) -> list[str]:
 
 
 @app.function(
-    gpu="a100-80gb",
+    # GPU / memory / timeout are env-overridable (like the CPU container): e.g.
+    #   MODAL_RUN_GPU=B200 MODAL_RUN_TIMEOUT=7200 MODAL_RUN_GPU_MEMORY=65536 \
+    #       make modal-run MODULE=... for a heavy full-frame oracle eval that
+    # needs more VRAM and wall time than the default A100.
+    gpu=os.environ.get("MODAL_RUN_GPU", "a100-80gb"),
     cpu=8,
-    memory=32768,
-    timeout=1800,
+    memory=int(os.environ.get("MODAL_RUN_GPU_MEMORY", "32768")),
+    timeout=_TIMEOUT,
     # The configs-augmented image: the artifact-debugging scripts need the
     # committed configs + WAD next to the mounted compile cache.
     image=ASSETS_IMAGE,
