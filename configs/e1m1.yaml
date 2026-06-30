@@ -8,10 +8,12 @@
 # faster 160x100 low-detail preview).  Everything else is a /tmp variant.
 #
 # State: scale 1 = 320x200 low-detail, d=8192 / decoupled 16k MLP,
-# CP-SAT schedule (optimize: 2), 57 compiled layers.  Rendered by the native
+# CP-SAT schedule (optimize: 2), 51 compiled layers.  Position is RoPE (rotary
+# attention, d_rot=64 partial); recency reads use the gain-8 global-position
+# tiebreak (RECENCY_GAIN, render_constants.py).  Rendered by the native
 # HuggingFace model (the production runtime) with an unbounded KV cache.
 # Certified against the pydoom reference at 320x200: 100% pixel coverage,
-# ~99.99% within-option color, ~42,249-token rollout.
+# ~99.99% within-option color (96.5% exact), ~53,748-token rollout.
 wad: doom1.wad
 model: {d: 8192, d_head: 128, d_rot: 64, scale: 1, detail: low, hud: true, d_hidden: 16384, optimize: 2}
 region: {x1: 627.2, y1: -3760.0, x2: 1395.2, y2: -2800.0}
@@ -21,8 +23,10 @@ textures:
 # Render-job runtime defaults — THE single source (CLI flags override
 # field-by-field).  Runtime knobs only: none enter the compile-cache key.
 run:
-  # Covers the full 320x200 low-detail frame (~42,249 tokens) with headroom;
-  # the cap is the pos-encoding table, and an oversized demand makes
+  # Covers the full 320x200 low-detail frame (~53,748 tokens) with headroom;
+  # the cap sizes the RoPE global-position recovery range (the BOS-weight PWL
+  # in global_position_from_bos) and bounds content dominance for recency
+  # (match_gain > RECENCY_GAIN * max_positions); an oversized demand makes
   # empty_past() reject before prefill.
   max_positions: 61440
   # Prefill chunk size: a memory knob bounding the per-pass transient
