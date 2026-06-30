@@ -32,7 +32,7 @@ import pytest
 
 from torchwright.graph import Concatenate
 from torchwright.debug.probe import reference_eval
-from torchwright.ops.inout_nodes import create_input, create_pos_encoding
+from torchwright.ops.inout_nodes import create_input, create_rope_config
 
 from torchwright_doom import std
 from torchwright_doom.embedding import TOKEN_VOCAB
@@ -56,9 +56,10 @@ def _build_scene_oracle():
     inputs = {"iv": tokens_to_input(tokens)}
 
     past = GraphPast(
-        input_vec=create_input("iv", _D_EMBED), pos_encoding=create_pos_encoding()
+        input_vec=create_input("iv", _D_EMBED),
+        rope=create_rope_config(d_head=128, max_positions=65536, d_rot=64),
     )
-    scene = SceneIndex.build(create_input("iv", _D_EMBED), past, create_pos_encoding())
+    scene = SceneIndex.build(create_input("iv", _D_EMBED), past)
 
     segments = bake_segments(md)
     n_nodes = len(md.nodes)

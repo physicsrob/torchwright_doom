@@ -26,7 +26,7 @@ from __future__ import annotations
 import torch
 
 from torchwright.compiler.export import compile_headless
-from torchwright.ops.inout_nodes import create_pos_encoding
+from torchwright.ops.inout_nodes import create_rope_config
 
 from torchwright_doom.embedding import W_EMBED, build_doom_embedding
 from torchwright_doom.past import GraphPast
@@ -49,7 +49,6 @@ def test_in_graph_embedding_autoregressive_counter(device) -> None:
 
     compiled = compile_headless(
         emit,
-        create_pos_encoding(),
         d=2048,
         d_head=32,
         max_layers=80,
@@ -90,14 +89,14 @@ def test_step_matches_full_forward_with_cross_position_handle(device) -> None:
     PosEncoding position-shift reproduce the cross-position attention exactly.
     """
     emb = build_doom_embedding("token_ids")
-    past = GraphPast(input_vec=emb, pos_encoding=create_pos_encoding())
+    rope = create_rope_config(d_head=32, max_positions=65536, d_rot=16)
+    past = GraphPast(input_vec=emb, rope=rope)
     node_here = past.publish("node", THINK_SIDE.extract(emb, "node"))
     prev_node = past.attend_to_offset(node_here, delta_pos=-1)
     emit = make_token(THINK_SIDE, node=add_const(prev_node, 1.0))
 
     compiled = compile_headless(
         emit,
-        create_pos_encoding(),
         d=2048,
         d_head=32,
         max_layers=80,

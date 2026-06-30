@@ -30,7 +30,7 @@ import torch
 
 from torchwright.debug.probe import probe_graph, reference_eval
 from torchwright.ops.arithmetic_ops import mod_const, thermometer_floor_div
-from torchwright.ops.inout_nodes import create_input, create_pos_encoding
+from torchwright.ops.inout_nodes import create_input
 
 from torchwright_doom.std import concat, one_hot
 
@@ -80,9 +80,8 @@ def test_digit_extraction_exact_when_compiled(W, B, N_BUCKETS):
 
     n_pos = W + 1
     inputs = {"v": _columns_tensor(W)}
-    pe = create_pos_encoding()
 
-    report = probe_graph(out, pe, inputs, n_pos, d=512, d_head=16, atol=0.05)
+    report = probe_graph(out, inputs, n_pos, d=512, d_head=16, atol=0.05)
     assert report.first_divergent is None, report.format_short()
 
     # Belt-and-braces: the exact-math oracle this compiled run matched is itself

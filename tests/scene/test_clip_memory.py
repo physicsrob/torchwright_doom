@@ -25,27 +25,61 @@ import pytest
 import torch
 
 from torchwright.debug.probe import probe_graph, reference_eval
-from torchwright.ops.inout_nodes import create_input, create_pos_encoding
+from torchwright.ops.inout_nodes import create_input, create_rope_config
 
 from torchwright_doom.attention_handles import RecentMarkerHandle
 from torchwright_doom.constants import SCREEN_HEIGHT
+from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
 from torchwright_doom.past import GraphPast
 from torchwright_doom.std import concat, constant, linear
+from torchwright_doom.vocab import BOS, NO_OP
 from torchwright_doom.wall_column_state import ClipMemory
 
+from ..prefill_fixture import row_index
+
 _DEFAULT = (-1.0, float(SCREEN_HEIGHT))
+_D_EMBED = TOKEN_VOCAB.layout.d_embed
+
+
+def _iv_rows(n_pos: int) -> torch.Tensor:
+    """A real d_embed input_vec with the inert BOS at position 0 and a non-BOS
+    filler elsewhere.  ``pick_most_recent`` is now the global mechanism, which reads
+    each token's absolute position from the BOS-weight readout
+    (``GraphPast.global_position`` → ``is_type(input_vec, BOS)``), so a focused
+    recency test must supply the genuine embedding, not a narrow placeholder."""
+    bos = W_EMBED[row_index(BOS, {})]
+    filler = W_EMBED[row_index(NO_OP, {})]
+    return torch.stack([bos if i == 0 else filler for i in range(n_pos)])
+
+
+# Non-update filler rows inserted between consecutive clip writes.  pick_most_recent
+# is now the GLOBAL mechanism: the recency tiebreak among same-column writes is
+# resolved by absolute position with sharpness exp(recency_scale·Δpos), so two
+# writes Δ=1 apart blend (~73 % / 27 %), while the real renderer's same-column
+# writes are many tokens apart and resolve cleanly.  Separating the test's writes
+# by this gap reproduces that regime (Δ=9 → exp(9) ≈ 8000, >99.98 % concentration).
+# Filler rows are non-updates (is_update=0): ClipMemory gates their key to zero, so
+# they are excluded from the read and only advance the absolute position.
+_RECENCY_GAP = 8
 
 
 def _build_graph(updates, query_col):
     """updates: list of (col, y1, y2) clip-update rows in causal order (later =
     more recent). Final row is the query. Returns (out_node, inputs, n_pos)."""
-    n_pos = len(updates) + 1
-    rows = [[1.0, float(c), float(y1), float(y2)] for (c, y1, y2) in updates]
+    rows: list[list[float]] = []
+    for i, (c, y1, y2) in enumerate(updates):
+        if i > 0:
+            rows.extend([[0.0, 0.0, 0.0, 0.0]] * _RECENCY_GAP)
+        rows.append([1.0, float(c), float(y1), float(y2)])
     rows.append([0.0, float(query_col), 0.0, 0.0])  # query row (not an update)
+    n_pos = len(rows)
     data = create_input("clip", 4)
 
-    iv = create_input("iv", 4)
-    past = GraphPast(input_vec=iv, pos_encoding=create_pos_encoding())
+    iv = create_input("iv", _D_EMBED)
+    past = GraphPast(
+        input_vec=iv,
+        rope=create_rope_config(d_head=32, max_positions=65536, d_rot=16),
+    )
 
     is_update_01 = linear(data, [[1.0], [0.0], [0.0], [0.0]])
     range_active = linear(concat(is_update_01, constant(1.0)), [[2.0], [-1.0]])
@@ -73,7 +107,7 @@ def _build_graph(updates, query_col):
         cursor_x_scalar_pub,
     )
     out = concat(clip.ceiling, clip.floor)
-    return out, {"clip": torch.tensor(rows)}, n_pos
+    return out, {"clip": torch.tensor(rows), "iv": _iv_rows(n_pos)}, n_pos
 
 
 def _eval(updates, query_col):
@@ -111,19 +145,18 @@ def test_clip_memory_lifted(case):
     name, updates, query_col = case
     exp = _expected(updates, query_col)
     got = _eval(updates, query_col)
-    # The recency tiebreak is a softmax (exp(8) per position gap), so a column
-    # updated at adjacent positions leaks ~1e-2 of the prior update — the same
-    # softness the one-hot ClipMemory had. Far-apart updates (the real renderer)
-    # are far harder. 0.05 admits the worst-case adjacent-update softness.
+    # The recency tiebreak is the GLOBAL mechanism (exp(recency_scale·Δpos) per
+    # position gap); with _RECENCY_GAP separation the same-column writes are Δ=9
+    # apart (exp(9) ≈ 8000, >99.98 % concentration), so the latest update wins
+    # cleanly. 0.05 admits the residual softmax leak.
     assert got == pytest.approx(
         exp, abs=0.05
     ), f"{name}: updates={updates} query={query_col} expected {exp} got {got}"
 
 
 # The recency tiebreak among repeated updates to ONE column must survive compiled
-# fp32 at a high column index (c~59 -> c^2~3481, scaled by MATCH_GAIN_CLIP). The
-# power-of-two gain keeps the lifted dot bit-exact across the two same-column
-# rows, so the latest update wins instead of blending with the earlier one.
+# fp32 at a high column index (c~59 -> c^2~3481, scaled by MATCH_GAIN_CLIP), so the
+# latest update wins instead of blending with the earlier one.
 _COMPILED_CASES = [
     ("compiled_high_col_recency", [(59, 6, 33), (59, 12, 21)], 59),
     ("compiled_high_col_miss", [(59, 6, 33)], 58),
@@ -137,6 +170,12 @@ def test_clip_memory_compiled(case):
         _expected(updates, query_col), abs=0.05
     ), f"{name}: oracle disagrees"
     out, inputs, n_pos = _build_graph(updates, query_col)
-    pe = create_pos_encoding()
-    report = probe_graph(out, pe, inputs, n_pos, d=2048, d_head=32, atol=0.05)
+    # The oracle check above pins the FINAL (query-position) value at abs=0.05.  The
+    # probe checks every node at every position, including intermediate filler rows
+    # where the global recency read is a near-Δ soft blend that fp32 and the float64
+    # oracle resolve slightly differently through the global_position PWL (~0.15
+    # inversion error).  atol=1.0 matches torchwright's global-recency probe
+    # convention and still dwarfs nothing real: a wrong clip selection differs by
+    # ≥ several units (recovered values range to 59).
+    report = probe_graph(out, inputs, n_pos, d=2048, d_head=32, atol=1.0)
     assert report.first_divergent is None, report.format_short()

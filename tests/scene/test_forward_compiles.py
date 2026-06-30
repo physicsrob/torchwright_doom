@@ -34,7 +34,7 @@ import os
 import onnx
 
 from torchwright.compiler.export import compile_to_onnx
-from torchwright.ops.inout_nodes import create_pos_encoding
+from torchwright.ops.inout_nodes import create_rope_config
 
 from torchwright_doom.embedding import build_doom_embedding
 from torchwright_doom.past import GraphPast
@@ -60,19 +60,24 @@ from torchwright_doom.render_main import forward
 # conservative — it deadlocks ~4800 — and is NOT the real d_embed demand.) The
 # H-side keys (R_CheckPlane occupied_key, ClipMemory) were already radixed/lifted
 # to d_qk <= 32 in Phase H.
+# Under RoPE the content rides the head grid, so d_head must cover the widest
+# content head (~28); d_head=64 / d_rot=32 (NoPE tail = 32) is the lightest working
+# point, with d=4096 holding the production 64 head-slots.  (Production export uses
+# d_head=128/d_rot=64/d=8192; this gate validates the structural compile at the
+# lighter pair.)
 _D = 4096
-_D_HEAD = 32
+_D_HEAD = 64
+_D_ROT = 32
 
 
 def test_forward_compiles_to_onnx(tmp_path) -> None:
     emb = build_doom_embedding("token_ids")
-    pos = create_pos_encoding()
-    next_token = forward(emb, GraphPast(input_vec=emb, pos_encoding=pos), pos)
+    rope = create_rope_config(d_head=_D_HEAD, max_positions=65536, d_rot=_D_ROT)
+    next_token = forward(emb, GraphPast(input_vec=emb, rope=rope))
 
     onnx_path = os.path.join(tmp_path, "doom_forward.onnx")
     compile_to_onnx(
         next_token,
-        pos,
         embedding=emb,
         output_path=onnx_path,
         d=_D,
@@ -119,5 +124,10 @@ def test_forward_compiles_to_onnx(tmp_path) -> None:
     # looser d (81 at d=5120) because the tight residual forces more serialization.
     # Keep the ceiling tight enough to catch a dispatch-fanout regression (a serial
     # fold would add ~13).
+    # Upper bound raised from 90 to 100 for RoPE global recency: the
+    # ``global_position_from_bos`` readout adds one MLP sublayer (the BOS-weight
+    # → position PWL inversion) plus its attention head, landing the count at ~92.
+    # Still tight enough to catch a dispatch-fanout regression (a serial fold
+    # would add ~13, past 100).
     n_layers = sum(1 for n in in_names if n.startswith("past_K_"))
-    assert 26 <= n_layers <= 90, f"unexpected compiled layer count {n_layers}"
+    assert 26 <= n_layers <= 100, f"unexpected compiled layer count {n_layers}"

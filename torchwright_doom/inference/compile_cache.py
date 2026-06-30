@@ -54,6 +54,7 @@ def compile_cached(
         onnx_path,
         d=config.model.d,
         d_head=config.model.d_head,
+        d_rot=config.model.d_rot,
         d_hidden=config.model.d_hidden,
         max_layers=config.model.max_layers,
         max_seq_len=config.model.max_seq_len,
@@ -148,10 +149,14 @@ def load_debug_session(
         )
     from torchwright.debug.onnx_debug import OnnxDebugSession
 
-    next_token, pos, _emb, _banks = build_graph(
-        asset_config=config.asset_config(), wad_path=wad_path
+    next_token, _rope, _emb, _banks = build_graph(
+        d_head=config.model.d_head,
+        max_positions=config.model.max_seq_len,
+        d_rot=config.model.d_rot,
+        asset_config=config.asset_config(),
+        wad_path=wad_path,
     )
-    return OnnxDebugSession(str(onnx_path), next_token, pos, providers=providers)
+    return OnnxDebugSession(str(onnx_path), next_token, providers=providers)
 
 
 def _write_render_meta(

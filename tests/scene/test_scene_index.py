@@ -13,7 +13,7 @@ import math
 
 import pytest
 
-from torchwright.ops.inout_nodes import create_input, create_pos_encoding
+from torchwright.ops.inout_nodes import create_input, create_rope_config
 
 from torchwright_doom import std
 from torchwright_doom.embedding import TOKEN_VOCAB
@@ -67,9 +67,10 @@ def _scene_and_inputs():
     n = len(seq)
     inputs = {"iv": tokens_to_input(seq)}
     past = GraphPast(
-        input_vec=create_input("iv", _D_EMBED), pos_encoding=create_pos_encoding()
+        input_vec=create_input("iv", _D_EMBED),
+        rope=create_rope_config(d_head=128, max_positions=65536, d_rot=64),
     )
-    scene = SceneIndex.build(create_input("iv", _D_EMBED), past, create_pos_encoding())
+    scene = SceneIndex.build(create_input("iv", _D_EMBED), past)
     return scene, n, inputs
 
 

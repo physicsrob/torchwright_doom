@@ -25,7 +25,7 @@ import pytest
 import torch
 
 from torchwright.debug.probe import probe_graph, reference_eval
-from torchwright.ops.inout_nodes import create_input, create_pos_encoding
+from torchwright.ops.inout_nodes import create_input, create_rope_config
 
 from torchwright_doom.past import GraphPast
 from torchwright_doom.std import concat, constant, linear, one_hot
@@ -49,7 +49,13 @@ def _build_graph(plane_id, candidate_vp, x1, x2, occ_cols):
     occ = create_input("occ", 4)
 
     iv = create_input("iv", 4)  # unused embedding placeholder for GraphPast
-    past = GraphPast(input_vec=iv, pos_encoding=create_pos_encoding())
+    # visplane occupancy uses content heads (not pick_most_recent), so no BOS /
+    # global_position read — the narrow placeholder iv stays unused.  d_head=64 /
+    # d_rot=32 covers the occupancy radix content on the NoPE tail.
+    past = GraphPast(
+        input_vec=iv,
+        rope=create_rope_config(d_head=64, max_positions=65536, d_rot=32),
+    )
 
     # active in {0,1} -> ±1 boolean (2*active - 1)
     two_active = linear(occ, [[2.0], [0.0], [0.0], [0.0]])
@@ -186,8 +192,7 @@ def test_check_conflict_high_instance_compiled(case):
     assert (oracle_val > 0.0) == expected, f"{name}: oracle {oracle_val}"
 
     conflict, inputs, n_pos = _build_graph(plane, vp, x1, x2, occ_cols)
-    pe = create_pos_encoding()
-    report = probe_graph(conflict, pe, inputs, n_pos, d=4096, d_head=32, atol=0.05)
+    report = probe_graph(conflict, inputs, n_pos, d=4096, d_head=64, atol=0.05)
     # No node diverges from the float64 oracle -> the compiled fp32 argmin did
     # not blend; the conflict boolean matches the (correct) oracle on both sides.
     assert report.first_divergent is None, report.format_short()

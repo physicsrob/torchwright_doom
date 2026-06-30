@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from torchwright.graph import Node, PosEncoding
+from torchwright.graph import Node
 from torchwright.graph import annotated
 
 from .assets import AssetIndex
@@ -69,16 +69,14 @@ class SceneIndex:
         cls,
         input_vec: Node,
         past: GraphPast,
-        pos: PosEncoding,
         assets: AssetIndex | None = None,
     ) -> "SceneIndex":
         """Publish this position's scene-index channels and return queries.
 
         Construction is eager: every field group publishes its backing channels
-        before render code consumes the returned `SceneIndex`. ``pos`` is
-        accepted for ``forward()``-signature parity but is unused in the body
-        (the previous-token read goes through ``past``, which already holds the
-        positional encoding).
+        before render code consumes the returned `SceneIndex`. The previous-token
+        read goes through ``past``, which holds the RoPE config; position is
+        graph-derived inside attention, never passed in.
         """
         # VALUE/ANGLE_VALUE tokens are interpreted by looking at the marker
         # token immediately before them.

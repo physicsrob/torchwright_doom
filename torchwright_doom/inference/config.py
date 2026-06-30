@@ -24,6 +24,13 @@ from ..asset_config import (
 class ModelConfig:
     d: int = 4096
     d_head: int = 32
+    # Partial-rotary width (vanilla HF partial_rotary_factor): the first d_rot
+    # dims of every head rotate, the last d_head - d_rot are the unrotated NoPE
+    # tail that content rides (exactly position-free).  None = full rotary
+    # (d_rot == d_head).  The two committed configs set 64 (with d_head 128) so
+    # the wide clip content fits the tail and the global position tiebreak rides
+    # a rotated plane.  Rides the compile-cache key via asdict(config.model).
+    d_rot: int | None = None
     scale: int = 4
     # Pixel paint detail: "high" = 1 screen column per rendered column (today),
     # "low" = 2 (DOOM low-detail; the host blits W=2). The 3D view renders
@@ -210,6 +217,7 @@ def load_render_config(path: str | Path) -> RenderConfig:
         model=ModelConfig(
             d=int(model.get("d", 4096)),
             d_head=int(model.get("d_head", 32)),
+            d_rot=_optional_int(model.get("d_rot")),
             scale=int(model.get("scale", 4)),
             detail=str(model.get("detail", "high")),
             hud=bool(model.get("hud", False)),

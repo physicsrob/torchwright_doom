@@ -10,12 +10,16 @@ sites (see the note below), not at import.
 from __future__ import annotations
 
 # Used on long ``pick_most_recent`` spans where a false match must lose
-# hard to the one real 0/1 marker. Sized so
-# ``match_gain * content_gap > SCORE_GAIN * max_recency_span``; 300_000
-# gives headroom over the longest rollout. This is safe
-# (fp32 on all paths). The op/facade default stays 200.0; long-span
-# callers thread this explicitly.
-MATCH_GAIN_LONG = 300_000.0
+# hard to the one real 0/1 marker. Sized so a content-matched key beats an
+# unmatched newer key at any position:
+# ``match_gain * content_gap > RECENCY_GAIN * max_positions``. The marker
+# content gap is 1 (0/1 marker), so at ``RECENCY_GAIN = 8`` and
+# ``max_positions = 61440`` this needs ``match_gain > 491_520``; 600_000 clears
+# it with headroom. (Was 300_000 under the pre-RoPE ``SCORE_GAIN`` when the
+# dominance bound was the ~32768 rollout span, not the 61440 cache cap.) Safe
+# in fp32 (ULP at 600_000 ≈ 0.06, far below the gain-8 recency step). The
+# op/facade default stays 200.0; long-span callers thread this explicitly.
+MATCH_GAIN_LONG = 600_000.0
 
 # Wall-column per-column clip-array recovery (``ClipMemory.pick_most_recent``).
 # The radix column key's match dot is ``bucket_match + digit_match``
@@ -26,6 +30,22 @@ MATCH_GAIN_LONG = 300_000.0
 # of two to keep its ``match_gain*c^2`` cancellation fp32-exact; the radix key
 # has no such cancellation, so any sufficiently large gain works.)
 MATCH_GAIN_CLIP = 300_000.0
+
+# Per-position recency gain for ``pick_most_recent`` — the position tiebreak in
+# torchwright's ``attend_most_recent_globally``. Adjacent positions differ by
+# RECENCY_GAIN in the attention logit, so among content-matching keys the most
+# recent wins with softmax weight ``exp(RECENCY_GAIN)/(exp(RECENCY_GAIN)+1)``;
+# at 8 that is ≈ 0.99966 (cond ≈ 0.9993) — sharp enough for the ±1 boolean
+# marker reads (``assert_bool``'s c_tol=0.005 needs cond > 0.995). This mirrors
+# the pre-RoPE scheme's ``SCORE_GAIN = 8`` exactly: old recency was ``8*counter``
+# (a global absolute position × gain 8); the new mechanism recovers the same
+# global absolute position from the BOS softmax weight and applies the same gain,
+# so it is the same mechanism, not a softer one. torchwright's op default is 1.0
+# (exp(1) ≈ 0.73 — far too soft for a boolean); DOOM threads this 8.0 through the
+# facade. Content dominance (a matched older key must beat an unmatched newer
+# key) requires ``match_gain * content_gap > RECENCY_GAIN * max_positions``; the
+# MATCH_GAIN_* values are sized against that at the rollout span.
+RECENCY_GAIN = 8.0
 
 # Renderer protocol enums and sentinels, shared by the wall-column and visplane
 # owners. All are plain floats wrapped by ``std.constant`` at their call sites

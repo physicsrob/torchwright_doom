@@ -23,7 +23,7 @@ import torch
 from torchwright.compiler.export import compile_headless
 from torchwright.debug.probe import build_prefill_from_input_values
 from torchwright.graph import fresh_graph_session
-from torchwright.ops.inout_nodes import create_input, create_pos_encoding
+from torchwright.ops.inout_nodes import create_input
 
 from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
 from torchwright_doom.emit import (
@@ -73,9 +73,8 @@ def test_compiled_emit_slotless_round_trip() -> None:
     """Slotless emit compiles to a pure-literal residual; argmax →
     that type's single row."""
     with fresh_graph_session():
-        pos_enc = create_pos_encoding()
         out = emit_slotless(BEGIN)
-        compiled = compile_headless(out, pos_enc, verbose=False)
+        compiled = compile_headless(out, verbose=False)
         # No InputNodes ⇒ empty input specs ⇒ d_input = 0.
         prefill = torch.zeros((1, 0))
         residual = compiled(prefill)
@@ -90,10 +89,9 @@ def test_compiled_emit_int_slot_single_round_trip() -> None:
     affine path."""
     for j in [0, 1, 5, NODE.slots["j"].hi - 1]:
         with fresh_graph_session():
-            pos_enc = create_pos_encoding()
             j_in = create_input("j", 1, value_range=(-1.0, 256.0))
             out = emit_int_slot_token(NODE, j=j_in)
-            compiled = compile_headless(out, pos_enc, verbose=False)
+            compiled = compile_headless(out, verbose=False)
             prefill = build_prefill_from_input_values(
                 compiled, {"j": torch.tensor([[float(j)]])}, n_pos=1
             )
@@ -110,11 +108,10 @@ def test_compiled_emit_int_slot_multi_round_trip() -> None:
     cases = [(0, 0), (1, 1), (63, 0), (127, 1)]
     for i, flag in cases:
         with fresh_graph_session():
-            pos_enc = create_pos_encoding()
             i_in = create_input("i", 1, value_range=(-1.0, 256.0))
             f_in = create_input("flag", 1, value_range=(-1.0, 4.0))
             out = emit_int_slot_token(SEG, i=i_in, is_first_of_ss=f_in)
-            compiled = compile_headless(out, pos_enc, verbose=False)
+            compiled = compile_headless(out, verbose=False)
             prefill = build_prefill_from_input_values(
                 compiled,
                 {
@@ -136,14 +133,13 @@ def test_compiled_emit_three_slot_round_trip() -> None:
     """DRAWSEG_META — three IntSlots, mixed cardinality; multi-slot path."""
     for i, wall_kind, silhouette in [(0, 0, 0), (64, 2, 3), (127, 1, 0)]:
         with fresh_graph_session():
-            pos_enc = create_pos_encoding()
             i_in = create_input("i", 1, value_range=(-1.0, 130.0))
             wk_in = create_input("wk", 1, value_range=(-1.0, 4.0))
             sil_in = create_input("sil", 1, value_range=(-1.0, 5.0))
             out = emit_int_slot_token(
                 DRAWSEG_META, i=i_in, wall_kind=wk_in, silhouette=sil_in
             )
-            compiled = compile_headless(out, pos_enc, verbose=False)
+            compiled = compile_headless(out, verbose=False)
             prefill = build_prefill_from_input_values(
                 compiled,
                 {
@@ -175,14 +171,13 @@ def test_compiled_emit_float_slot_round_trip() -> None:
     for k in test_ks:
         v = slot.lo + (k / (slot.levels - 1)) * span
         with fresh_graph_session():
-            pos_enc = create_pos_encoding()
             v_in = create_input(
                 "v",
                 1,
                 value_range=(float(slot.lo) - 1.0, float(slot.hi) + 1.0),
             )
             out = emit_float_slot_token(VALUE, v=v_in)
-            compiled = compile_headless(out, pos_enc, verbose=False)
+            compiled = compile_headless(out, verbose=False)
             prefill = build_prefill_from_input_values(
                 compiled, {"v": torch.tensor([[float(v)]])}, n_pos=1
             )

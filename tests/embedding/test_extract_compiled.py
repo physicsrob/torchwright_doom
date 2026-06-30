@@ -22,7 +22,7 @@ import pytest
 import torch
 
 from torchwright.compiler.export import compile_headless
-from torchwright.ops.inout_nodes import create_input, create_pos_encoding
+from torchwright.ops.inout_nodes import create_input
 
 from torchwright_doom import extract
 from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
@@ -87,10 +87,8 @@ def _row_index(token_type, slot_values: dict[str, int | float]) -> int:
 def _compile_one(output_node, device) -> tuple:
     """Compile a single-output graph that reads ``input_vec`` (named ``iv``)
     and feeds it through ``output_node``. Returns ``(compiled, d_embed)``."""
-    pos_encoding = create_pos_encoding()
     compiled = compile_headless(
         output_node,
-        pos_encoding,
         d=1024,
         d_head=32,
         max_layers=20,

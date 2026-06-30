@@ -18,7 +18,7 @@ import torch
 from torchwright.debug.probe import probe_graph, reference_eval
 from torchwright.graph import Node
 from torchwright.graph.attn import Attn
-from torchwright.ops.inout_nodes import create_input, create_pos_encoding
+from torchwright.ops.inout_nodes import create_input, create_rope_config
 
 from torchwright_doom.constants import SCREEN_WIDTH
 from torchwright_doom.past import GraphPast, PastHandleScope
@@ -91,11 +91,13 @@ def test_coverage_score_discriminates_inside_vs_outside() -> None:
     )
 
 
-def _successor_graph(prefix: str = "succ") -> tuple[Node, Node]:
-    pos = create_pos_encoding()
+def _successor_graph(prefix: str = "succ"):
+    # d_head=64/d_rot=32: the widest content head here (the bucket head, compact
+    # width 18) rides the 32-wide NoPE tail; no global-recency BOS head is built.
+    rope = create_rope_config(d_head=64, max_positions=65536, d_rot=32)
     past = GraphPast(
         input_vec=create_input(f"{prefix}_iv", 1),
-        pos_encoding=pos,
+        rope=rope,
     )
     scope = PastHandleScope(past)
     start = create_input(f"{prefix}_start", 1)
@@ -121,7 +123,7 @@ def _successor_graph(prefix: str = "succ") -> tuple[Node, Node]:
         carry_payload=handles.carry_payload,
     )
     column = create_input(f"{prefix}_column", 1)
-    return solids.next_start_after(column), pos
+    return solids.next_start_after(column), rope
 
 
 def _successor_inputs(
@@ -180,17 +182,34 @@ def _attn_nodes(root: Node) -> list[Attn]:
     return found
 
 
+def _tail_content_width(attn, d_head: int, d_rot: int) -> int:
+    """Number of NoPE-tail columns the content rides — the compact content width.
+
+    Under partial rotary ``rotary_content_head`` relocates a head's compact
+    ``(·, W)`` Q/K projection onto tail dims ``[d_rot:d_rot+W]``, so the count of
+    non-zero tail columns recovers ``W`` (the d_qk-era discriminator, now that
+    every head fills the grid)."""
+    used = (attn.query_matrix[:, d_rot:d_head].abs().sum(0) != 0) | (
+        attn.key_matrix[:, d_rot:d_head].abs().sum(0) != 0
+    )
+    return int(used.sum())
+
+
 def test_radix_successor_attention_widths_and_identity_value_paths() -> None:
-    out, _pos = _successor_graph()
-    by_dqk = {attn.d_qk: attn for attn in _attn_nodes(out)}
+    out, rope = _successor_graph()
+    d_head, d_rot = rope.d_head, rope.d_rot
+    attns = _attn_nodes(out)
 
-    h1 = by_dqk[2 + _N_BUCKETS + _RADIX_BASE]
-    h2 = by_dqk[1 + _N_BUCKETS + 1]
-    h3 = by_dqk[2 + _N_BUCKETS + 1]
+    # Under RoPE every head fills the grid (d_qk == d_head) and rides the same
+    # partial-rotary width; the content that used to set d_qk now rides the NoPE
+    # tail, so the three heads are distinguished by their tail content width.
+    for attn in attns:
+        assert attn.d_qk == d_head
+        assert attn.rope_d_rot == d_rot
 
-    assert h1.d_qk == 18
-    assert h2.d_qk == 10
-    assert h3.d_qk == 11
+    by_content = {_tail_content_width(a, d_head, d_rot): a for a in attns}
+    h1 = by_content[2 + _N_BUCKETS + _RADIX_BASE]  # the bucket head
+    h3 = by_content[2 + _N_BUCKETS + 1]
 
     for attn in (h1, h3):
         eye = torch.eye(attn.d_v)
@@ -202,7 +221,7 @@ def test_radix_successor_attention_widths_and_identity_value_paths() -> None:
 
 
 def test_radix_next_start_after_compiled_probe() -> None:
-    out, pos = _successor_graph()
+    out, _rope = _successor_graph()
     starts = [0, 2 * _RADIX_BASE, 12, 58]
     rows = [
         (0, 1.0, 0),
@@ -232,11 +251,10 @@ def test_radix_next_start_after_compiled_probe() -> None:
 
     report = probe_graph(
         out,
-        pos_encoding=pos,
         input_values=inputs,
         n_pos=n_pos,
-        d=1008,
-        d_head=18,
+        d=1024,
+        d_head=64,
         atol=0.1,
     )
     assert report.first_divergent is None, report.format_short()

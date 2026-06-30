@@ -23,7 +23,7 @@ import torch
 
 from torchwright.debug.probe import probe_graph, reference_eval
 from torchwright.graph import fresh_graph_session
-from torchwright.ops.inout_nodes import create_input, create_pos_encoding
+from torchwright.ops.inout_nodes import create_input
 
 from torchwright_doom.embedding import W_EMBED
 from torchwright_doom.emit import emit_token
@@ -83,7 +83,5 @@ def test_digit_quad_compiled_matches_oracle():
     (the steep-ramp concern): no node diverges from the oracle."""
     qs = [33791.48, 33791.9, 33792.1, 1023.98, 32767.9, 100.5, 60000.3]
     out, _v, inputs, _rows = _emit_value_rows([_v_of_q(q) for q in qs])
-    report = probe_graph(
-        out, create_pos_encoding(), inputs, len(qs), d=1024, d_head=16, atol=0.1
-    )
+    report = probe_graph(out, inputs, len(qs), d=1024, d_head=16, atol=0.1)
     assert report.first_divergent is None, report.format_short()

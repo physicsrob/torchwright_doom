@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from torchwright.ops.inout_nodes import create_input, create_pos_encoding
+from torchwright.ops.inout_nodes import create_input, create_rope_config
 
 from torchwright_doom import render_ops, std
 from torchwright_doom.attention_handles import (
@@ -32,7 +32,7 @@ _D_EMBED = TOKEN_VOCAB.layout.d_embed
 def _fresh_past() -> GraphPast:
     return GraphPast(
         input_vec=create_input("iv", _D_EMBED),
-        pos_encoding=create_pos_encoding(),
+        rope=create_rope_config(d_head=128, max_positions=65536, d_rot=64),
     )
 
 

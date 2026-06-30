@@ -39,7 +39,7 @@ from __future__ import annotations
 import torch
 
 from torchwright.debug.probe import reference_eval
-from torchwright.ops.inout_nodes import create_input, create_pos_encoding
+from torchwright.ops.inout_nodes import create_input, create_rope_config
 
 from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
 from torchwright_doom.past import GraphPast
@@ -50,15 +50,16 @@ from torchwright_doom.vocab import NO_OP
 
 from ..prefill_fixture import TINY_BSP_SCENE, row_index
 
-# Plan E's shared-slot layout shrank the residual peak; Plan F/G's projection +
-# BBoxPruner grew it; Plan J's flat-pass span emission grew it again AND raised
-# the d_head floor. Radixing the flat keys (see test_forward_compiles) brings the
-# whole forward back to H's d=4096 / d_head=32 working point, so this exercises
-# the compiled free-run at the real target config. (This compiles the full J
-# forward — 85 layers — so the in-process compile_headless run is heavier than the
-# pre-J traversal spine; it fits in ~12 GB.)
+# Under RoPE the content rides the head grid, so d_head must cover the widest
+# content head (~28 wide) — d_head=64 with d_rot=32 (the NoPE tail = 32 holds it)
+# is the lightest working point; d=4096 keeps the production 64 head-slots
+# (4096/64). The production export uses d_head=128/d_rot=64/d=8192; this in-process
+# gate uses the lighter pair (same content placement, half the head width) so the
+# full-forward compile_headless run stays tractable.
 _D = 4096
-_D_HEAD = 32
+_D_HEAD = 64
+_D_ROT = 32
+_MAX_POS = 65536
 _MAX_STEPS = 8  # plenty for set_cursor + side precompute + descent on a 1-node scene
 
 
@@ -79,8 +80,8 @@ def _decode_type(row: int) -> str:
 def _exact_math_rollout(prefill_ids: list[int]) -> list[int]:
     """Free-run the graph in exact math (reference_eval), one token at a time."""
     iv = create_input("iv", TOKEN_VOCAB.layout.d_embed)
-    pos = create_pos_encoding()
-    nt = forward(iv, GraphPast(input_vec=iv, pos_encoding=pos), pos)
+    rope = create_rope_config(d_head=_D_HEAD, max_positions=_MAX_POS, d_rot=_D_ROT)
+    nt = forward(iv, GraphPast(input_vec=iv, rope=rope))
 
     seq = list(prefill_ids)
     emitted: list[int] = []
@@ -106,10 +107,11 @@ def _build_compiled(device, *, d: int, d_head: int, max_layers: int = 200):
     """
     from torchwright.compiler.export import compile_headless
 
-    next_token, pos, _emb, _banks = build_graph()
+    next_token, _rope, _emb, _banks = build_graph(
+        d_head=d_head, max_positions=_MAX_POS, d_rot=_D_ROT
+    )
     compiled = compile_headless(
         next_token,
-        pos,
         d=d,
         d_head=d_head,
         max_layers=max_layers,

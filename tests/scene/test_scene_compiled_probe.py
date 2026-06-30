@@ -23,7 +23,7 @@ import torch
 from torchwright.compiler.export import compile_headless
 from torchwright.debug.probe import probe_compiled, reference_eval
 from torchwright.graph import Concatenate
-from torchwright.ops.inout_nodes import create_input, create_pos_encoding
+from torchwright.ops.inout_nodes import create_input, create_rope_config
 
 from torchwright_doom import std
 from torchwright_doom.bsp_traversal import _think_side_compute
@@ -80,10 +80,10 @@ def test_scene_index_compiles_and_matches_oracle(device) -> None:
     inputs = {"iv": tokens_to_input(seq)}
 
     d_embed = TOKEN_VOCAB.layout.d_embed
-    pos = create_pos_encoding()
+    rope = create_rope_config(d_head=128, max_positions=65536, d_rot=64)
     iv = create_input("iv", d_embed)
-    past = GraphPast(input_vec=iv, pos_encoding=pos)
-    scene = SceneIndex.build(iv, past, pos)
+    past = GraphPast(input_vec=iv, rope=rope)
+    scene = SceneIndex.build(iv, past)
 
     # A representative cross-section: player pose, node coords + root recency,
     # node presence (no-match branch), and a seg endpoint — covering mean_where,
@@ -102,11 +102,11 @@ def test_scene_index_compiles_and_matches_oracle(device) -> None:
         ]
     )
 
-    # d_head must cover the widest attention key — the presence lookups key on
-    # a one-hot of width N_NODES_MAX + 1 = 65, so d_qk = 65.
+    # Partial rotary (d_rot=64): content rides the 64-wide NoPE tail.  The widest
+    # content here is a width-3 lifted-equality presence key (well within the
+    # tail); d_head=128 also keeps the BOS-weight global-position plane quasi-static.
     compiled = compile_headless(
         channels,
-        pos,
         d=2048,
         d_head=128,
         max_layers=60,
@@ -175,10 +175,10 @@ def test_side_test_cross_product_compiles_exact(device) -> None:
     inputs = {"iv": tokens_to_input(seq)}
 
     d_embed = TOKEN_VOCAB.layout.d_embed
-    pos = create_pos_encoding()
+    rope = create_rope_config(d_head=64, max_positions=65536, d_rot=32)
     iv = create_input("iv", d_embed)
-    past = GraphPast(input_vec=iv, pos_encoding=pos)
-    scene = SceneIndex.build(iv, past, pos)
+    past = GraphPast(input_vec=iv, rope=rope)
+    scene = SceneIndex.build(iv, past)
 
     bits = Concatenate(
         [
@@ -187,11 +187,10 @@ def test_side_test_cross_product_compiles_exact(device) -> None:
         ]
     )
 
-    # No one-hot presence key here (only lifted-key side lookups), so d_head=64
-    # comfortably covers the attention key widths.
+    # Only lifted-key side lookups here (narrow content), so d_head=64 / d_rot=32
+    # comfortably covers the NoPE-tail content and keeps the BOS plane quasi-static.
     compiled = compile_headless(
         bits,
-        pos,
         d=2048,
         d_head=64,
         max_layers=60,

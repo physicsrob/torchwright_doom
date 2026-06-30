@@ -18,7 +18,7 @@ import torch
 
 from torchwright.debug.probe import reference_eval
 from torchwright.graph import fresh_graph_session
-from torchwright.ops.inout_nodes import create_input, create_pos_encoding
+from torchwright.ops.inout_nodes import create_input, create_rope_config
 
 from torchwright_doom.embedding import BASE, CENTER, TOKEN_VOCAB, W_EMBED
 from torchwright_doom.emit import (
@@ -316,8 +316,8 @@ def test_forward_keeps_only_four_wide_floors() -> None:
     carrier (or a collapse change) — update this list consciously.
     """
     iv = create_input("iv", TOKEN_VOCAB.layout.d_embed)
-    pos = create_pos_encoding()
-    nt = forward(iv, GraphPast(input_vec=iv, pos_encoding=pos), pos)
+    rope = create_rope_config(d_head=64, max_positions=65536, d_rot=32)
+    nt = forward(iv, GraphPast(input_vec=iv, rope=rope))
 
     # `floor_int` expands into `floor_int_step_linear2` (one per instance), whose
     # width is the high-byte range. At the 2-digit positions the block is sized

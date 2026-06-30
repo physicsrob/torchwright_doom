@@ -28,7 +28,7 @@ from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from torchwright.graph import Node, PosEncoding
+from torchwright.graph import Node
 from torchwright.graph import annotate, annotated
 
 from .bsp_traversal import BspTraversal
@@ -227,9 +227,7 @@ def _distinct_head_pairs(
 
 
 # DOOM: R_RenderPlayerView (r_main.c) — top-level per-frame render dispatch
-def forward(
-    input_vec: Node, past: GraphPast, pos: PosEncoding, asset_index=None
-) -> Node:
+def forward(input_vec: Node, past: GraphPast, asset_index=None) -> Node:
     # Provenance: each subsystem call below re-annotates to its own TOP-LEVEL code
     # (SceneIndex.build -> `scene`, the publish/branch builders -> their owners,
     # dispatch_next_token -> `dispatch`). forward() therefore does NOT wrap the
@@ -241,7 +239,7 @@ def forward(
     # the `PastHandleScope` wrap below is intentional and must follow it. It is a
     # distinct local (`scope`) rather than a rebind of `past` so the two types
     # stay separable.
-    scene = SceneIndex.build(input_vec, past, pos, assets=asset_index)
+    scene = SceneIndex.build(input_vec, past, assets=asset_index)
     # Current-token decode + memory-fetch handles (the `input` subsystem): the
     # input-type code, the two previous-type reads, and the typed token view.
     with annotate("input"):
@@ -254,12 +252,14 @@ def forward(
             prev_prev_input_type,
         )
 
-    # The projection texel path (Phase J) reads the position as a *scalar* value
-    # (the original's ``pos`` is a 1-Vec): pixel_index = pos - span_v0.pos - 1, and the
-    # span-v0 / flat-cursor publishes stamp it. Extract the raw integer counter
-    # column from the PosEncoding (``SceneIndex.build``'s ``pos`` is unused).
+    # The projection texel path (Phase J) reads the position as a *scalar* value:
+    # pixel_index = pos - span_v0.pos - 1, and the span-v0 / flat-cursor publishes
+    # stamp it. Under RoPE there is no host counter column; the graph-derived
+    # absolute position (``GraphPast.global_position()`` — recovered from the inert
+    # BOS token via rotary attention, RoPE-clean) is the monotone position scalar
+    # that replaces it, used both here and as the recency tiebreak.
     with annotate("dispatch"):
-        pos_scalar = pos.get_position_scalar()
+        pos_scalar = past.global_position()
     protocols = publish_runtime_protocols(input_vec, scope, inp, scene, pos_scalar)
     branches = build_branch_outputs(inp, protocols)
     return dispatch_next_token(inp, branches)

@@ -31,7 +31,7 @@ import pytest
 import torch
 
 from torchwright.debug.probe import reference_eval
-from torchwright.ops.inout_nodes import create_input, create_pos_encoding
+from torchwright.ops.inout_nodes import create_input, create_rope_config
 
 from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
 from torchwright_doom.graph_debug import silenced_graph_asserts
@@ -153,8 +153,9 @@ def flat_pixel_eval():
 
     d_embed = TOKEN_VOCAB.layout.d_embed
     iv = create_input("iv", d_embed)
-    past = GraphPast(input_vec=iv, pos_encoding=create_pos_encoding())
-    next_token = forward(iv, past, create_pos_encoding())
+    rope = create_rope_config(d_head=128, max_positions=65536, d_rot=64)
+    past = GraphPast(input_vec=iv, rope=rope)
+    next_token = forward(iv, past)
 
     with silenced_graph_asserts():
         cache = reference_eval(next_token, inputs, n_pos)

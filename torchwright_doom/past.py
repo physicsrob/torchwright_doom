@@ -10,17 +10,23 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-from torchwright.graph import Node, PosEncoding
+from torchwright.graph import Node, RopeConfig
 from torchwright.ops import negate
 from torchwright.ops.attention_ops import (
     attend_argmax_dot,
     attend_argmin_above_in_bucket,
     attend_argmin_above_integer,
     attend_mean_where,
-    attend_most_recent_matching,
+    attend_to_offset,
+)
+from torchwright.ops.global_recency import (
+    attend_most_recent_globally,
+    global_position_from_bos,
 )
 
-from .extract import input_type_code
+from .extract import input_type_code, is_type
+from .render_constants import RECENCY_GAIN
+from .vocab import BOS
 
 
 @dataclass(frozen=True)
@@ -37,18 +43,38 @@ class PastHandle:
 class GraphPast:
     """Thin graph-building facade over torchwright attention ops."""
 
-    def __init__(self, *, input_vec: Node, pos_encoding: PosEncoding):
+    def __init__(self, *, input_vec: Node, rope: RopeConfig):
         self._check_node(input_vec, "input_vec")
-        if not isinstance(pos_encoding, PosEncoding):
+        if not isinstance(rope, RopeConfig):
             raise TypeError(
-                "GraphPast: pos_encoding must be a torchwright.graph.PosEncoding, "
-                f"got {type(pos_encoding).__name__}"
+                "GraphPast: rope must be a torchwright.graph.RopeConfig, "
+                f"got {type(rope).__name__}"
             )
         self._input_vec = input_vec
-        self._pos = pos_encoding
+        self._rope = rope
+        self._global_position_node: Node | None = None
         self._owner = object()
         self._published_names: set[str] = set()
         self._input_type_handle: PastHandle | None = None
+
+    def global_position(self) -> Node:
+        """Each token's approximate absolute position (RoPE-derived, via BOS).
+
+        Built once and cached.  This is the graph-computed monotone position
+        scalar that replaces the old host counter column: ``global_position_from_bos``
+        recovers position ``0..max_positions`` from the softmax weight every token
+        places on the inert BOS token (``is_type(input_vec, BOS)``, 1.0 only at
+        position 0).  It is used both as the absolute-position scalar for bounded
+        pixel-index math (``pos - marker``) and as the recency tiebreak in
+        :meth:`pick_most_recent`.  Provenance-clean: derived from rotary attention,
+        never host-seeded.
+        """
+        if self._global_position_node is None:
+            bos_indicator = is_type(self._input_vec, BOS)
+            self._global_position_node = global_position_from_bos(
+                self._rope, bos_indicator
+            )
+        return self._global_position_node
 
     def publish(self, name: str, value: Node) -> PastHandle:
         """Name ``value`` for subsequent graph-past attention reads."""
@@ -116,6 +142,7 @@ class GraphPast:
         value_node = self._check_handle(value, "pick_argmax value")
         self._check_query_width(query, key, "pick_argmax")
         return attend_argmax_dot(
+            self._rope,
             query,
             key_node,
             value_node,
@@ -142,6 +169,7 @@ class GraphPast:
         value_node = self._check_handle(value, "pick_argmin value")
         self._check_query_width(query, key, "pick_argmin")
         return attend_argmax_dot(
+            self._rope,
             negate(query),
             key_node,
             value_node,
@@ -155,28 +183,47 @@ class GraphPast:
         value: PastHandle,
         *,
         match_gain: float = 200.0,
+        recency_scale: float = RECENCY_GAIN,
     ) -> Node:
-        """Pick the most recent causal row whose key matches ``query``.
+        """Pick the most recent causal row whose key matches ``query`` — **global**.
 
-        For long-span callers:
-        torchwright's current attention paths run this matmul in fp32,
-        so callers can pass ``MATCH_GAIN_LONG = 300_000.0``. At unit
-        content gap that gain is safe up to roughly 37,500 positions;
-        the facade default remains the underlying op default, ``200.0``.
+        Recency is resolved by the graph-derived absolute position
+        (:meth:`global_position`), not the bounded rotary lobe: the tiebreak among
+        content-matching keys is monotone over the whole ``[0, max_positions]``
+        rollout, so a recency read can reach arbitrarily far back with no window
+        cliff (the unbounded clip read DOOM needs).  The KV cache is unbounded, so
+        every committed row stays readable for the whole run.
 
-        A recency read can reach arbitrarily far back; the KV cache is
-        unbounded, so every committed row stays readable for the whole run.
+        This is the same mechanism the pre-RoPE renderer used — a global absolute
+        position scaled by a per-position gain — so it inherits that scheme's
+        sharpness.  ``recency_scale`` is that gain (``RECENCY_GAIN``, the old
+        ``SCORE_GAIN = 8``): adjacent positions differ by ``recency_scale`` in the
+        logit, so the most recent matching key wins the softmax sharply
+        (``exp(8)`` ⇒ cond ≈ 0.9993), which a ±1 boolean marker read needs.  The
+        torchwright op default ``recency_scale=1`` is far too soft (``exp(1)`` ⇒
+        ~0.73 blend); DOOM threads ``8`` here.
+
+        Content-dominance invariant (the caller must satisfy): a content-matched
+        older key must beat an unmatched newer key, i.e.
+        ``match_gain · min_match_dot_gap > recency_scale · max_positions``.  At
+        ``recency_scale=8`` and ``max_positions=61440`` that needs
+        ``match_gain · min_match_dot_gap > 491_520``; DOOM callers pass
+        ``MATCH_GAIN_LONG`` / ``MATCH_GAIN_CLIP`` sized for that.  The facade
+        default ``match_gain=200.0`` is the underlying op default and is not
+        relied on by any caller.
         """
         self._check_node(query, "pick_most_recent query")
         key_node = self._check_handle(key, "pick_most_recent key")
         value_node = self._check_handle(value, "pick_most_recent value")
         self._check_query_width(query, key, "pick_most_recent")
-        return attend_most_recent_matching(
-            self._pos,
+        return attend_most_recent_globally(
+            self._rope,
             query,
             key_node,
+            self.global_position(),
             value_node,
             match_gain=match_gain,
+            recency_scale=recency_scale,
         )
 
     def attend_to_offset(self, value: PastHandle, delta_pos: int = -1) -> Node:
@@ -196,13 +243,13 @@ class GraphPast:
                 f"got delta_pos={delta_pos}"
             )
         value_node = self._check_handle(value, "attend_to_offset value")
-        return self._pos.attend_to_offset(value_node, delta_pos=delta_pos)
+        return attend_to_offset(self._rope, value_node, delta_pos=delta_pos)
 
     def mean_where(self, validity: PastHandle, value: PastHandle) -> Node:
         """Uniform mean of ``value`` over rows whose validity is +1."""
         validity_node = self._check_handle(validity, "mean_where validity")
         value_node = self._check_handle(value, "mean_where value")
-        return attend_mean_where(self._pos, validity_node, value_node)
+        return attend_mean_where(self._rope, validity_node, value_node)
 
     def pick_argmin_above(
         self,
@@ -225,7 +272,7 @@ class GraphPast:
                 f"width {len(threshold_onehot)}"
             )
         return attend_argmin_above_integer(
-            self._pos,
+            self._rope,
             score_node,
             indicators_node,
             threshold_onehot,
@@ -279,7 +326,7 @@ class GraphPast:
             )
 
         return attend_argmin_above_in_bucket(
-            self._pos,
+            self._rope,
             score_node,
             validity_node,
             key_bucket_node,
