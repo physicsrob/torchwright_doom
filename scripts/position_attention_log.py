@@ -77,7 +77,12 @@ def _apply_screen_env_from_argv():
         elif a.startswith("--config="):
             cfg = a.split("=", 1)[1]
     here = Path(__file__).resolve().parents[1]
-    for cand in (Path(cfg), here / cfg, Path("/root") / cfg, Path("/root/torchwright_doom") / cfg):
+    for cand in (
+        Path(cfg),
+        here / cfg,
+        Path("/root") / cfg,
+        Path("/root/torchwright_doom") / cfg,
+    ):
         if cand.exists():
             text = cand.read_text()
             break
@@ -98,10 +103,27 @@ _apply_screen_env_from_argv()
 
 import torch
 
+# NOTE (Phase 8c): this instrumentation harness still targets the deleted
+# sinusoidal PosEncoding scheme — it hooks Attn.compute and classifies recency
+# heads by the raw-counter column.  Under RoPE position is a rotation, so a
+# rewrite must (a) build the graph with create_rope_config / GraphPast(rope=...),
+# (b) classify a recency head by the presence of the global_position node
+# (GraphPast.global_position) in its key_in leaves rather than a PosEncoding
+# leaf, and (c) compute the position term as recency_scale·pos·cos((k-q)·theta)
+# on the slowest rotated plane (apply_rope), not a raw qk-column dot.  Left
+# runtime-broken (imports the removed pos_encoding module) pending that rewrite;
+# the test suite does not import scripts.
+#
+# The recency-scheme DECISION this harness once informed is now settled: global
+# recency at recency_scale=8 (= the old 8*counter) — see render_constants.py
+# RECENCY_GAIN and the position-encoding-swap-research memo.  So the harness is
+# no longer load-bearing for a decision; its remaining use is the 42k full-frame
+# 0-flips / softmax-concentration replay, which is currently covered more
+# authoritatively by the `test_flat_pixel_oracle` oracle asserts (cond near ±1)
+# and the `make run COMPARE=1` render-vs-pydoom gate.  Rewrite is a nice-to-have.
 from torchwright.graph import Concatenate
 from torchwright.graph.attn import Attn
 from torchwright.graph.pos_encoding import PosEncoding
-from torchwright.compiler.utils import get_ancestor_nodes
 from torchwright.debug.probe import reference_eval
 from torchwright.ops.inout_nodes import create_input, create_pos_encoding
 
@@ -121,7 +143,7 @@ _MAX_STEPS = 8
 CONTENT_TIE_EPS = 1.0  # content-logit window that counts as a "tie" to discriminate
 TOPK = 16
 _MAX_Q_PER_HEAD = 400  # subsample query positions per head on long frames
-_MAX_CANDIDATES = 64   # cap candidate keys per record (bounds the no-match fallback)
+_MAX_CANDIDATES = 64  # cap candidate keys per record (bounds the no-match fallback)
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +162,9 @@ def _leaf_rows_of_posencoding(key_in):
         w = len(leaf)
         if isinstance(leaf, PosEncoding):
             counter_rows.append(row + leaf.counter_col)
-            trig_rows.extend(range(row + leaf.trig_slice.start, row + leaf.trig_slice.stop))
+            trig_rows.extend(
+                range(row + leaf.trig_slice.start, row + leaf.trig_slice.stop)
+            )
         row += w
     return counter_rows, trig_rows
 
@@ -187,8 +211,8 @@ def classify_attn(node: Attn):
 # Logging hook around Attn.compute
 # ---------------------------------------------------------------------------
 
-_REGISTRY: dict[int, dict] = {}      # id(node) -> classification
-_UID: dict[int, int] = {}            # id(node) -> stable small uid
+_REGISTRY: dict[int, dict] = {}  # id(node) -> classification
+_UID: dict[int, int] = {}  # id(node) -> stable small uid
 _RECORDS: dict[tuple[int, int], dict] = {}  # (uid, query_pos) -> record (dedup)
 
 
@@ -203,8 +227,8 @@ def _install_logger():
         # Replicate the logit math (cheap relative to the value pass).
         query_in = self.inputs[0].compute(n_pos, input_values)
         key_in = self.inputs[1].compute(n_pos, input_values)
-        qv = query_in @ self.query_matrix          # (n_pos, d_qk)
-        kv = key_in @ self.key_matrix              # (n_pos, d_qk)
+        qv = query_in @ self.query_matrix  # (n_pos, d_qk)
+        kv = key_in @ self.key_matrix  # (n_pos, d_qk)
         dev = qv.device
         # value payload each key would deliver — used to test whether the 2nd
         # most-recent content-match carries a DIFFERENT value than the most
@@ -214,7 +238,9 @@ def _install_logger():
 
         cc = info["content_cols"]
         pc = info["pos_cols"]
-        content = qv[:, cc] @ kv[:, cc].t() if cc else torch.zeros(n_pos, n_pos, device=dev)
+        content = (
+            qv[:, cc] @ kv[:, cc].t() if cc else torch.zeros(n_pos, n_pos, device=dev)
+        )
         posl = qv[:, pc] @ kv[:, pc].t()
         full = content + posl
 
@@ -223,11 +249,11 @@ def _install_logger():
         # hundreds of thousands of times — that was the original bottleneck.
         neg = torch.finfo(full.dtype).min
         ar = torch.arange(n_pos, device=dev)
-        causal = ar[None, :] <= ar[:, None]                 # (q, k): keep k <= q
+        causal = ar[None, :] <= ar[:, None]  # (q, k): keep k <= q
         full_m = torch.where(causal, full, neg)
         content_m = torch.where(causal, content, neg)
 
-        selected = full_m.argmax(dim=1)                     # (n_pos,)
+        selected = full_m.argmax(dim=1)  # (n_pos,)
         sel_content = content.gather(1, selected[:, None]).squeeze(1)
         sel_pos = posl.gather(1, selected[:, None]).squeeze(1)
 
@@ -249,7 +275,9 @@ def _install_logger():
         if kind == "recency_match":
             cmax = content_m.max(dim=1).values
             cargmax = content_m.argmax(dim=1)
-            ties = ((content_m >= (cmax[:, None] - CONTENT_TIE_EPS)) & causal).sum(dim=1)
+            ties = ((content_m >= (cmax[:, None] - CONTENT_TIE_EPS)) & causal).sum(
+                dim=1
+            )
             below = torch.where(content_m < (cmax[:, None] - 1e-6), content_m, neg)
             second = below.max(dim=1).values
             cargmax_cpu = cargmax.cpu().tolist()
@@ -267,7 +295,9 @@ def _install_logger():
                 k = min(TOPK, q + 1)
                 top_idx = set(torch.topk(frow, k).indices.tolist())
                 cm = cmax_cpu[q]
-                tie_idx = (crow >= cm - CONTENT_TIE_EPS).nonzero(as_tuple=True)[0].tolist()
+                tie_idx = (
+                    (crow >= cm - CONTENT_TIE_EPS).nonzero(as_tuple=True)[0].tolist()
+                )
                 # most-recent two content-ties (tie_idx is ascending positions)
                 k1s.append(tie_idx[-1])
                 k2s.append(tie_idx[-2] if len(tie_idx) >= 2 else -1)
@@ -285,9 +315,13 @@ def _install_logger():
                 )
                 sec = second_cpu[q]
                 _RECORDS[(uid, q)] = {
-                    "uid": uid, "kind": kind, "site": site,
-                    "query_pos": q, "n_pos_at_capture": n_pos,
-                    "selected": sel_cpu[q], "target_delta": q - sel_cpu[q],
+                    "uid": uid,
+                    "kind": kind,
+                    "site": site,
+                    "query_pos": q,
+                    "n_pos_at_capture": n_pos,
+                    "selected": sel_cpu[q],
+                    "target_delta": q - sel_cpu[q],
                     "candidates": candidates,
                     "selected_content_logit": round(selc_cpu[q], 4),
                     "selected_pos_logit": round(selp_cpu[q], 4),
@@ -301,23 +335,39 @@ def _install_logger():
             # vector). None where there is no 2nd content-tie.
             k1t = torch.tensor(k1s, device=dev)
             k2t = torch.tensor(k2s, device=dev).clamp(min=0)
-            vdiff = (value_in.index_select(0, k1t) - value_in.index_select(0, k2t)).abs().amax(dim=1)
+            vdiff = (
+                (value_in.index_select(0, k1t) - value_in.index_select(0, k2t))
+                .abs()
+                .amax(dim=1)
+            )
             vdiff_cpu = vdiff.cpu().tolist()
             for si, q in enumerate(sample):
                 has2 = k2s[si] >= 0
-                _RECORDS[(uid, q)]["tie2_value_maxdiff"] = round(vdiff_cpu[si], 6) if has2 else None
-                _RECORDS[(uid, q)]["tie2_value_differs"] = (vdiff_cpu[si] > 1e-4) if has2 else None
+                _RECORDS[(uid, q)]["tie2_value_maxdiff"] = (
+                    round(vdiff_cpu[si], 6) if has2 else None
+                )
+                _RECORDS[(uid, q)]["tie2_value_differs"] = (
+                    (vdiff_cpu[si] > 1e-4) if has2 else None
+                )
         else:  # offset
             top2 = torch.topk(full_m, min(2, n_pos), dim=1).values  # (n_pos, <=2)
-            runner = top2[:, 1] if top2.shape[1] > 1 else torch.full((n_pos,), neg, device=dev)
+            runner = (
+                top2[:, 1]
+                if top2.shape[1] > 1
+                else torch.full((n_pos,), neg, device=dev)
+            )
             runner_cpu = runner.cpu().tolist()
             for q in sample:
                 p_sel = selp_cpu[q]
                 run = runner_cpu[q]
                 _RECORDS[(uid, q)] = {
-                    "uid": uid, "kind": kind, "site": site,
-                    "query_pos": q, "n_pos_at_capture": n_pos,
-                    "selected": sel_cpu[q], "target_delta": q - sel_cpu[q],
+                    "uid": uid,
+                    "kind": kind,
+                    "site": site,
+                    "query_pos": q,
+                    "n_pos_at_capture": n_pos,
+                    "selected": sel_cpu[q],
+                    "target_delta": q - sel_cpu[q],
                     "delta": sel_cpu[q] - q,
                     "peak_logit": round(p_sel, 4),
                     "runner_logit": None if run <= neg / 2 else round(run, 4),
@@ -392,13 +442,21 @@ _SITE: dict[int, str] = {}  # id(Attn) -> "file.py:line func (via handle)"
 def _caller_site():
     """The renderer call site that built this Attn — skip the attention plumbing
     so the label points at the DOOM module, noting the handle it came through."""
-    skip = {"attention_ops.py", "pos_encoding.py", "attention_handles.py",
-            "attn.py", "position_attention_log.py", "past.py"}
+    skip = {
+        "attention_ops.py",
+        "pos_encoding.py",
+        "attention_handles.py",
+        "attn.py",
+        "position_attention_log.py",
+        "past.py",
+    }
     via = None
     for fr in inspect.stack():
         base = os.path.basename(fr.filename)
         if base in ("past.py", "attention_handles.py") and via is None:
-            via = fr.function  # the wrapper: pick_most_recent / attend_to_offset / handle
+            via = (
+                fr.function
+            )  # the wrapper: pick_most_recent / attend_to_offset / handle
         if base in skip:
             continue
         if "torchwright_doom" in fr.filename:
@@ -493,8 +551,11 @@ def build_and_run(teacher_force_ids=None, device="cpu"):
     orig = _install_logger()
     try:
         if teacher_force_ids is not None:
-            print(f"teacher-forcing {len(teacher_force_ids)} tokens on {device} "
-                  f"(reference_eval is O(n^2))...", flush=True)
+            print(
+                f"teacher-forcing {len(teacher_force_ids)} tokens on {device} "
+                f"(reference_eval is O(n^2))...",
+                flush=True,
+            )
             rows = torch.stack([w_embed[i] for i in teacher_force_ids])
             with silenced_graph_asserts():
                 reference_eval(nt, {"iv": rows}, len(teacher_force_ids))
@@ -556,7 +617,8 @@ def summarize(records):
             if r["n_content_ties"] <= 1:
                 continue
             ks = sorted(
-                c[0] for c in r["candidates"]
+                c[0]
+                for c in r["candidates"]
                 if c[1] >= r["selected_content_logit"] - CONTENT_TIE_EPS
             )
             gaps = [b - a for a, b in zip(ks, ks[1:])]
@@ -618,17 +680,26 @@ def validate_recency(records, p_new, *, name="scheme", representative_only=True)
             if s > best_s:
                 best_s, best_k = s, k
         if best_k != r["selected"]:
-            flips.append({"uid": r["uid"], "query_pos": q,
-                          "expected": r["selected"], "got": best_k})
+            flips.append(
+                {
+                    "uid": r["uid"],
+                    "query_pos": q,
+                    "expected": r["selected"],
+                    "got": best_k,
+                }
+            )
     status = "OK" if not flips else f"FAIL ({len(flips)} flips)"
     print(f"[{name}] recency replay: {checked} representative selections -> {status}")
     for fl in flips[:10]:
-        print(f"    head {fl['uid']} q={fl['query_pos']}: "
-              f"expected {fl['expected']} got {fl['got']}")
+        print(
+            f"    head {fl['uid']} q={fl['query_pos']}: "
+            f"expected {fl['expected']} got {fl['got']}"
+        )
     return checked, flips
 
 
 # Two candidate position terms, both drop-ins for the current 8*counter recency.
+
 
 def p_old(query_pos, key_pos, n_pos):
     """The current scheme: linear in the raw counter, gain 8."""
@@ -647,27 +718,52 @@ def main():
     global _MAX_Q_PER_HEAD
     ap = argparse.ArgumentParser()
     ap.add_argument("--validate", action="store_true")
-    ap.add_argument("--frame", action="store_true",
-                    help="teacher-force a real frame through rasterization")
+    ap.add_argument(
+        "--frame",
+        action="store_true",
+        help="teacher-force a real frame through rasterization",
+    )
     ap.add_argument("--config", default="configs/e1m1_lowres.yaml")
-    ap.add_argument("--span", type=int, default=None,
-                    help="cap AR body to N tokens past the seed (--frame mode). "
-                    "Default None = full frame through DONE.")
-    ap.add_argument("--tokens", help="JSON file with an explicit list[int] of token ids")
-    ap.add_argument("--emit-stdout", action="store_true",
-                    help="also print JSONL between sentinels (for `make modal-run` "
-                    "where the on-disk file stays on the worker)")
-    ap.add_argument("--device", default=None,
-                    help="cpu or cuda (default: cuda if available). The oracle is "
-                    "O(n^2); run real frames on cuda.")
-    ap.add_argument("--dry-run", action="store_true",
-                    help="build the frame token stream, print its length, and exit")
-    ap.add_argument("--max-queries", type=int, default=400,
-                    help="max query positions logged per head (subsamples long frames)")
-    ap.add_argument("--out", default=None,
-                    help="write JSONL here. On `make modal-run`, point at the mounted "
-                    "volume (/root/.cache/torchwright_doom/compiled/<name>.jsonl) and "
-                    "retrieve with `modal volume get torchwright-doom-render-cache <name>.jsonl`")
+    ap.add_argument(
+        "--span",
+        type=int,
+        default=None,
+        help="cap AR body to N tokens past the seed (--frame mode). "
+        "Default None = full frame through DONE.",
+    )
+    ap.add_argument(
+        "--tokens", help="JSON file with an explicit list[int] of token ids"
+    )
+    ap.add_argument(
+        "--emit-stdout",
+        action="store_true",
+        help="also print JSONL between sentinels (for `make modal-run` "
+        "where the on-disk file stays on the worker)",
+    )
+    ap.add_argument(
+        "--device",
+        default=None,
+        help="cpu or cuda (default: cuda if available). The oracle is "
+        "O(n^2); run real frames on cuda.",
+    )
+    ap.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="build the frame token stream, print its length, and exit",
+    )
+    ap.add_argument(
+        "--max-queries",
+        type=int,
+        default=400,
+        help="max query positions logged per head (subsamples long frames)",
+    )
+    ap.add_argument(
+        "--out",
+        default=None,
+        help="write JSONL here. On `make modal-run`, point at the mounted "
+        "volume (/root/.cache/torchwright_doom/compiled/<name>.jsonl) and "
+        "retrieve with `modal volume get torchwright-doom-render-cache <name>.jsonl`",
+    )
     args = ap.parse_args()
 
     global _OUT_PATH
@@ -685,8 +781,10 @@ def main():
 
     if args.dry_run:
         n = len(tf) if tf is not None else 0
-        print(f"dry-run: config={args.config} screen_width="
-              f"{os.environ.get('TORCHWRIGHT_DOOM_SCREEN_WIDTH')} -> {n} tokens")
+        print(
+            f"dry-run: config={args.config} screen_width="
+            f"{os.environ.get('TORCHWRIGHT_DOOM_SCREEN_WIDTH')} -> {n} tokens"
+        )
         return
 
     records = build_and_run(teacher_force_ids=tf, device=device)
@@ -707,6 +805,7 @@ def main():
         #     | base64 -d | gunzip > position_attention_log.jsonl
         import base64
         import gzip
+
         blob = "\n".join(json.dumps(r) for r in records).encode()
         b64 = base64.b64encode(gzip.compress(blob)).decode()
         print("===JSONL-GZB64-BEGIN===")
