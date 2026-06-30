@@ -17,7 +17,7 @@ for p in (_UMBRELLA, _UMBRELLA / "torchwright_doom"):
         sys.path.insert(0, str(p))
 
 from torchwright.debug.probe import reference_eval
-from torchwright.ops.inout_nodes import create_pos_encoding
+from torchwright.ops.inout_nodes import create_rope_config
 from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED, build_doom_embedding
 from torchwright_doom.past import GraphPast, PastHandleScope
 from torchwright_doom.scene_index import SceneIndex
@@ -31,16 +31,16 @@ from torchwright_doom.emit import emit_derived_zero
 from torchwright_doom.std import concat as C, type_switch as TS
 
 
-def build_forward(emb, pos, fanout):
-    gp = GraphPast(input_vec=emb, pos_encoding=pos)
-    scene = SceneIndex.build(emb, gp, pos)
+def build_forward(emb, rope, fanout):
+    gp = GraphPast(input_vec=emb, rope=rope)
+    scene = SceneIndex.build(emb, gp)
     scope = PastHandleScope(gp)
     inp = ProtocolTokenView(
         emb,
         scope.attend_to_offset(scope.input_type(), delta_pos=-1),
         scope.attend_to_offset(scope.input_type(), delta_pos=-2),
     )
-    protocols = publish_runtime_protocols(emb, scope, inp, scene, pos)
+    protocols = publish_runtime_protocols(emb, scope, inp, scene, gp.global_position())
     branches = build_branch_outputs(inp, protocols)
     head = TS(*_distinct_head_pairs(inp, branches), max_fanout=fanout)
     return C(head, emit_derived_zero())
@@ -60,9 +60,9 @@ def main():
     results = {}
     with silenced_graph_asserts():  # garbage candidates trip range asserts
         for fanout in (2, None):
-            pos = create_pos_encoding()
+            rope = create_rope_config(d_head=128, max_positions=65536, d_rot=64)
             emb = build_doom_embedding("token_ids")
-            nt = build_forward(emb, pos, fanout)
+            nt = build_forward(emb, rope, fanout)
             cache = reference_eval(nt, {"token_ids": ids_col}, n_pos)
             results[fanout] = [
                 int(torch.argmax(cache[nt][i] @ w_t).item()) for i in range(n_pos)

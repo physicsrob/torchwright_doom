@@ -38,12 +38,16 @@ for p in (_UMBRELLA, _UMBRELLA / "torchwright_doom"):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
+import torch
+
 import torchwright.compiler.forward.residual_map as _rm
 from torchwright.compiler.forward.compile import _run_heuristic_warm_start
 from torchwright.compiler.forward.graph_analysis import GraphAnalyzer
 from torchwright.compiler.forward.residual_map import ResidualStreamMap
 from torchwright.compiler.forward.scheduling_policy import SchedulingPolicy
-from torchwright.ops.inout_nodes import create_pos_encoding
+from torchwright.graph.misc import LiteralValue
+from torchwright.graph.node import reserve_node_id_above
+from torchwright.ops.inout_nodes import create_rope_config
 from torchwright_doom.embedding import build_doom_embedding
 from torchwright_doom.past import GraphPast
 from torchwright_doom.render_main import forward
@@ -52,7 +56,7 @@ from scripts.analyze_forward_cost import bucket, _node_label
 
 
 def capture_per_layer_liveness(
-    output_node, pos, d, d_head, d_hidden=None, max_layers=600
+    output_node, rope, d, d_head, d_hidden=None, max_layers=600
 ):
     """Run the schedule-only warm-start; return {layer: (peak_width, live)} where
     ``live`` is the list of (name, width) resident at that layer's peak
@@ -62,11 +66,16 @@ def capture_per_layer_liveness(
     output_node = graph.get_output_node()
     input_nodes = [n for n in graph.get_all_nodes() if graph.is_input_node(n)]
     rmap = ResidualStreamMap(d)
-    rmap.allocate(pos)
-    rmap.mark_clean(rmap.get_indices(pos))
+    # Mirror forward_compile's RoPE-era residual seed (torchwright compile.py):
+    # position is a rotation inside attention, not a residual node, so instead of
+    # allocating a pos column we reserve the never-freed const-1 column the Δ=0
+    # self-match heads read. The scheduler's position argument threads through as
+    # None (RoPE reads no position substrate from the residual stream).
+    reserve_node_id_above(graph.get_all_nodes())
+    const_one = LiteralValue(torch.ones(1), name="rope_self_match_const_one")
+    rmap.allocate(const_one)
+    rmap.mark_clean(rmap.get_indices(const_one))
     for n in input_nodes:
-        if n is pos:
-            continue
         rmap.allocate(n)
         rmap.mark_clean(rmap.get_indices(n))
     computed = set(input_nodes)
@@ -93,7 +102,7 @@ def capture_per_layer_liveness(
             graph=graph,
             d=d,
             d_head=d_head,
-            pos_encoding=pos,
+            pos_encoding=None,
             d_hidden=(d_hidden if d_hidden else d),
             residual_map=rmap,
             computed=computed,
@@ -136,10 +145,12 @@ def main() -> None:
     d_hidden = int(os.environ["DH"]) if os.environ.get("DH") else None
 
     emb = build_doom_embedding("token_ids")
-    pos = create_pos_encoding()
-    nt = forward(emb, GraphPast(input_vec=emb, pos_encoding=pos), pos)
+    # rope d_head MUST match the scheduled d_head (d_rot = d_head // 2, the
+    # production 128/64 ratio).
+    rope = create_rope_config(d_head=d_head, max_positions=65536, d_rot=d_head // 2)
+    nt = forward(emb, GraphPast(input_vec=emb, rope=rope))
 
-    per_layer, n_layers = capture_per_layer_liveness(nt, pos, d, d_head, d_hidden)
+    per_layer, n_layers = capture_per_layer_liveness(nt, rope, d, d_head, d_hidden)
     peak_layer = max(per_layer, key=lambda L: per_layer[L][0])
     peak_w, peak_live = per_layer[peak_layer]
     print(

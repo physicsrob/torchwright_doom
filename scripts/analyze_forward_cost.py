@@ -38,9 +38,13 @@ for p in (_UMBRELLA, _UMBRELLA / "torchwright_doom"):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
+import torch
+
 import torchwright.compiler.export as _exp
 import torchwright.compiler.forward.residual_map as _rm
-from torchwright.ops.inout_nodes import create_pos_encoding
+from torchwright.graph.misc import LiteralValue
+from torchwright.graph.node import reserve_node_id_above
+from torchwright.ops.inout_nodes import create_rope_config
 from torchwright_doom.embedding import build_doom_embedding
 from torchwright_doom.past import GraphPast
 from torchwright_doom.render_main import forward
@@ -217,7 +221,7 @@ def _apply_fusion(output_node, verbose=False, eject_budget=None):
 
 def compile_capture(
     output_node,
-    pos,
+    rope,
     d: int,
     d_head: int,
     optimize: int,
@@ -232,7 +236,7 @@ def compile_capture(
     """
     n_fused = None
     if run_optimize_graph:
-        n_fused = _apply_fusion(output_node, verbose=False, eject_budget=d - len(pos))
+        n_fused = _apply_fusion(output_node, verbose=False, eject_budget=d - 1)
 
     node_to_layer: dict[int, int] = {}
     id_to_node: dict[int, object] = {}
@@ -265,7 +269,6 @@ def compile_capture(
         t0 = time.perf_counter()
         compiled = _exp.compile_headless(
             output_node,
-            pos,
             d=d,
             d_head=d_head,
             max_layers=400,
@@ -282,7 +285,7 @@ def compile_capture(
 
 def schedule_only_capture(
     output_node,
-    pos,
+    rope,
     d: int,
     d_head: int,
     run_optimize_graph: bool = False,
@@ -305,17 +308,22 @@ def schedule_only_capture(
 
     n_fused = None
     if run_optimize_graph:
-        n_fused = _apply_fusion(output_node, verbose=False, eject_budget=d - len(pos))
+        n_fused = _apply_fusion(output_node, verbose=False, eject_budget=d - 1)
 
     graph = GraphAnalyzer(output_node)
     output_node = graph.get_output_node()
     input_nodes = [n for n in graph.get_all_nodes() if graph.is_input_node(n)]
     rmap = ResidualStreamMap(d)
-    rmap.allocate(pos)
-    rmap.mark_clean(rmap.get_indices(pos))
+    # Mirror forward_compile's RoPE-era residual seed (torchwright compile.py):
+    # position is a rotation inside attention, not a residual node, so instead of
+    # allocating a pos column we reserve the never-freed const-1 column the Δ=0
+    # self-match heads read. The scheduler's position argument threads through as
+    # None (RoPE reads no position substrate from the residual stream).
+    reserve_node_id_above(graph.get_all_nodes())
+    const_one = LiteralValue(torch.ones(1), name="rope_self_match_const_one")
+    rmap.allocate(const_one)
+    rmap.mark_clean(rmap.get_indices(const_one))
     for n in input_nodes:
-        if n is pos:
-            continue
         rmap.allocate(n)
         rmap.mark_clean(rmap.get_indices(n))
     computed = set(input_nodes)
@@ -340,7 +348,7 @@ def schedule_only_capture(
             graph=graph,
             d=d,
             d_head=d_head,
-            pos_encoding=pos,
+            pos_encoding=None,
             d_hidden=(d_hidden if d_hidden else d),
             residual_map=rmap,
             computed=computed,
@@ -401,10 +409,12 @@ def main():
     optimize = int(os.environ.get("OPT", "0"))
 
     emb = build_doom_embedding("token_ids")
-    pos = create_pos_encoding()
+    # rope d_head MUST match the compiled/scheduled d_head (d_rot = d_head // 2,
+    # the production 128/64 ratio).
+    rope = create_rope_config(d_head=d_head, max_positions=65536, d_rot=d_head // 2)
     fanout_env = os.environ.get("FANOUT")
     if fanout_env is None:
-        nt = forward(emb, GraphPast(input_vec=emb, pos_encoding=pos), pos)
+        nt = forward(emb, GraphPast(input_vec=emb, rope=rope))
     else:
         # Rebuild forward() with a custom dispatch max_fanout to probe the
         # depth/width tradeoff of the type_switch fold (FANOUT=none for a full
@@ -423,15 +433,17 @@ def main():
         fanout = (
             None if fanout_env.lower() in ("none", "0", "full") else int(fanout_env)
         )
-        gp = GraphPast(input_vec=emb, pos_encoding=pos)
-        scene = SceneIndex.build(emb, gp, pos)
+        gp = GraphPast(input_vec=emb, rope=rope)
+        scene = SceneIndex.build(emb, gp)
         scope = PastHandleScope(gp)
         inp = ProtocolTokenView(
             emb,
             scope.attend_to_offset(scope.input_type(), delta_pos=-1),
             scope.attend_to_offset(scope.input_type(), delta_pos=-2),
         )
-        protocols = publish_runtime_protocols(emb, scope, inp, scene, pos)
+        protocols = publish_runtime_protocols(
+            emb, scope, inp, scene, gp.global_position()
+        )
         branches = build_branch_outputs(inp, protocols)
         head = _ts(*_distinct_head_pairs(inp, branches), max_fanout=fanout)
         nt = _concat(head, emit_derived_zero())
@@ -447,8 +459,8 @@ def main():
         # version (Option B) could improve on a width-safe gate.
         from torchwright.compiler.forward.cpsat_scheduler import critical_path_layers
 
-        nf = _apply_fusion(nt, eject_budget=d - len(pos)) if run_og else 0
-        cp = critical_path_layers(nt, pos)
+        nf = _apply_fusion(nt, eject_budget=d - 1) if run_og else 0
+        cp = critical_path_layers(nt)
         print(
             f"=== CRIT_PATH: FUSE_FILTER={os.environ.get('FUSE_FILTER', 'all')} "
             f"fused={nf} critical_path_layers={cp} ==="
@@ -461,7 +473,7 @@ def main():
         t0 = _t.perf_counter()
         n_layers, n2l, id_to_node, peak_used, live, n_fused, pk_layer = (
             schedule_only_capture(
-                nt, pos, d, d_head, run_optimize_graph=run_og, d_hidden=d_hidden
+                nt, rope, d, d_head, run_optimize_graph=run_og, d_hidden=d_hidden
             )
         )
         t = _t.perf_counter() - t0
@@ -473,7 +485,7 @@ def main():
         )
     else:
         compiled, n2l, id_to_node, peak, t, n_fused = compile_capture(
-            nt, pos, d, d_head, optimize, d_hidden=d_hidden, run_optimize_graph=run_og
+            nt, rope, d, d_head, optimize, d_hidden=d_hidden, run_optimize_graph=run_og
         )
         n_layers = compiled._n_layers
         print(

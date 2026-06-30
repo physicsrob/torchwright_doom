@@ -31,7 +31,7 @@ for p in (_UMBRELLA, _UMBRELLA / "torchwright_doom"):
         sys.path.insert(0, str(p))
 
 from torchwright.compiler.export import compile_to_onnx
-from torchwright.ops.inout_nodes import create_pos_encoding
+from torchwright.ops.inout_nodes import create_rope_config
 
 from torchwright_doom.embedding import build_doom_embedding
 from torchwright_doom.past import GraphPast
@@ -47,13 +47,28 @@ def try_compile(d_head: int) -> tuple[str, str]:
     if _D % d_head != 0:
         return "SKIP", f"d={_D} is not divisible by d_head"
     emb = build_doom_embedding("token_ids")
-    pos = create_pos_encoding()
-    next_token = forward(emb, GraphPast(input_vec=emb, pos_encoding=pos), pos)
+    # PORT NOTE (RoPE): position is now a rotation inside attention, not a residual
+    # node, so the graph is built against a RopeConfig whose d_head MUST equal the
+    # compiled d_head (the compile entry points assert it). That couples the swept
+    # d_head to graph construction — each candidate rebuilds its own graph here (it
+    # already did) with rope d_head tracking the candidate and d_rot = d_head // 2
+    # (production ratio: d_head 128 -> d_rot 64).
+    #
+    # This adds a SECOND floor that did not exist under the old sinusoidal pos. The
+    # doom content heads need a NoPE tail (d_head - d_rot) >= 25, and d_rot must be
+    # large enough for BOS-position monotonicity at max_positions, so candidates
+    # below d_head ~64 now raise at *graph build* here (content-width / NoPE-tail /
+    # BOS-monotonicity ValueErrors), before compile is ever reached. Those surface
+    # as FAIL (other), NOT FAIL (width): they are the RoPE content-placement floor,
+    # a different thing from the old "needs d_qk=N" attention-key-width bracket this
+    # script was written to find. d_head must also be even (rotate_half); an odd
+    # candidate raises "d_head must be even", also FAIL (other).
+    rope = create_rope_config(d_head=d_head, max_positions=65536, d_rot=d_head // 2)
+    next_token = forward(emb, GraphPast(input_vec=emb, rope=rope))
     with tempfile.TemporaryDirectory() as td:
         try:
             compile_to_onnx(
                 next_token,
-                pos,
                 embedding=emb,
                 output_path=os.path.join(td, "f.onnx"),
                 d=_D,

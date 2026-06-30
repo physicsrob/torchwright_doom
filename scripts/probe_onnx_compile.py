@@ -20,7 +20,7 @@ for p in (_UMBRELLA, _UMBRELLA / "torchwright_doom"):
         sys.path.insert(0, str(p))
 
 from torchwright.compiler.export import compile_to_onnx
-from torchwright.ops.inout_nodes import create_pos_encoding
+from torchwright.ops.inout_nodes import create_rope_config
 from torchwright_doom.embedding import build_doom_embedding
 from torchwright_doom.past import GraphPast
 from torchwright_doom.render_main import forward
@@ -30,10 +30,12 @@ D_HEAD = int(os.environ.get("D_HEAD", "160"))
 out_path = os.environ.get("OUT", "/tmp/doom_forward.onnx")
 
 emb = build_doom_embedding("token_ids")
-pos = create_pos_encoding()
+# rope d_head MUST match the compiled d_head (the compile entry point asserts it);
+# d_rot = d_head // 2 mirrors the production 128/64 ratio.
+rope = create_rope_config(d_head=D_HEAD, max_positions=65536, d_rot=D_HEAD // 2)
 fanout_env = os.environ.get("FANOUT")
 if fanout_env is None:
-    nt = forward(emb, GraphPast(input_vec=emb, pos_encoding=pos), pos)
+    nt = forward(emb, GraphPast(input_vec=emb, rope=rope))
 else:
     # Rebuild dispatch with a custom max_fanout (mirrors render_main.forward).
     from torchwright_doom.protocol_tokens import ProtocolTokenView
@@ -48,15 +50,15 @@ else:
     from torchwright_doom.past import PastHandleScope
 
     fanout = None if fanout_env.lower() in ("none", "0", "full") else int(fanout_env)
-    gp = GraphPast(input_vec=emb, pos_encoding=pos)
-    scene = SceneIndex.build(emb, gp, pos)
+    gp = GraphPast(input_vec=emb, rope=rope)
+    scene = SceneIndex.build(emb, gp)
     scope = PastHandleScope(gp)
     inp = ProtocolTokenView(
         emb,
         scope.attend_to_offset(scope.input_type(), delta_pos=-1),
         scope.attend_to_offset(scope.input_type(), delta_pos=-2),
     )
-    protocols = publish_runtime_protocols(emb, scope, inp, scene, pos)
+    protocols = publish_runtime_protocols(emb, scope, inp, scene, gp.global_position())
     branches = build_branch_outputs(inp, protocols)
     nt = _C(
         _TS(*_distinct_head_pairs(inp, branches), max_fanout=fanout),
@@ -72,7 +74,6 @@ print(
 t0 = time.perf_counter()
 compile_to_onnx(
     nt,
-    pos,
     embedding=emb,
     output_path=out_path,
     d=D,

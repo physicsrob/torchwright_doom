@@ -38,6 +38,8 @@ import sys
 import time
 from pathlib import Path
 
+import torch
+
 _UMBRELLA = Path(__file__).resolve().parents[2]
 os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
 # Match the production e1m1 render geometry (scale=4 -> 80x50): the token
@@ -62,13 +64,19 @@ from torchwright.compiler.forward.graph_analysis import GraphAnalyzer
 from torchwright.compiler.forward.residual_map import ResidualStreamMap
 from torchwright.compiler.forward.scheduling_policy import SchedulingPolicy
 from torchwright.graph import Concatenate
-from torchwright.ops.inout_nodes import create_pos_encoding
+from torchwright.graph.misc import LiteralValue
+from torchwright.graph.node import reserve_node_id_above
+from torchwright.ops.inout_nodes import create_rope_config
 from torchwright_doom.embedding import build_doom_embedding
 from torchwright_doom.past import GraphPast
 from torchwright_doom.render_main import forward
 
 D = int(os.environ.get("D", "8192"))
-D_HEAD = int(os.environ.get("D_HEAD", "32"))
+# PORT NOTE (RoPE): default raised 32 -> 64. Under RoPE the rope d_head MUST equal
+# the scheduled d_head and the doom content heads need a NoPE tail (d_head - d_rot)
+# >= 25, so d_head=32 no longer builds the forward graph; 64 / d_rot=32 is the
+# smallest verified-feasible pair (production is 128 / 64).
+D_HEAD = int(os.environ.get("D_HEAD", "64"))
 D_HIDDEN = int(os.environ.get("DH", "16384"))
 BUDGET_S = float(os.environ.get("BUDGET_S", "180"))
 
@@ -336,8 +344,10 @@ def main() -> None:
     )
     t0 = time.perf_counter()
     emb = build_doom_embedding("token_ids")
-    pos = create_pos_encoding()
-    nt = forward(emb, GraphPast(input_vec=emb, pos_encoding=pos), pos)
+    # rope d_head MUST match the scheduled d_head (d_rot = d_head // 2, the
+    # production 128/64 ratio).
+    rope = create_rope_config(d_head=D_HEAD, max_positions=65536, d_rot=D_HEAD // 2)
+    nt = forward(emb, GraphPast(input_vec=emb, rope=rope))
     graph = GraphAnalyzer(nt)
     output_node = graph.get_output_node()
     n_nodes = len(graph.get_all_nodes())
@@ -346,11 +356,16 @@ def main() -> None:
     # --- heuristic warm start (once; deterministic, shared by all variants)
     input_nodes = [n for n in graph.get_all_nodes() if graph.is_input_node(n)]
     rmap = ResidualStreamMap(D)
-    rmap.allocate(pos)
-    rmap.mark_clean(rmap.get_indices(pos))
+    # Mirror forward_compile's RoPE-era residual seed (torchwright compile.py):
+    # position is a rotation inside attention, not a residual node, so instead of
+    # allocating a pos column we reserve the never-freed const-1 column the Δ=0
+    # self-match heads read. The scheduler's position argument threads through as
+    # None (RoPE reads no position substrate from the residual stream).
+    reserve_node_id_above(graph.get_all_nodes())
+    const_one = LiteralValue(torch.ones(1), name="rope_self_match_const_one")
+    rmap.allocate(const_one)
+    rmap.mark_clean(rmap.get_indices(const_one))
     for n in input_nodes:
-        if n is pos:
-            continue
         rmap.allocate(n)
         rmap.mark_clean(rmap.get_indices(n))
     computed = set(input_nodes)
@@ -361,7 +376,7 @@ def main() -> None:
         graph=graph,
         d=D,
         d_head=D_HEAD,
-        pos_encoding=pos,
+        pos_encoding=None,
         d_hidden=D_HIDDEN,
         residual_map=rmap,
         computed=computed,
@@ -381,7 +396,7 @@ def main() -> None:
 
     # --- soundness check: the (feasible) hint must satisfy the tightened
     # domains, otherwise _compute_layer_bounds is WRONG, not just tight.
-    gm = build_graph_model(output_node, pos)
+    gm = build_graph_model(output_node)
     es, ls = _compute_layer_bounds(gm, policy, True, solver_max_layers)
     bad = [
         (nid, L, es.get(nid), ls.get(nid))
@@ -408,7 +423,7 @@ def main() -> None:
         for n in gm.schedulable
         if any(isinstance(c, Concatenate) for c in gm.consumers_eff.get(n, set()))
     }
-    freeable = [n for n in gm.input_nodes if n is not pos and n is not gm.output_node]
+    freeable = [n for n in gm.input_nodes if n is not gm.output_node]
     input_lens = {n.node_id: len(n) for n in freeable}
     input_keep = {
         n.node_id
@@ -447,7 +462,7 @@ def main() -> None:
             kwargs["solution_trace"] = trace
         print(f"\n=== variant {name} ===", flush=True)
         t0 = time.perf_counter()
-        assignment, stats = solve_schedule(output_node, pos, **kwargs)
+        assignment, stats = solve_schedule(output_node, **kwargs)
         wall = time.perf_counter() - t0
         info = _parse_log(stats.solver_log)
         # Secondary objectives scale the raw best/bound values; divide back

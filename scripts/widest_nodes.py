@@ -30,7 +30,7 @@ for p in (_UMBRELLA, _UMBRELLA / "torchwright_doom"):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
-from torchwright.ops.inout_nodes import create_pos_encoding
+from torchwright.ops.inout_nodes import create_rope_config
 from torchwright_doom.embedding import build_doom_embedding
 from torchwright_doom.past import GraphPast
 from torchwright_doom.render_main import forward
@@ -38,8 +38,8 @@ from torchwright_doom.render_main import forward
 
 def _build():
     emb = build_doom_embedding("token_ids")
-    pos = create_pos_encoding()
-    out = forward(emb, GraphPast(input_vec=emb, pos_encoding=pos), pos)
+    rope = create_rope_config(d_head=128, max_positions=65536, d_rot=64)
+    out = forward(emb, GraphPast(input_vec=emb, rope=rope))
     return out
 
 

@@ -19,7 +19,7 @@ import torch
 from torchwright.compiler.export import compile_headless
 from torchwright.debug.probe import reference_eval
 from torchwright.graph import fresh_graph_session
-from torchwright.ops.inout_nodes import create_input, create_pos_encoding
+from torchwright.ops.inout_nodes import create_input
 
 from torchwright_doom.constants import COLUMN_COUNT, PIXEL_WIDTH, SCREEN_WIDTH
 from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
@@ -51,7 +51,7 @@ def main() -> None:
         rows = torch.cat([_row_for_setcursorx(x) for x in xs], dim=0)
         n = len(xs)
         oracle = reference_eval(out, {"iv": rows}, n)[out]
-        compiled = compile_headless(out, create_pos_encoding(), d=2048, d_head=32)
+        compiled = compile_headless(out, d=2048, d_head=32)
         compiled(rows, debug=True)
         comp = compiled.debug_value(out)
 

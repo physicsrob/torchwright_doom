@@ -40,7 +40,9 @@ from tests.prefill_fixture import TINY_BSP_SCENE
 # (tests/scene/test_forward_ar_rollout.py): the full J forward at d=4096,
 # d_head=32, which fits in ~12 GB.
 _D = 4096
-_D_HEAD = 32
+_D_HEAD = 64  # RoPE: d_head must cover the widest content (~28) on the NoPE tail
+_D_ROT = 32
+_MAX_POS = 65536
 
 
 def _pred_type(out_row: torch.Tensor) -> str:
@@ -77,10 +79,11 @@ def main() -> int:
     assert prefill[-1] == row_index(BEGIN, {}), "fixture must end with BEGIN"
     control = prefill[1:]  # same prefill with BOS stripped (the pre-change state)
 
-    next_token, pos, _emb, _banks = build_graph()
+    next_token, _rope, _emb, _banks = build_graph(
+        d_head=_D_HEAD, max_positions=_MAX_POS, d_rot=_D_ROT
+    )
     compiled = compile_headless(
         next_token,
-        pos,
         d=_D,
         d_head=_D_HEAD,
         max_layers=200,

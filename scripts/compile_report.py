@@ -47,17 +47,19 @@ import onnx
 
 import torchwright.compiler.forward.compile as _cmp
 from torchwright.compiler.export import compile_to_onnx
-from torchwright.ops.inout_nodes import create_pos_encoding
+from torchwright.ops.inout_nodes import create_rope_config
 from torchwright_doom.embedding import build_doom_embedding
 from torchwright_doom.past import GraphPast
 from torchwright_doom.render_main import forward
 
 
-def _build():
+def _build(d_head: int):
     emb = build_doom_embedding("token_ids")
-    pos = create_pos_encoding()
-    nt = forward(emb, GraphPast(input_vec=emb, pos_encoding=pos), pos)
-    return nt, pos, emb
+    # rope d_head MUST match the compiled d_head (the compile entry point asserts
+    # it); d_rot = d_head // 2 mirrors the production 128/64 ratio.
+    rope = create_rope_config(d_head=d_head, max_positions=65536, d_rot=d_head // 2)
+    nt = forward(emb, GraphPast(input_vec=emb, rope=rope))
+    return nt, rope, emb
 
 
 def compile_with_provenance(d: int, d_head: int, optimize: int, max_layers: int = 400):
@@ -88,7 +90,7 @@ def compile_with_provenance(d: int, d_head: int, optimize: int, max_layers: int 
         cap["cpsat_layers"] = getattr(assignment, "n_layers", None)
         return assignment, stats
 
-    nt, pos, emb = _build()
+    nt, rope, emb = _build(d_head)
     path = os.path.join(tempfile.mkdtemp(), f"d{d}_o{optimize}.onnx")
     _cmp._run_heuristic_warm_start = warm_hook
     _cmp.solve_schedule = solve_hook
@@ -96,7 +98,6 @@ def compile_with_provenance(d: int, d_head: int, optimize: int, max_layers: int 
     try:
         compile_to_onnx(
             nt,
-            pos,
             embedding=emb,
             output_path=path,
             d=d,

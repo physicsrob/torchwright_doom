@@ -63,7 +63,11 @@ def main() -> int:
     )
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--d", type=int, default=4096)
-    p.add_argument("--d-head", type=int, default=32, dest="d_head")
+    # PORT NOTE (RoPE): default raised 32 -> 64. Under RoPE the rope d_head MUST
+    # equal the scheduled d_head and the doom content heads need a NoPE tail
+    # (d_head - d_rot) >= 25, so d_head=32 no longer builds; 64 / d_rot=32 is the
+    # smallest verified-feasible pair (production is 128 / 64).
+    p.add_argument("--d-head", type=int, default=64, dest="d_head")
     args = p.parse_args()
 
     # --- patch asset_config BEFORE the cascade imports it ---
@@ -90,7 +94,7 @@ def main() -> int:
 
     # --- now build the (patched) forward graph ---
     import torchwright.graph.node as _node_module
-    from torchwright.ops.inout_nodes import create_pos_encoding
+    from torchwright.ops.inout_nodes import create_rope_config
     from torchwright_doom.embedding import TOKEN_VOCAB, build_doom_embedding
     from torchwright_doom.past import GraphPast
     from torchwright_doom.render_main import forward
@@ -103,12 +107,14 @@ def main() -> int:
 
     _node_module.global_node_id = 0
     in_node = build_doom_embedding("token_ids")
-    pos = create_pos_encoding()
-    nt = forward(
-        in_node, GraphPast(input_vec=in_node, pos_encoding=pos), create_pos_encoding()
+    # rope d_head MUST match the scheduled d_head (d_rot = d_head // 2, the
+    # production 128/64 ratio).
+    rope = create_rope_config(
+        d_head=args.d_head, max_positions=65536, d_rot=args.d_head // 2
     )
+    nt = forward(in_node, GraphPast(input_vec=in_node, rope=rope))
 
-    res = schedule_only_capture(nt, pos, d=args.d, d_head=args.d_head)
+    res = schedule_only_capture(nt, rope, d=args.d, d_head=args.d_head)
     n_layers, node_to_layer = res[0], res[1]
     id_to_node = res[2]
     peak_width = res[3]

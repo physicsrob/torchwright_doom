@@ -17,7 +17,7 @@ import tempfile
 import onnx
 
 from torchwright.compiler.export import compile_to_onnx
-from torchwright.ops.inout_nodes import create_pos_encoding
+from torchwright.ops.inout_nodes import create_rope_config
 
 from torchwright_doom.constants import HUD_ENABLED, SCREEN_WIDTH, SCREEN_HEIGHT
 from torchwright_doom.embedding import build_doom_embedding
@@ -28,18 +28,22 @@ from torchwright_doom.render_main import forward
 def main() -> None:
     print(f"HUD_ENABLED={HUD_ENABLED} screen={SCREEN_WIDTH}x{SCREEN_HEIGHT}")
     emb = build_doom_embedding("token_ids")
-    pos = create_pos_encoding()
-    next_token = forward(emb, GraphPast(input_vec=emb, pos_encoding=pos), pos)
+    # PORT NOTE (RoPE): the old d_head=32 is no longer feasible for the full doom
+    # forward — under RoPE the rope d_head MUST equal the compiled d_head, and the
+    # content heads need a NoPE tail (d_head - d_rot) >= 25 while d_rot must stay
+    # large enough for BOS-position monotonicity at max_positions. d_head=64 /
+    # d_rot=32 is the smallest verified-feasible pair (production is 128 / 64).
+    rope = create_rope_config(d_head=64, max_positions=65536, d_rot=32)
+    next_token = forward(emb, GraphPast(input_vec=emb, rope=rope))
 
     with tempfile.TemporaryDirectory() as d:
         onnx_path = os.path.join(d, "hud_forward.onnx")
         result = compile_to_onnx(
             next_token,
-            pos,
             embedding=emb,
             output_path=onnx_path,
             d=8192,
-            d_head=32,
+            d_head=64,
             max_layers=400,
             verbose=True,
         )

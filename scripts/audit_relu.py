@@ -42,7 +42,7 @@ for p in (_UMBRELLA, _UMBRELLA / "torchwright_doom"):
         sys.path.insert(0, str(p))
 
 from torchwright.graph.relu import ReLU
-from torchwright.ops.inout_nodes import create_pos_encoding
+from torchwright.ops.inout_nodes import create_rope_config
 from torchwright_doom.embedding import build_doom_embedding
 from torchwright_doom.past import GraphPast
 from torchwright_doom.render_main import forward
@@ -214,8 +214,8 @@ def main() -> None:
     args = ap.parse_args()
 
     emb = build_doom_embedding("token_ids")
-    pos = create_pos_encoding()
-    nt = forward(emb, GraphPast(input_vec=emb, pos_encoding=pos), pos)
+    rope = create_rope_config(d_head=128, max_positions=65536, d_rot=64)
+    nt = forward(emb, GraphPast(input_vec=emb, rope=rope))
 
     records = collect_relu_inventory(nt)
     total_units = sum(r.width for r in records)
