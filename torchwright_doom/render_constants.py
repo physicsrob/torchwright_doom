@@ -22,14 +22,18 @@ from __future__ import annotations
 MATCH_GAIN_LONG = 600_000.0
 
 # Wall-column per-column clip-array recovery (``ClipMemory.pick_most_recent``).
-# The radix column key's match dot is ``bucket_match + digit_match``
-# (one-hot products, no cancellation), so the gained matched logit is an exact
-# ``2 * match_gain``; this must dominate the recency span, exceeding
-# ``SCORE_GAIN (8) * max_recency_span`` (8500-pos rollout, 32768-pos regression).
-# 300_000 > 8 * 32768 with headroom. (An earlier lifted-key form needed a power
-# of two to keep its ``match_gain*c^2`` cancellation fp32-exact; the radix key
-# has no such cancellation, so any sufficiently large gain works.)
-MATCH_GAIN_CLIP = 300_000.0
+# The radix column key's match dot is ``bucket_match + digit_match`` (one-hot
+# products): a full match (correct column) scores 2, but a PARTIAL match (a
+# different column sharing the query's bucket OR digit — common, since ~13
+# buckets cover 160 columns) scores 1. So the binding content gap that recency
+# must not overturn is full-vs-partial = 1 * match_gain, NOT 2 * match_gain: a
+# more-recent partial-match column must lose to the correct full match. With
+# RECENCY_GAIN = 8 that needs ``match_gain > RECENCY_GAIN * max_positions``
+# = 8 * 61440 = 491_520, so 600_000 (the old 300_000 cleared only the 2*gain
+# vs total-non-match case, which left a sibling-bucket column updated >37500
+# positions later able to win at full-res ~42k). The radix key has no fp32
+# cancellation, so any sufficiently large gain works.
+MATCH_GAIN_CLIP = 600_000.0
 
 # Per-position recency gain for ``pick_most_recent`` — the position tiebreak in
 # torchwright's ``attend_most_recent_globally``. Adjacent positions differ by
