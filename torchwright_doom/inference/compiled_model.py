@@ -81,6 +81,7 @@ def compile_to_onnx_path(
     optimize: int = 0,
     assume_zero_init: bool = True,
     d_hidden: int | None = None,
+    rms_norm_const_exp: int = 63,
     asset_config: AssetConfig | None = None,
     wad_path: str | Path | None = None,
     extra_metadata: dict[str, Any] | None = None,
@@ -89,6 +90,16 @@ def compile_to_onnx_path(
 
     ``cache_stride`` sets the static KV-cache slot count S baked into the
     exported graph (see ModelConfig.cache_stride); the cache is unbounded.
+
+    ``rms_norm_const_exp`` (``q``) is the pinned-constant exponent for the
+    identity RMSNorm (on by default at the production power-of-two ``d``).  The
+    doom forward carries fixed-point coordinates, so its residual energy bound
+    is ~2^99.6 — far above the calculator's ~2^44 default.  ``q=63`` is the
+    largest the fp32 pinned energy allows (2^127 at the production odd
+    ``b=log2(8192)=13``); its budget ``2^(2q-24)=2^102`` clears the doom energy
+    with ~5x margin.  A future residual-energy increase past 2^102 would make
+    the identity infeasible (q can't go higher) and re-break the compile with a
+    clear "rms_norm identity not certified" error.
     """
     from torchwright.compiler.export import compile_to_onnx
 
@@ -123,6 +134,7 @@ def compile_to_onnx_path(
         "optimize": optimize,
         "assume_zero_init": assume_zero_init,
         "cache_stride": cache_stride,
+        "rms_norm_const_exp": rms_norm_const_exp,
     }
     if d_hidden is not None:
         kwargs["d_hidden"] = d_hidden

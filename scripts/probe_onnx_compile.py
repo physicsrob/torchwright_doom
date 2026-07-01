@@ -82,6 +82,9 @@ compile_to_onnx(
     verbose=True,
     trim_heads=trim,
     optimize=opt,
+    # This is a compile-time/scheduling probe at a non-power-of-two d; RMSNorm
+    # (on by default) requires a power-of-two d and is irrelevant here.
+    rms_norm=False,
 )
 print(f"compile wall time: {time.perf_counter()-t0:.1f}s")
 if os.path.exists(out_path):

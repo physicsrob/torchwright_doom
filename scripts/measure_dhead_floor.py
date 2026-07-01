@@ -75,6 +75,11 @@ def try_compile(d_head: int) -> tuple[str, str]:
                 d_head=d_head,
                 max_layers=400,
                 verbose=False,
+                # This probe sweeps d_head at a non-power-of-two d to find the
+                # scheduling floor; RMSNorm (on by default) needs a power-of-two
+                # d, and it's irrelevant to the d_qk-width question being
+                # measured, so disable it here.
+                rms_norm=False,
             )
             return "PASS", "compiled"
         except Exception as e:  # noqa: BLE001 - reporting the bracket reason

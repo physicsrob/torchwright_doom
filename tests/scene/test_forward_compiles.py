@@ -84,6 +84,11 @@ def test_forward_compiles_to_onnx(tmp_path) -> None:
         d_head=_D_HEAD,
         max_layers=400,
         verbose=False,
+        # RMSNorm is on by default at this power-of-two d.  The doom forward's
+        # fixed-point coordinates push the residual energy bound to ~2^99.6, so
+        # the identity needs the largest fp32-feasible pinned constant: q=63
+        # (budget 2^102, ~5x margin).  See compile_to_onnx_path's docstring.
+        rms_norm_const_exp=63,
     )
 
     assert os.path.exists(onnx_path), "compile_to_onnx wrote no ONNX file"

@@ -46,6 +46,9 @@ def main() -> None:
             d_head=64,
             max_layers=400,
             verbose=True,
+            # RMSNorm on by default; the doom forward's energy needs the
+            # max fp32-feasible pinned constant (see compile_to_onnx_path).
+            rms_norm_const_exp=63,
         )
         model = onnx.load(onnx_path)
         onnx.checker.check_model(model)
