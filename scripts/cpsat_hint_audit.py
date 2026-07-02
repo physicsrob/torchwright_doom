@@ -44,9 +44,18 @@ from pathlib import Path
 faulthandler.enable()
 
 _UMBRELLA = Path(__file__).resolve().parents[2]
-for _p in (_UMBRELLA, _UMBRELLA / "torchwright_doom"):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
+# Snapshot mode (same contract as baseline_soundness_scan.py): run the audit
+# against a checked-out torchwright/torchwright_doom pair instead of HEAD.
+#   TW_SNAPSHOT_PATHS=<tw_dir>:<twd_dir> TW_VENV_SITE=<site-packages> \
+#       ../.venv/bin/python -S scripts/cpsat_hint_audit.py
+# (-S skips .pth files so the HEAD editable-install finder never activates.)
+_SNAP = os.environ.get("TW_SNAPSHOT_PATHS")
+if _SNAP:
+    sys.path[:0] = _SNAP.split(os.pathsep) + [os.environ["TW_VENV_SITE"]]
+else:
+    for _p in (_UMBRELLA, _UMBRELLA / "torchwright_doom"):
+        if str(_p) not in sys.path:
+            sys.path.insert(0, str(_p))
 
 # The schedule cache would skip the solve entirely — the audit needs the
 # real descent call to fire.
@@ -388,6 +397,15 @@ def main() -> None:
         help="descent mode: override the cancel-window K",
     )
     ap.add_argument(
+        "--no-fuse",
+        action="store_true",
+        help=(
+            "disable the linear-fusion pass before compile (native-Block "
+            "graph, no folds) — discriminates 2b (native blocks) from 2c "
+            "(block-aware fusion) as the source of a hint violation"
+        ),
+    )
+    ap.add_argument(
         "--fix-budget",
         type=float,
         default=120.0,
@@ -422,6 +440,12 @@ def main() -> None:
 
     from torchwright_doom.inference.compiled_model import compile_to_onnx_path
     from torchwright_doom.inference.config import resolve_wad_path
+
+    if args.no_fuse:
+        import torchwright.graph.optimize as optimize_mod
+
+        optimize_mod.fuse_consecutive_linears = lambda *a, **k: 0
+        print("[audit] fusion DISABLED (--no-fuse)", flush=True)
 
     captured: dict = {}
 
