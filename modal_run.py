@@ -76,7 +76,15 @@ def run_gpu(module: str, script: str, args: str) -> int:
     return rc
 
 
-@app.function(cpu=_CPU, memory=_MEMORY, timeout=_TIMEOUT)
+@app.function(
+    cpu=_CPU,
+    memory=_MEMORY,
+    timeout=_TIMEOUT,
+    # Same configs-augmented image as run_gpu: CPU scripts that rebuild the
+    # production graph (e.g. scripts.cpsat_hint_audit) load configs/e1m1.yaml
+    # from /root/configs.
+    image=ASSETS_IMAGE,
+)
 def run_cpu(module: str, script: str, args: str) -> int:
     cmd = _build_cmd(module, script, args)
     print(f"[remote/cpu] {' '.join(cmd)}")
