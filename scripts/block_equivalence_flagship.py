@@ -4,7 +4,7 @@ DOOM graph (torchwright ``docs/block_ir_step1_plan.md``, "Equivalence harness"
 
 Builds the production ``e1m1`` graph exactly as ``compile_to_onnx_path`` does
 (``build_graph`` then the production width-safe fusion), then runs
-torchwright's :mod:`scripts.block_equivalence` harness in schedule-only mode
+torchwright's :mod:`scripts.ffn_equivalence` harness in schedule-only mode
 over both the chain-mined path and the blockified path, and prints the
 compile-metrics tuple for each.  Any cost regression (layers/heads/hidden) is a
 Gate-C stop-and-report.
@@ -97,9 +97,9 @@ def main() -> None:
     # The reusable harness lives in torchwright/scripts/, whose package name
     # ("scripts") collides with torchwright_doom/scripts/ on sys.path — load it
     # by explicit file path under a unique module name to sidestep the clash.
-    _harness_path = _UMBRELLA / "torchwright" / "scripts" / "block_equivalence.py"
+    _harness_path = _UMBRELLA / "torchwright" / "scripts" / "ffn_equivalence.py"
     _spec = importlib.util.spec_from_file_location(
-        "_tw_block_equivalence", _harness_path
+        "_tw_ffn_equivalence", _harness_path
     )
     _mod = importlib.util.module_from_spec(_spec)
     sys.modules[_spec.name] = _mod  # dataclass type resolution reads sys.modules
