@@ -92,7 +92,7 @@ def main() -> None:
 
     import torch  # noqa: F401  (imported for side-effect parity with the builder)
 
-    from torchwright.graph.blockify import blockify
+    from torchwright.compiler.lower import lower
 
     # The reusable harness lives in torchwright/scripts/, whose package name
     # ("scripts") collides with torchwright_doom/scripts/ on sys.path — load it
@@ -119,12 +119,16 @@ def main() -> None:
     )
 
     # Since Phase 2b the op layer builds Blocks natively; fusion (Phase 2c) is
-    # block-aware.  There is a single path now — build it, assert it is
-    # block-native (blockify finds zero raw chains), schedule it, and compare
-    # the metrics tuple to the Phase-2a Gate-C block-path baseline.
+    # block-aware.  There is a single path now — build it, certify it at the
+    # lowering boundary (closed vocabulary: zero raw chains; fresh derived
+    # caches), schedule it, and compare the metrics tuple to the Phase-2a
+    # Gate-C block-path baseline.
     t0 = time.perf_counter()
     out = build_flagship(config_name, d_head, d_rot, max_seq_len)
-    blockify(out, verbose=True)  # verification: raises if any raw chain remains
+    lowered = lower(out, verbose=True)  # certification: raises on raw chains
+    print(
+        f"  pre-schedule demand: {lowered.cost_summary(d_head=d_head).format_short()}"
+    )
     print(f"  built block-native graph in {time.perf_counter() - t0:.1f}s")
 
     t0 = time.perf_counter()
