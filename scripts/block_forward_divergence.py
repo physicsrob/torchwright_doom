@@ -1,9 +1,18 @@
 """Gate-C Task 1: measured flagship forward divergence, chain-mined vs blockified.
 
 Compiles the production e1m1 graph to ONNX on BOTH paths (chain-mined and
-blockified), runs the SAME token prefill through each under onnxruntime, and
+blockified), runs the SAME token prefill through each via the production
+HF/torch path (``convert_onnx_to_hf`` -> ``TorchwrightForCausalLM``), and
 reports the max absolute logit divergence and whether the per-position argmax
 (the production token-level equivalence bar) agrees.
+
+Why not onnxruntime: at d=8192 the folded ``embed_table`` initializer is
+~3.06 GB dense.  The exporter stores it COO-sparse, but onnxruntime densifies
+sparse initializers at session load and rejects any whose dense size exceeds
+its 2 GiB embedded-initializer limit — so the ORT-based ``load_onnx`` contract
+harness cannot load flagship-scale artifacts at all.  Production never hits
+this: it converts the ONNX to HF weights and runs under torch, which is the
+path this script now mirrors.
 
 The two schedules are NOT identical (see block_equivalence_flagship.py MODE=trace:
 blockify shortens the graph's critical paths, which reorders the heuristic MLP
@@ -107,10 +116,13 @@ def _compile_and_run(
     onnx_path,
 ):
     """Compile one path to ONNX and run the prefill; return the logits tensor."""
+    import gc
+    import json
+
     import torch
 
-    from torchwright.compiler.export import compile_to_onnx
-    from torchwright.compiler.onnx_load import load_onnx
+    from torchwright.compiler.export import compile_to_onnx, meta_path_for
+    from torchwright.compiler.hf.convert import convert_onnx_to_hf
 
     label = "block" if blockify_it else "chain"
     t0 = time.perf_counter()
@@ -133,17 +145,48 @@ def _compile_and_run(
     )
     print(f"[{label}] compiled to ONNX in {time.perf_counter() - t0:.1f}s", flush=True)
 
-    model = load_onnx(onnx_path)
-    tokens = ["<bos>"] + list(prefill)
-    ids = torch.tensor([model.token_to_id(t) for t in tokens], dtype=torch.int64)
+    # Resolve tokens from the meta sidecar BEFORE the expensive HF convert, so
+    # a bad prefill fails in milliseconds, not after an hour of compiling.
+    from torchwright_doom.inference.hf_export import _doom_bos_eos_strings
+
+    meta = json.loads(Path(meta_path_for(onnx_path)).read_text())
+    vocab = list(meta["vocab"])
+    token_to_id = {t: i for i, t in enumerate(vocab)}
+    bos_str, eos_str = _doom_bos_eos_strings(meta)
+    wanted = [bos_str] + list(prefill)
+    missing = [t for t in wanted if t not in token_to_id]
+    if missing:
+        # Divergence measurement doesn't need grammatical input — any token
+        # sequence exercises the network — so fall back deterministically.
+        fallback = [t for t in vocab if t not in (bos_str, eos_str)][:8]
+        print(
+            f"[{label}] prefill tokens {missing!r} not in vocab; "
+            f"falling back to first vocab tokens {fallback!r}",
+            flush=True,
+        )
+        wanted = [bos_str] + fallback
+    ids = torch.tensor([[token_to_id[t] for t in wanted]], dtype=torch.int64)
+
     t0 = time.perf_counter()
-    logits = model(ids)
+    model = convert_onnx_to_hf(onnx_path, bos_token=bos_str, eos_token=eos_str)
+    model = model.to(torch.float32).eval()
     print(
-        f"[{label}] prefill {len(tokens)} tokens in "
+        f"[{label}] converted to HF/torch in {time.perf_counter() - t0:.1f}s",
+        flush=True,
+    )
+
+    t0 = time.perf_counter()
+    with torch.no_grad():
+        logits = model(input_ids=ids).logits[0]
+    print(
+        f"[{label}] prefill {ids.shape[1]} tokens in "
         f"{time.perf_counter() - t0:.1f}s -> logits {tuple(logits.shape)}",
         flush=True,
     )
-    return logits.detach().cpu()
+    logits = logits.detach().cpu()
+    del model
+    gc.collect()
+    return logits
 
 
 def main() -> None:
