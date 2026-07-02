@@ -57,8 +57,9 @@ def _resolve_wad(cfg):
 
 
 def build_flagship(config_name: str, d_head: int, d_rot, max_seq_len: int):
-    """Production flagship graph builder: ``build_graph`` then the production
-    width-safe fusion (same as ``compile_to_onnx_path`` before every compile)."""
+    """Production flagship graph builder: ``build_graph`` (which builds MLP
+    Blocks natively since Phase 2b) then the production block-aware fusion (same
+    as ``compile_to_onnx_path`` before every compile)."""
     from torchwright.graph.optimize import fuse_consecutive_linears
     from torchwright_doom.inference.compiled_model import build_graph
     from torchwright_doom.inference.config import load_render_config
@@ -73,8 +74,17 @@ def build_flagship(config_name: str, d_head: int, d_rot, max_seq_len: int):
         asset_config=cfg.asset_config(),
         wad_path=_resolve_wad(cfg),
     )
-    fuse_consecutive_linears({next_token}, verbose=False, skip_relu_ejecting=True)
+    fuse_consecutive_linears({next_token}, verbose=False)
     return next_token
+
+
+# The Phase-2a Gate-C block-path baseline (native Blocks must not regress it).
+BASELINE = {
+    "n_layers": 64,
+    "total_heads": 813,
+    "peak_hidden": 16384,
+    "residual_peak": 8157,
+}
 
 
 def main() -> None:
@@ -94,7 +104,6 @@ def main() -> None:
     _mod = importlib.util.module_from_spec(_spec)
     sys.modules[_spec.name] = _mod  # dataclass type resolution reads sys.modules
     _spec.loader.exec_module(_mod)
-    EquivalenceReport = _mod.EquivalenceReport
     schedule_metrics = _mod.schedule_metrics
 
     config_name = os.environ.get("CONFIG", "e1m1")
@@ -105,129 +114,56 @@ def main() -> None:
     max_seq_len = int(os.environ.get("MAX_SEQ_LEN", "65536"))
 
     print(
-        f"Flagship equivalence: config={config_name} d={d} d_head={d_head} "
+        f"Flagship metrics: config={config_name} d={d} d_head={d_head} "
         f"d_rot={d_rot} d_hidden={d_hidden} max_seq_len={max_seq_len}"
     )
 
+    # Since Phase 2b the op layer builds Blocks natively; fusion (Phase 2c) is
+    # block-aware.  There is a single path now — build it, assert it is
+    # block-native (blockify finds zero raw chains), schedule it, and compare
+    # the metrics tuple to the Phase-2a Gate-C block-path baseline.
     t0 = time.perf_counter()
-    chain_out = build_flagship(config_name, d_head, d_rot, max_seq_len)
-    print(f"  built chain-path graph in {time.perf_counter() - t0:.1f}s")
-    t0 = time.perf_counter()
-    chain_metrics = schedule_metrics(
-        chain_out, d=d, d_head=d_head, d_hidden=d_hidden, assume_zero_init=True
-    )
-    print(
-        f"  scheduled chain path in {time.perf_counter() - t0:.1f}s: "
-        f"{chain_metrics.as_tuple()}"
-    )
+    out = build_flagship(config_name, d_head, d_rot, max_seq_len)
+    blockify(out, verbose=True)  # verification: raises if any raw chain remains
+    print(f"  built block-native graph in {time.perf_counter() - t0:.1f}s")
 
     t0 = time.perf_counter()
-    block_out = blockify(
-        build_flagship(config_name, d_head, d_rot, max_seq_len), verbose=True
+    metrics = schedule_metrics(
+        out, d=d, d_head=d_head, d_hidden=d_hidden, assume_zero_init=True
     )
-    print(f"  built + blockified block-path graph in {time.perf_counter() - t0:.1f}s")
-    t0 = time.perf_counter()
-    block_metrics = schedule_metrics(
-        block_out, d=d, d_head=d_head, d_hidden=d_hidden, assume_zero_init=True
-    )
-    print(
-        f"  scheduled block path in {time.perf_counter() - t0:.1f}s: "
-        f"{block_metrics.as_tuple()}"
-    )
+    print(f"  scheduled in {time.perf_counter() - t0:.1f}s")
 
-    report = EquivalenceReport(chain_metrics=chain_metrics, block_metrics=block_metrics)
-    report.notes.append(
-        "schedule-only (no weights); metrics are (n_layers, total_heads, "
-        "peak_hidden, residual_peak)"
-    )
+    got = {
+        "n_layers": metrics.n_layers,
+        "total_heads": metrics.total_heads,
+        "peak_hidden": metrics.peak_hidden,
+        "residual_peak": metrics.residual_peak,
+    }
     print()
-    print(report.format())
+    print("  metric        baseline(2a)   native(2c)   delta")
+    regressed = []
+    for key in ("n_layers", "total_heads", "peak_hidden", "residual_peak"):
+        base = BASELINE[key]
+        cur = got[key]
+        delta = cur - base
+        flag = ""
+        # Layers/heads/peak_hidden are the cost gate; residual_peak is
+        # informational.  A positive delta on a gated metric is a regression.
+        if key != "residual_peak" and delta > 0:
+            flag = "  <-- REGRESSION"
+            regressed.append(key)
+        elif delta < 0:
+            flag = "  (improvement)"
+        print(f"  {key:<13} {base:>10}   {cur:>10}   {delta:+d}{flag}")
 
-    if os.environ.get("MODE", "").lower() == "trace":
-        _trace_hidden_diff(
-            _mod, chain_out, block_out, d=d, d_head=d_head, d_hidden=d_hidden
-        )
-
-
-def _trace_hidden_diff(mod, chain_out, block_out, *, d, d_head, d_hidden):
-    """Per-sublayer hidden-occupancy diff between the two schedules, naming the
-    composite(s) that moved and quantifying the critical-path shift that caused
-    the reorder (D3 root-cause trace for the +1 peak_hidden slot)."""
-    from collections import Counter
-
-    print("\n" + "=" * 60)
-    print("Per-layer hidden-occupancy trace (chain vs block)")
-    print("=" * 60)
-
-    ct = mod.schedule_trace(
-        chain_out, d=d, d_head=d_head, d_hidden=d_hidden, assume_zero_init=True
-    )
-    bt = mod.schedule_trace(
-        block_out, d=d, d_head=d_head, d_hidden=d_hidden, assume_zero_init=True
-    )
-    n = max(len(ct), len(bt))
-
-    def hid(t, i):
-        return t[i]["hidden"] if i < len(t) else 0
-
-    diffs = [i for i in range(n) if hid(ct, i) != hid(bt, i)]
+    print()
     print(
-        f"  layers: chain={len(ct)} block={len(bt)}; "
-        f"peak chain={max(x['hidden'] for x in ct)} "
-        f"block={max(x['hidden'] for x in bt)}"
+        f"  tuple (n_layers, total_heads, peak_hidden, residual_peak) = {metrics.as_tuple()}"
     )
-    print(f"  layers where per-layer hidden occupancy differs: {diffs}")
-    for i in diffs:
-        print(f"  layer {i}: chain_hidden={hid(ct, i)} block_hidden={hid(bt, i)}")
-        c_comp = (
-            Counter((a, w) for (a, w, _s, _id) in ct[i]["composites"])
-            if i < len(ct)
-            else Counter()
-        )
-        b_comp = (
-            Counter((a, w) for (a, w, _s, _id) in bt[i]["composites"])
-            if i < len(bt)
-            else Counter()
-        )
-        only_chain = c_comp - b_comp
-        only_block = b_comp - c_comp
-        if only_chain:
-            print(
-                f"    composites (annotation,width) only in CHAIN layer {i}: "
-                f"{dict(only_chain)}"
-            )
-        if only_block:
-            print(
-                f"    composites (annotation,width) only in BLOCK layer {i}: "
-                f"{dict(only_block)}"
-            )
-
-    # For each composite (annotation,width), which layer(s) did it land in on
-    # each path?  A composite whose layer set differs is one that "moved".
-    def layer_of(trace):
-        m = {}
-        for entry in trace:
-            for a, w, _s, _id in entry["composites"]:
-                m.setdefault((a, w), []).append(entry["layer"])
-        return m
-
-    cl, bl = layer_of(ct), layer_of(bt)
-    moved = []
-    for key in set(cl) & set(bl):
-        # Compare the sorted layer-occupancy of each composite-class; a class
-        # whose per-layer count vector differs had at least one instance move.
-        if Counter(cl[key]) != Counter(bl[key]):
-            moved.append((key, Counter(cl[key]), Counter(bl[key])))
-    print(
-        f"\n  composite-classes (annotation,width) whose layer distribution "
-        f"changed: {len(moved)}"
-    )
-    for key, cc, bc in moved[:20]:
-        cmoved = {L: n for L, n in (bc - cc).items()}
-        cgone = {L: n for L, n in (cc - bc).items()}
-        print(
-            f"    {key}: chain_layers-only={dict(cgone)} block_layers-only={dict(cmoved)}"
-        )
+    if regressed:
+        print(f"\nGATE FAIL: cost regression in {regressed} — STOP and report.")
+        sys.exit(1)
+    print("\nGATE PASS: no cost regression vs the 2a baseline.")
 
 
 if __name__ == "__main__":

@@ -112,16 +112,16 @@ def compile_to_onnx_path(
         asset_config=asset_config,
         wad_path=wad_path,
     )
-    # Linear-layer fusion before compile (always on): the width-safe gate skips
-    # the fusions that would eject a downstream ReLU into the residual stream,
-    # which drops the production compile ~57 -> 48 layers without busting the
-    # width budget. See torchwright.graph.optimize.fuse_consecutive_linears.
+    # Linear-layer fusion before compile (always on).  With MLP blocks
+    # first-class, fusion is block-aware and every fold is width-safe by
+    # construction (a Block is realized whole, so folding a Linear into its
+    # gate cannot eject a ReLU into the residual stream — the case the old
+    # width-safe gate had to decline).  See
+    # torchwright.graph.optimize.fuse_consecutive_linears.
     from torchwright.graph.optimize import fuse_consecutive_linears
 
-    n_fused = fuse_consecutive_linears(
-        {next_token}, verbose=False, skip_relu_ejecting=True
-    )
-    print(f"[compile] linear fusion (width-safe): fused {n_fused} pairs", flush=True)
+    n_fused = fuse_consecutive_linears({next_token}, verbose=False)
+    print(f"[compile] linear fusion: fused {n_fused} pairs", flush=True)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     kwargs: dict[str, Any] = {
