@@ -122,7 +122,9 @@ def main() -> None:
     )
 
     t0 = time.perf_counter()
-    block_out = blockify(build_flagship(config_name, d_head, d_rot, max_seq_len), verbose=True)
+    block_out = blockify(
+        build_flagship(config_name, d_head, d_rot, max_seq_len), verbose=True
+    )
     print(f"  built + blockified block-path graph in {time.perf_counter() - t0:.1f}s")
     t0 = time.perf_counter()
     block_metrics = schedule_metrics(
@@ -140,6 +142,92 @@ def main() -> None:
     )
     print()
     print(report.format())
+
+    if os.environ.get("MODE", "").lower() == "trace":
+        _trace_hidden_diff(
+            _mod, chain_out, block_out, d=d, d_head=d_head, d_hidden=d_hidden
+        )
+
+
+def _trace_hidden_diff(mod, chain_out, block_out, *, d, d_head, d_hidden):
+    """Per-sublayer hidden-occupancy diff between the two schedules, naming the
+    composite(s) that moved and quantifying the critical-path shift that caused
+    the reorder (D3 root-cause trace for the +1 peak_hidden slot)."""
+    from collections import Counter
+
+    print("\n" + "=" * 60)
+    print("Per-layer hidden-occupancy trace (chain vs block)")
+    print("=" * 60)
+
+    ct = mod.schedule_trace(
+        chain_out, d=d, d_head=d_head, d_hidden=d_hidden, assume_zero_init=True
+    )
+    bt = mod.schedule_trace(
+        block_out, d=d, d_head=d_head, d_hidden=d_hidden, assume_zero_init=True
+    )
+    n = max(len(ct), len(bt))
+
+    def hid(t, i):
+        return t[i]["hidden"] if i < len(t) else 0
+
+    diffs = [i for i in range(n) if hid(ct, i) != hid(bt, i)]
+    print(
+        f"  layers: chain={len(ct)} block={len(bt)}; "
+        f"peak chain={max(x['hidden'] for x in ct)} "
+        f"block={max(x['hidden'] for x in bt)}"
+    )
+    print(f"  layers where per-layer hidden occupancy differs: {diffs}")
+    for i in diffs:
+        print(f"  layer {i}: chain_hidden={hid(ct, i)} block_hidden={hid(bt, i)}")
+        c_comp = (
+            Counter((a, w) for (a, w, _s, _id) in ct[i]["composites"])
+            if i < len(ct)
+            else Counter()
+        )
+        b_comp = (
+            Counter((a, w) for (a, w, _s, _id) in bt[i]["composites"])
+            if i < len(bt)
+            else Counter()
+        )
+        only_chain = c_comp - b_comp
+        only_block = b_comp - c_comp
+        if only_chain:
+            print(
+                f"    composites (annotation,width) only in CHAIN layer {i}: "
+                f"{dict(only_chain)}"
+            )
+        if only_block:
+            print(
+                f"    composites (annotation,width) only in BLOCK layer {i}: "
+                f"{dict(only_block)}"
+            )
+
+    # For each composite (annotation,width), which layer(s) did it land in on
+    # each path?  A composite whose layer set differs is one that "moved".
+    def layer_of(trace):
+        m = {}
+        for entry in trace:
+            for a, w, _s, _id in entry["composites"]:
+                m.setdefault((a, w), []).append(entry["layer"])
+        return m
+
+    cl, bl = layer_of(ct), layer_of(bt)
+    moved = []
+    for key in set(cl) & set(bl):
+        # Compare the sorted layer-occupancy of each composite-class; a class
+        # whose per-layer count vector differs had at least one instance move.
+        if Counter(cl[key]) != Counter(bl[key]):
+            moved.append((key, Counter(cl[key]), Counter(bl[key])))
+    print(
+        f"\n  composite-classes (annotation,width) whose layer distribution "
+        f"changed: {len(moved)}"
+    )
+    for key, cc, bc in moved[:20]:
+        cmoved = {L: n for L, n in (bc - cc).items()}
+        cgone = {L: n for L, n in (cc - bc).items()}
+        print(
+            f"    {key}: chain_layers-only={dict(cgone)} block_layers-only={dict(cmoved)}"
+        )
 
 
 if __name__ == "__main__":
