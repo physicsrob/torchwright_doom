@@ -110,10 +110,15 @@ def _audit(output_node, pos_encoding, kw, fix_budget_s: float, core_budget_s: fl
         reserve_residual=kw.get("reserve_residual", 0),
         assume_zero_init=kw.get("assume_zero_init", False),
         tighten_domains=kw.get("tighten_domains", False),
+        # The production model is hint-aware: the captured hints size the
+        # per-node cancel windows (hint-aware widening), so the audit must
+        # build the same widened model production solves.
+        hint_layers=hint_layers or None,
+        hint_cancel=hint_cancel or None,
     )
     print("\n=== captured descent call ===", flush=True)
     for k, v in build_kw.items():
-        print(f"  {k} = {v}")
+        print(f"  {k} = <{len(v)} entries>" if isinstance(v, dict) else f"  {k} = {v}")
     print(
         f"  hints: layers={len(hint_layers)} routing={len(hint_routing)} "
         f"cancel={len(hint_cancel)}"
@@ -122,6 +127,12 @@ def _audit(output_node, pos_encoding, kw, fix_budget_s: float, core_budget_s: fl
     t0 = time.perf_counter()
     built = build_cpsat_model(output_node, pos_encoding, **build_kw)
     print(f"  model built in {time.perf_counter() - t0:.1f}s", flush=True)
+    if built.cancel_window_delta:
+        print(
+            f"  cancel windows widened for {len(built.cancel_window_delta)} "
+            f"nodes (max +{max(built.cancel_window_delta.values())})",
+            flush=True,
+        )
     gm = built.gm
     lv, ca, ia, ica = (
         built.layer_var,
@@ -318,10 +329,15 @@ def _audit(output_node, pos_encoding, kw, fix_budget_s: float, core_budget_s: fl
         print(f"    without {fam:<22} -> {st}{flag}", flush=True)
 
     # ---- Phase 4: cancel-window violations, node by node (pure Python) ----
-    # Mirrors the cancel_slack constraint exactly: for a non-keep-forever
+    # Mirrors the UNIFORM cancel_slack window: for a non-keep-forever
     # schedulable node, cancel <= last_consumer + 1 + K (consumers = the
     # Concat-transparent effective consumers that have a layer var); with no
     # such consumer, cancel <= layer + 1 + K.  Inputs: same with birth 0.
+    # Deliberately delta-blind (ignores the hint-aware widening): phases 3-4
+    # only run when phase 2 rejected the hint, and the raw overshoot against
+    # the uniform window is the number that localizes WHY.  A node listed
+    # here with `over_by` <= its widening delta is admitted by the production
+    # model — check `built.cancel_window_delta` before reading it as a bug.
     window = build_kw["cancel_slack"]
     print(f"\n=== phase 4: cancel-window (K={window}) violations ===", flush=True)
 
