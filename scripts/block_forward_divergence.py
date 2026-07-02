@@ -36,6 +36,23 @@ for p in (_UMBRELLA, _UMBRELLA / "torchwright_doom"):
         sys.path.insert(0, str(p))
 
 
+def _resolve_config(config_name: str) -> str:
+    """Find ``<config_name>.yaml`` across local and Modal layouts.
+
+    Local: ``<umbrella>/torchwright_doom/configs/``.  Modal: ``/root/configs/``
+    (see modal_image.py add_local_dir)."""
+    for cand in (
+        Path("/root/configs") / f"{config_name}.yaml",
+        _UMBRELLA / "torchwright_doom" / "configs" / f"{config_name}.yaml",
+    ):
+        if cand.exists():
+            return str(cand)
+    raise FileNotFoundError(
+        f"config {config_name}.yaml not found in /root/configs or "
+        f"{_UMBRELLA / 'torchwright_doom' / 'configs'}"
+    )
+
+
 def _resolve_wad(cfg):
     from torchwright_doom.inference.config import resolve_wad_path
 
@@ -43,6 +60,8 @@ def _resolve_wad(cfg):
         return resolve_wad_path(cfg, base_dir=str(_UMBRELLA / "torchwright_doom"))
     except Exception:
         for cand in (
+            Path("/root/doom1.wad"),
+            Path("/root/configs/doom1.wad"),
             _UMBRELLA / "torchwright_doom" / "doom1.wad",
             _UMBRELLA / "doom1.wad",
             Path.home() / "Downloads" / "doom1.wad",
@@ -59,9 +78,7 @@ def _build(config_name, d_head, d_rot, max_seq_len, *, blockify_it):
     from torchwright_doom.inference.compiled_model import build_graph
     from torchwright_doom.inference.config import load_render_config
 
-    cfg = load_render_config(
-        str(_UMBRELLA / "torchwright_doom" / "configs" / f"{config_name}.yaml")
-    )
+    cfg = load_render_config(_resolve_config(config_name))
     next_token, _rope, emb, _banks = build_graph(
         d_head=d_head,
         max_positions=max_seq_len,
