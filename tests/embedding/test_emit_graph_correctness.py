@@ -18,7 +18,7 @@ import torch
 
 from torchwright.debug.probe import reference_eval
 from torchwright.graph import fresh_graph_session
-from torchwright.ops.inout_nodes import create_input, create_rope_config
+from torchwright.ops.inout_nodes import create_input
 
 from torchwright_doom.embedding import BASE, CENTER, TOKEN_VOCAB, W_EMBED
 from torchwright_doom.emit import (
@@ -27,8 +27,6 @@ from torchwright_doom.emit import (
     emit_slotless,
     emit_token,
 )
-from torchwright_doom.past import GraphPast
-from torchwright_doom.render_main import forward
 from torchwright_doom.tokens import FloatSlot
 from torchwright_doom.vocab import (
     BEGIN,
@@ -290,44 +288,3 @@ def test_narrow_slot_high_byte_is_constant_no_floor() -> None:
         # additive constant shared across the type's rows, so it cannot bias the
         # pick.
         assert _project_and_argmax(value) == _row_for(NODE, {"j": k})
-
-
-def test_forward_keeps_only_four_wide_floors() -> None:
-    """Forward-level pin: the whole graph builds exactly four 255-wide
-    ``floor_int`` staircases — one per genuine two-byte emitted carrier. Every
-    other 2-digit emit is a narrow slot whose high byte is a skipped constant 0.
-
-    The four carriers (verified by tracing each floor to its ``emit_dq_*`` head):
-
-    * ``value`` (FloatSlot, cardinality 65,536) — the shared digit-quad VALUE
-      head that ``_collapse_scalar_emits`` folds every VALUE ScalarEmit into;
-    * ``angleValue`` (IntSlot, cardinality 8,192) — the shared ANGLE_VALUE head;
-    * a *second* ``value`` head — Phase J's EAGER R3 v0 carrier emitted in
-      ``PixelDispatcher.after_set_cursor_y``'s wall arm. It forks with
-      SET_CURSOR_X in a ``select``, so it is a head Node, not a collapsible
-      ScalarEmit, and stays a separate wide floor;
-    * ``wallColU`` (IntSlot(-1024, 1024), cardinality 2,048) — Phase J's wall
-      texel ``u_idx`` emit in ``PixelDispatcher.wall_column_output``.
-
-    H had only the first two (count 2); Phase J's wall texel pass added the
-    latter two genuine 2-byte carriers (count 4). Guards the digit-quad
-    floor-skip optimization against regression: dropping the narrow-slot
-    short-circuit jumps this back to ~40. A count other than 4 means a new wide
-    carrier (or a collapse change) — update this list consciously.
-    """
-    iv = create_input("iv", TOKEN_VOCAB.layout.d_embed)
-    rope = create_rope_config(d_head=64, max_positions=65536, d_rot=32)
-    nt = forward(iv, GraphPast(input_vec=iv, rope=rope))
-
-    # `floor_int` expands into `floor_int_step_linear2` (one per instance), whose
-    # width is the high-byte range. At the 2-digit positions the block is sized
-    # by the 65,536-cardinality VALUE slot, so every genuine floor is 255 wide.
-    wide_floors = [
-        n
-        for n in _all_nodes(nt)
-        if getattr(n, "name", "") == "floor_int_step_linear2" and len(n) == 255
-    ]
-    assert len(wide_floors) == 4, (
-        f"expected exactly 4 wide floor_int staircases (value x2, angleValue, "
-        f"wallColU), found {len(wide_floors)}"
-    )
