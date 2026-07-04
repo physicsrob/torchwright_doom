@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from torchwright.graph import Node, RopeConfig
-from torchwright.ops import negate
+from torchwright.ops.linear import negate
 from torchwright.ops.attention_ops import (
     attend_argmax_dot,
     attend_argmin_above_in_bucket,
@@ -19,7 +19,7 @@ from torchwright.ops.attention_ops import (
     attend_mean_where,
     attend_to_offset,
 )
-from torchwright.ops.global_recency import (
+from torchwright.ops.relu.global_recency import (
     attend_most_recent_globally,
     global_position_from_bos,
 )

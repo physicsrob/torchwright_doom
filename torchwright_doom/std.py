@@ -38,18 +38,13 @@ from typing import Callable
 import torch
 
 from torchwright.graph import Concatenate, Linear, Node
-from torchwright.ops import (
-    bool_all_true,
-    bool_any_true,
-    bool_to_01,
-    cond_gate,
-    in_range,
-    sum_nodes,
-)
-from torchwright.ops.arithmetic_ops import clamp as _clamp
-from torchwright.ops.arithmetic_ops import piecewise_linear as _piecewise_linear
+from torchwright.ops.linear import bool_to_01, sum_nodes
+from torchwright.ops.relu.logic_ops import bool_all_true, bool_any_true, cond_gate
+from torchwright.ops.relu.map_select import in_range
+from torchwright.ops.relu.arithmetic_ops import clamp as _clamp
+from torchwright.ops.relu.arithmetic_ops import piecewise_linear as _piecewise_linear
 from torchwright.ops.inout_nodes import create_literal_value
-from torchwright.ops.map_select import (
+from torchwright.ops.relu.map_select import (
     broadcast_select as _broadcast_select,
     dynamic_extract as _dynamic_extract,
     select as _select,
@@ -374,7 +369,7 @@ def make_token_head(token_type: TokenType, **slot_value_nodes: Node) -> Node:
 def clamp(node: Node, lo: float, hi: float) -> Node:
     """Clamp a 1-wide scalar to ``[lo, hi]`` in one MLP sublayer.
 
-    A thin re-export of :func:`torchwright.ops.arithmetic_ops.clamp`, so a
+    A thin re-export of :func:`torchwright.ops.relu.arithmetic_ops.clamp`, so a
     ported renderer file reaches its clamp through the same
     ``std`` surface as its other ops instead of importing ``torchwright.ops``
     directly. Used by the dispatch's world-angle collapse to pin each candidate

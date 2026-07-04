@@ -25,7 +25,11 @@ from dataclasses import dataclass
 
 from torchwright.graph import Node
 from torchwright.graph import annotated
-from torchwright.ops.arithmetic_ops import compare, mod_const, thermometer_floor_div
+from torchwright.ops.relu.arithmetic_ops import (
+    compare,
+    mod_const,
+    thermometer_floor_div,
+)
 
 from .attention_handles import RecentMarkerHandle
 from .constants import COLUMN_COUNT

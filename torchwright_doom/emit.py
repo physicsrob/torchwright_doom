@@ -88,7 +88,7 @@ import torch
 from torchwright.graph import Concatenate, Linear, Node
 from torchwright.graph import annotated
 from torchwright.graph.spherical_codes import index_to_vector
-from torchwright.ops.arithmetic_ops import floor_int
+from torchwright.ops.relu.arithmetic_ops import floor_int
 from torchwright.ops.inout_nodes import create_literal_value
 
 from .embedding import (

@@ -1,7 +1,7 @@
 """Audit ReLU-unit usage in the compiled doom ``forward()`` graph.
 
 Every approximate op lowers to one or more ``Linear -> ReLU -> Linear`` sublayers
-(``torchwright.ops.linear_relu_linear``). The ``ReLU`` node's width
+(``torchwright.ops.relu.linear_relu_linear``). The ``ReLU`` node's width
 (``len(node)``) is the number of ReLU units that sublayer computes *per
 position* — e.g. a ``floor_int`` over 255 integer steps builds a
 ``floor_int_step`` ReLU of width 510 (two units per step) plus a

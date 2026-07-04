@@ -37,7 +37,7 @@ import torch
 from torchwright.graph import Linear, Node
 from torchwright.graph.asserts import assert_matches_value_type
 from torchwright.graph.value_type import NodeValueType, Range
-from torchwright.ops.arithmetic_ops import (
+from torchwright.ops.relu.arithmetic_ops import (
     ceil_int,
     clamp,
     compare,
@@ -47,8 +47,8 @@ from torchwright.ops.arithmetic_ops import (
     piecewise_linear,
     thermometer_floor_div,
 )
-from torchwright.ops.linear_relu_linear import linear_relu_linear
-from torchwright.ops.logic_ops import bool_all_true, bool_any_true, bool_not
+from torchwright.ops.relu.linear_relu_linear import linear_relu_linear
+from torchwright.ops.relu.logic_ops import bool_all_true, bool_any_true, bool_not
 
 from .constants import COLUMN_COUNT, PIXEL_WIDTH, SCREEN_WIDTH, VIEW_HEIGHT
 from .std import concat, constant, linear, one_hot, select

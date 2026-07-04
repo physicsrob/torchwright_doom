@@ -35,7 +35,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from torchwright.ops.arithmetic_ops import compare
+from torchwright.ops.relu.arithmetic_ops import compare
 
 from torchwright.graph import annotated
 

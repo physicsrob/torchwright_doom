@@ -40,7 +40,7 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from torchwright.ops.arithmetic_ops import (
+from torchwright.ops.relu.arithmetic_ops import (
     compare,
     mod_const,
     piecewise_linear,
