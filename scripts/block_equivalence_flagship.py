@@ -98,9 +98,8 @@ def main() -> None:
     # ("scripts") collides with torchwright_doom/scripts/ on sys.path — load it
     # by explicit file path under a unique module name to sidestep the clash.
     _harness_path = _UMBRELLA / "torchwright" / "scripts" / "ffn_equivalence.py"
-    _spec = importlib.util.spec_from_file_location(
-        "_tw_ffn_equivalence", _harness_path
-    )
+    _spec = importlib.util.spec_from_file_location("_tw_ffn_equivalence", _harness_path)
+    assert _spec is not None and _spec.loader is not None
     _mod = importlib.util.module_from_spec(_spec)
     sys.modules[_spec.name] = _mod  # dataclass type resolution reads sys.modules
     _spec.loader.exec_module(_mod)

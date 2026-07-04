@@ -105,7 +105,6 @@ def _run_side(label: str, *, snapshot: bool, out_path: str, onnx_path: str) -> d
 
 
 def main() -> None:
-    import torch
 
     prefill = os.environ.get("PREFILL", "e1m1")
     print("=" * 70, flush=True)
