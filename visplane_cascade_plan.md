@@ -234,6 +234,138 @@ plan's three, plus one:
 (append here: the Phase 0 consolidation result, the P0 map, P1
 answers, per-change floor deltas, gate results)
 
+### P4 gates — status (2026-07-05, running log)
+
+- `make test` on consolidation (8da25b3): GREEN (5 shards, 275s;
+  unpinned torchwright — pre-dated the pinning discovery).
+- `make test` on steps 1+2 (b1f5258), torchwright PINNED @ 15053eb:
+  GREEN (lint + 5 shards, 255 passed 2 skipped, 214s). Includes the
+  d=4096 compile gate (`test_forward_compiles`).
+- Lowres `COMPARE=1` at consolidation, UNPINNED (torchwright image
+  snapshot ~08:52, state unverifiable): **coverage 84.8%, within-
+  option 100.0%** vs the 100%/100% bar (width track's 92d947e PASS
+  earlier today). Isolation re-run with PINNED torchwright at the
+  same commit: **84.8% again — bit-identical (13,448 pixels both
+  runs)**. The torchwright race is REFUTED as the cause; this is a
+  real, deterministic regression in the consolidated tree at the
+  lowres config. **Gate FAILED — landing blocked until root-caused.**
+
+### The 84.8% regression — diagnosis record (2026-07-05)
+
+Token-level diff (the pinned run's `token_dump.json` vs the golden
+pydoom stream, locally reconstructed — mind the screen-env trap: the
+golden build needs the lowres env set BEFORE any doom import, since
+importing `inference.config` already pulls `constants`):
+
+- The generated rollout runs the FULL protocol to `done` (status bar,
+  weapon, all passes present); per-type counts match golden except
+  **pixel −1127** (±1 on a few control types) — 13,448 vs 15,859
+  painted screen pixels ⇒ the 84.8%.
+- The failure is surgical: **wall span starts**. At the first
+  divergence, golden `wallSpanMeta(y=31)` → paints y=31..84; got
+  `wallSpanMeta(y=0)` → one pixel, span abandoned. y=0 is the
+  OPEN-CLIP variant — the two-variant ClipMemory resolve (paint
+  step 4) took `present=false` where the recovered ceiling clip
+  (31–39) exists.
+- Fingerprint: 76 span events across ALL 76 even columns (every
+  rendered column at scale 2), and it is each column's **last** span
+  event that fails (columns with two events get the first one right).
+- Scale-dependence: `make test`'s AR/oracle gates are green at the
+  60×50 test config; this config is 80 columns / ~20k positions.
+  Suspect set (in the consolidated tree, all touching this exact
+  machinery): paint step 2 (`same_int` hat PWL — the present
+  compare), step 4 (two-variant clip resolve), step 5 (radix col key
+  — validated at CC=160/base 13, NEVER at this config's CC=80/
+  base 9), D1/D3 less likely.
+- ONNX debug session on this artifact is unavailable (embed_table
+  3.3 GB > ORT's 2 GB embedded-initializer cap at d=8192) — the
+  teacher-forced check runs through the HF runtime instead.
+- **Teacher-forced (HF, golden context): the flip REPRODUCES** — at
+  pos 4400 the artifact predicts `wallSpanMeta(y=0)` where golden is
+  `y=31`, plus a run of `clipUpdate`-instead-of-pixel (the model ends
+  the span immediately). Deterministic, context-independent. The
+  window's other mismatches are the known benign classes (±1
+  angle-bin ties within ~1 logit, ~3e-5 value-carrier noise).
+- **Exact-math (reference_eval) at the SAME pos 4400: CORRECT
+  (y=31).** And both sides are fp32 (`tokens_to_input` is float32;
+  reference has no upcast), and graph `Attn.compute` is REAL softmax
+  attention (RoPE + causal mask + torch.softmax) — so the attention
+  semantics incl. softmax concentration are validated correct on
+  clean fp32 values. Eliminated: design/logic bug, softmax
+  concentration per se, raw-op construction at CC=80/base 9
+  (validated exact: key dot 2.0000 vs ≤1.0000, same_int clean ±1).
+- Remaining class: **compiled-approximation error** — the delta
+  between node.compute semantics and the packed/folded compiled
+  artifact (lane packing, folded-projection ulps, accumulated PL
+  noise feeding this machinery). The width track's lowres 100% PASS
+  (92d947e, no paint changes in that lineage) plus make-test green at
+  60×50 brackets it to: introduced by the paint∪depth consolidation,
+  manifest only at ≥ this scale.
+- **In-process repro harness built** (`clip_compiled_probe.py`, the
+  measurement worktree's scripts/): `compile_headless` at production
+  widths (d=8192/128/16384, bias=False) reproduces the flip
+  teacher-forced in ~10 min. `probe_compiled@atol=500`: NO divergence
+  — the flip rides margins far below 500. Boolean-scale per-node diff
+  at pos 4400: ~20-24 narrow nodes flipped, and the causal read is
+  that the **published span-state y1 slot is already 0 on the publish
+  side** (`WallSpanRuntimeDraft`/finish concat exact `[31,83,83]` vs
+  compiled `[0,83,83]`), everything downstream (read at `:629`,
+  `y_start_for_part`, heights `sub` 25→0) inherits it, and
+  publish→read→publish recycles it — so the origin is the EARLIEST
+  divergent position (first-divergence scan running).
+- **Rob's torchwright fixes (214ccd6 compute_add self-add, eb4a0f8
+  fusion-in-lower) do NOT close it**: the flip reproduces identically
+  against torchwright main @ eb4a0f8. The regression is in the doom
+  consolidation.
+
+### Re-baseline on torchwright main @ eb4a0f8 (fusion in lower())
+
+The fusion-in-lower landing changes every floor number (the explicit
+doom-side pre-fuse is now redundant — removed from
+`compiled_model.py` / `compile_cache.py` in this tree; the sidecar
+fingerprint is now of the UNfused source graph, verified in
+torchwright export.py):
+
+- HEAD (steps 1+2): **38** (`fused=1211`) — was 39 at 15053eb.
+- `depth-flatten` @ eae3c9e (the Phase-A open question — where the
+  assembly tail was thought to bind at 47): **46** (`fused=1219`).
+
+### 84.8% regression — state of the hunt (handoff)
+
+The repro harness is committed: `scripts/clip_compiled_probe.py`
+(~10 min/iteration on Modal 64-CPU: production-width
+`compile_headless` + teacher-forced golden stream + per-node
+compiled-vs-exact). Established, in causal order:
+
+1. Junk-row divergence (exact 42 vs compiled 0 from position 0 on
+   ~85% of positions in the span-y family) is the BY-DESIGN class —
+   conds legitimately sit inside comparator ramps on junk rows;
+   discard it when reading probe output.
+2. At the failing position 4400, NO ±1 cond flips — every select
+   agrees compiled-vs-exact; only VALUES differ (y1 31→0 and its
+   descendants).
+3. The span-state publish at mid-span marked rows (4057–4327) is
+   CLEAN both sides (`[60,60,60]`); the corrupt publish
+   (`[31,83,83]` → `[0,83,83]`) materializes at 4400 itself, fed by
+   the span-state READ at 4400 — whose source row is the PREVIOUS
+   span-meta row (~4330), not yet sampled.
+
+NEXT PROBE (one edit to the harness): sample the `publish@977` /
+`read@629` table at ALL `wallSpanMeta` input positions — find the
+first span-meta row where compiled y1 goes 0, then boolean-diff THAT
+position. REVISED two-bug narrative (post make-test on eb4a0f8): the doom
+graph is likely INNOCENT. (1) At 15053eb, the compiled Add(h,h)
+silent-addend-drop (fixed by 214ccd6) zeroed sub/instance chains →
+the 84.8%. (2) At eb4a0f8, the fold-through-Concatenate fusion
+(6f242b4) makes Linear(Concatenate(...)) compile to identically ZERO
+— test_check_conflict_high_instance_compiled fails (green at
+15053eb), instance-index Linear compiled ≡ 0 vs oracle [0, 248] —
+and render_ops.sub is the same shape, so the eb4a0f8 harness rerun
+showing y=0 does NOT prove bug (1) survived; it reproduces via bug
+(2). ESCALATED to the torchwright side per D1. Once torchwright is
+fixed: make test, then the 10-min harness, then the lowres cert —
+in that order.
+
 ### Phase 0 — consolidation (2026-07-05)
 
 Rebased `worktree-paint_cascade` (6 commits) onto
