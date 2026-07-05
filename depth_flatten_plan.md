@@ -228,3 +228,38 @@ certified-numbers lines refresh only at re-certification.
   callers — D2's swap would be churn). D2's verification work
   (integrality at all call sites, per-column/per-span light
   constancy) carries into D4 and is recorded above.
+- **2026-07-04, D3 landed** (`5ce6096`): constant-table picks lowered
+  through the new `std.pick_const_by_index` → `onehot_lookup`
+  selection Linear. Oracle 47 unchanged (the sites sit on the slack
+  branch; the v-coordinate chain binds), fused 695 → 766. `make test`
+  green (275 passed, 5/5 shards).
+- **2026-07-04, D4 is a width-infeasibility NO-GO as specced —
+  documented, not landed.** The composed tables build and verify
+  (`lit[r, light·W + u] = COLORMAP[light][tex[r, u]]`, spot-checked
+  against the WAD banks), but the real bank inventory kills the
+  schedule: 8 wall banks, and `table_lookup_2d` materializes a live
+  row vector of width = table columns on the residual stream between
+  its row and column stages. Composing light onto the column axis
+  makes that vector `32·W` wide — bank7 (W=256) alone is 8192 = the
+  ENTIRE residual stream at d=8192, and the per-bank vectors sum to
+  ~10.7k simultaneously-live columns in the zero-slack 3-layer window
+  before the bank pick (all 8 banks feed it eagerly; no slack to
+  stagger). The row-axis orientation is worse (`32·R` staircase-step
+  transients, ~12k for bank6). The findings doc's "balanced axes ≈
+  7.5k lanes" assumed a floor/mod index split, which is exactly the
+  spine depth D4 was supposed to buy. Conclusion: the composition
+  cannot schedule at the DAG floor at d=8192 (hopeless at d=4096);
+  it would only revive with a new torchwright op (e.g. a fused
+  two-stage lookup that never materializes the full row vector) —
+  out of this track's doom-only contract. Colormap depth on the
+  spine today is 3 layers (witness L39–41: `colormap_row` PWL →
+  `broadcast_select` → `dynamic_extract_sum`); that prize stays on
+  the table for an op-level design.
+- **2026-07-04, production compile at D1 (`optimize: 2`) reached 52,
+  not 47** — the CP-SAT floor probe (horizon 48) went UNKNOWN at its
+  150s budget and warm-start descent stalled at 52; the lowres graph
+  solved to its 47 floor in 152s. Retry with a /tmp `optimize: 3`
+  variant (300s) launched; if the production solve still cannot
+  approach the floor, the D1 landing needs a width look (the flat
+  `type_switch` holds 4 gated emit-head copies live at once where
+  the ladder held at most 2).
