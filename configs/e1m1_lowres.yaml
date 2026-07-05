@@ -10,7 +10,7 @@
 # the 320x200 production (just SCREEN_WIDTH=160); keep the shared model /
 # scene / run fields in lockstep with e1m1.yaml.  Only `scale` differs.
 wad: doom1.wad
-model: {d: 8192, d_head: 128, d_rot: 64, scale: 2, detail: low, hud: true, d_hidden: 16384, optimize: 2}
+model: {d: 8192, d_head: 128, d_rot: 64, scale: 2, detail: low, hud: true, d_hidden: 16384, optimize: 2, bias: false}
 region: {x1: 627.2, y1: -3760.0, x2: 1395.2, y2: -2800.0}
 textures:
   wall: [BROWN1, BROWN144, COMPUTE2, DOOR3, DOORSTOP, LITE3, STARTAN3, STEP6, SUPPORT2]

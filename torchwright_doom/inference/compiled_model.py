@@ -82,6 +82,7 @@ def compile_to_onnx_path(
     assume_zero_init: bool = True,
     d_hidden: int | None = None,
     rms_norm_const_exp: int = 63,
+    bias: bool = True,
     asset_config: AssetConfig | None = None,
     wad_path: str | Path | None = None,
     extra_metadata: dict[str, Any] | None = None,
@@ -135,6 +136,7 @@ def compile_to_onnx_path(
         "assume_zero_init": assume_zero_init,
         "cache_stride": cache_stride,
         "rms_norm_const_exp": rms_norm_const_exp,
+        "bias": bias,
     }
     if d_hidden is not None:
         kwargs["d_hidden"] = d_hidden

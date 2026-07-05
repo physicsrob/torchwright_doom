@@ -62,6 +62,7 @@ def compile_cached(
         trim_heads=config.model.trim_heads,
         optimize=config.model.optimize,
         assume_zero_init=config.model.assume_zero_init,
+        bias=config.model.bias,
         verbose=verbose,
         asset_config=config.asset_config(),
         wad_path=wad_path,

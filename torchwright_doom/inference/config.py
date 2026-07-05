@@ -52,6 +52,18 @@ class ModelConfig:
     assume_zero_init: bool = True
     max_seq_len: int = 65536
     optimize: int = 0
+    # Fold every bias into its matmul against the pinned constant-1 column
+    # (torchwright compile_to_onnx(..., bias=...)).  A ModelConfig field —
+    # not a hard-coded default inside compile_to_onnx_path — because the
+    # knob must be key-visible: a signature default can be overridden by
+    # any caller at runtime with no source diff, and two different
+    # artifacts would then map to one cache key.  Rides the key via
+    # asdict(config.model) (busts every cached artifact once, like
+    # cache_stride below).  bias=False is required to load a swish
+    # artifact as HF (the stock Phi3ForCausalLM target is the only swish
+    # conversion path); the True default keeps non-config compile paths on
+    # the layout they expect.
+    bias: bool = True
     # Static KV-cache slot count S baked into the compiled ONNX (the
     # arange_S mask constant + the past_K_i shapes).  A compiled model
     # hard-caps at prefill + decode <= S.  12288 covers the e1m1 frame
@@ -227,6 +239,7 @@ def load_render_config(path: str | Path) -> RenderConfig:
             assume_zero_init=bool(model.get("assume_zero_init", True)),
             max_seq_len=int(model.get("max_seq_len", 65536)),
             optimize=int(model.get("optimize", 0)),
+            bias=bool(model.get("bias", True)),
             cache_stride=int(model.get("cache_stride", 12288)),
         ),
         region=RegionConfig(

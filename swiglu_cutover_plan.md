@@ -26,7 +26,27 @@ was retracted as a category error — the noise harness's numbers
 reflect *neither* bias mode (its "compiled" leg is `node.compute()`,
 where a bias is an exact addition), so no noise re-measurement gates
 D3. **D1 landed** (this repo): the ORT-CUDA probe imports the machine
-constants and pins the no-bias lane.
+constants and pins the no-bias lane. **D2 landed** (`4f83840` + the
+emit hi-byte snap `28bd1f8`), all fast gates green; three cutover
+finds fixed en route (torchwright `c5db214` broadcast_select
+both-zero collapse, torchwright `2fb6bd6` floor_int residual range
+pins — which also un-wedged the d=4096 compile gate, strict xfail
+removed on XPASS — and the doom digit-quad hi-snap). **D3 landed.**
+
+**Execution deviation — the walkthrough stages merged.** Settled
+decision 1's "certification runs twice (2 configs × 2 stages)" turned
+out impossible at the D2 stage: torchwright's HF conversion routes
+swish artifacts exclusively to the stock `Phi3ForCausalLM` target,
+which requires `bias=False` (`compiler/hf/convert.py`
+`_conversion_target`, deliberate per `docs/phi3_conversion_plan.md`
+P1) — a `bias=True` swish artifact has no production runtime path.
+The machine flip is instead certified at `bias=True` by the
+non-runtime gates (both suites, both oracles, the compiled AR
+rollout, the d=4096 gate — none route through HF conversion), and
+the walkthroughs certify once, at swish + `bias=False`, both
+configs. The A/B fallback if a walkthrough regresses:
+`OnnxDebugSession` + `probe_compiled` on a /tmp `bias: true` config
+variant isolates machine-vs-fold without HF conversion.
 
 **What this unblocks:** Phi-3 conversion P3 (torchwright
 `docs/phi3_conversion_plan.md`) — exporting e1m1 as a stock
