@@ -64,6 +64,25 @@ from transients; alternatively read the allocation of input nodes +
 embedding width directly at warm-start setup. Output: one number
 (permanent columns) + the top permanent residents by name.
 
+**RESULT (2026-07-04, `scripts/width_census.py`, production env,
+measured at d=8192 and d=4608): M1 GO.** The permanent residents
+occupy three *time-disjoint* windows, none close to 4,096:
+
+- **whole-pass: 1 column** (the RoPE self-match const-one; a real
+  compile adds 1–2 reserved RMSNorm pinned-constant columns the
+  schedule-only path doesn't reserve),
+- **input window: 1,409 columns** (the embedding row), freed at L1,
+- **end window: 1,447 columns** (the output token row —
+  `emit_derived_zero` 1,390 + three 19-wide heads), born in the last
+  two layers; one 19-wide output leaf (a `cond_gate`) is held from
+  mid-schedule to the end.
+
+The measured d=8192 peak live-set (L15) is 1 permanent + 8,191
+transient columns, led by exactly the residents this plan targets:
+2×1,024 `ray_scaled` (W2) and ~2,600 columns of `floor_int` step
+chunks (W1). The d=4096 deadlock is transient working-set pressure,
+not a structural floor — proceed.
+
 ## W1 — radix-decomposed floors (shared with the lane story)
 
 `floor_int` over N boundaries costs 3N lanes, 2 sublayers, and an
