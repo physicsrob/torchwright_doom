@@ -157,6 +157,15 @@ def load_debug_session(
         asset_config=config.asset_config(),
         wad_path=wad_path,
     )
+    # Mirror the compile-side pre-pass: compile_to_onnx_path fuses
+    # consecutive Linears (always on) BEFORE compiling, so the artifact's
+    # sidecar fingerprint is of the fused graph. Rebuilding without the
+    # same transform guarantees a fingerprint mismatch (656 fused pairs on
+    # the production graph — first hit by the swiglu cutover's D3 debug
+    # gate, the first debug-session open since fusion became always-on).
+    from torchwright.graph.optimize import fuse_consecutive_linears
+
+    fuse_consecutive_linears({next_token}, verbose=False)
     return OnnxDebugSession(str(onnx_path), next_token, providers=providers)
 
 
