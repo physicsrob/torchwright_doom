@@ -52,6 +52,23 @@ def _build_cmd(module: str, script: str, args: str) -> list[str]:
     return cmd
 
 
+# Local env vars forwarded verbatim into the remote process. The screen/graph
+# shape vars are load-bearing for every probe that rebuilds the production
+# graph (the screen-env trap: without them a probe silently measures the
+# 60x50 hud-off graph — see scripts/critical_chain.py).
+_FORWARD_ENV_PREFIXES = ("TORCHWRIGHT_DOOM_",)
+_FORWARD_ENV_NAMES = ("CRIT_PATH", "OPT_GRAPH", "FUSE_FILTER")
+
+
+def _forwarded_env() -> dict[str, str]:
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k.startswith(_FORWARD_ENV_PREFIXES) or k in _FORWARD_ENV_NAMES
+    }
+    return env
+
+
 @app.function(
     # GPU / memory / timeout are env-overridable (like the CPU container): e.g.
     #   MODAL_RUN_GPU=B200 MODAL_RUN_TIMEOUT=7200 MODAL_RUN_GPU_MEMORY=65536 \
@@ -66,12 +83,14 @@ def _build_cmd(module: str, script: str, args: str) -> list[str]:
     image=ASSETS_IMAGE,
     volumes={"/root/.cache/torchwright_doom/compiled": CACHE_VOLUME},
 )
-def run_gpu(module: str, script: str, args: str) -> int:
+def run_gpu(module: str, script: str, args: str, env: dict[str, str]) -> int:
     CACHE_VOLUME.reload()
     cmd = _build_cmd(module, script, args)
+    if env:
+        print(f"[remote/gpu] env {' '.join(f'{k}={v}' for k, v in sorted(env.items()))}")
     print(f"[remote/gpu] {' '.join(cmd)}")
     t0 = time.time()
-    rc = subprocess.run(cmd).returncode
+    rc = subprocess.run(cmd, env={**os.environ, **env}).returncode
     print(f"[remote/gpu] exit {rc} in {time.time() - t0:.0f}s")
     return rc
 
@@ -85,11 +104,13 @@ def run_gpu(module: str, script: str, args: str) -> int:
     # from /root/configs.
     image=ASSETS_IMAGE,
 )
-def run_cpu(module: str, script: str, args: str) -> int:
+def run_cpu(module: str, script: str, args: str, env: dict[str, str]) -> int:
     cmd = _build_cmd(module, script, args)
+    if env:
+        print(f"[remote/cpu] env {' '.join(f'{k}={v}' for k, v in sorted(env.items()))}")
     print(f"[remote/cpu] {' '.join(cmd)}")
     t0 = time.time()
-    rc = subprocess.run(cmd).returncode
+    rc = subprocess.run(cmd, env={**os.environ, **env}).returncode
     print(f"[remote/cpu] exit {rc} in {time.time() - t0:.0f}s")
     return rc
 
@@ -111,4 +132,4 @@ def main(
         print("error: pass --module OR --script, not both", file=sys.stderr)
         sys.exit(2)
     fn = run_cpu if cpu_only else run_gpu
-    sys.exit(fn.remote(module=module, script=script, args=args))
+    sys.exit(fn.remote(module=module, script=script, args=args, env=_forwarded_env()))

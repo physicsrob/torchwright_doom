@@ -754,6 +754,42 @@ COL_RADIX_BASE = math.ceil(math.sqrt(COLUMN_COUNT + 1))  # 8 at CC=60, 13 at 160
 N_COL_BUCKETS = COLUMN_COUNT // COL_RADIX_BASE + 1
 
 
+def mod_sawtooth(scalar: Node, base: int, max_value: int) -> Node:
+    """``scalar % base`` as ONE sawtooth PWL — the depth-parallel form of
+    ``mod_const``'s serial chain (thermometer -> scale -> subtract), for
+    every site that builds a radix (bucket, digit) pair: the digit runs in
+    the same layer as the bucket thermometer instead of two layers after it.
+
+    Exact at integer inputs: breakpoint pairs bracket each ``k*base - 0.5``
+    jump by ±0.05 — the same transition placement as
+    ``thermometer_floor_div``, so the pair stays bucket-consistent (a soft
+    ~0.02-leaked input near an edge lands on the same (bucket, digit) pair
+    as the thermometer's bucket), and integers sit 0.45 from any fillet.
+    A digit read just below a bucket edge comes out slightly negative
+    (e.g. -0.02 at a leaked ``k*base``) — inside ``one_hot`` slot 0's
+    in_range window, exactly matching ``mod_const``.
+
+    The grid extends down to -1.45 holding the identity below the k=0
+    edge (``v - base*max(0, floor((v+0.5)/base))``): ``mod_const`` maps a
+    ``threshold == -1`` (bucket 0) to digit -1 — ``next_plane_after``'s
+    find-first query needs that — and the PWL's default clamp at the
+    first breakpoint would pin it to -0.45 instead. The extension keeps
+    slope 1, so the extra grid point costs no lanes (equal-slope segments
+    are free)."""
+    grid: list[float] = [-1.45]
+    n_buckets = max_value // base + 1
+    for k in range(1, n_buckets + 1):
+        edge = float(k * base)
+        grid += [edge - 0.55, edge - 0.45]
+    grid.append(float(n_buckets * base) + float(base) - 0.55)
+    return piecewise_linear(
+        scalar,
+        grid,
+        lambda v: v - base * max(0.0, math.floor((v + 0.5) / base)),
+        name="mod_sawtooth",
+    )
+
+
 def radix_col_key(col_scalar: Node) -> Node:
     """Exact screen-column-equality key: ``concat(one_hot(c // B),
     one_hot(c % B))`` over the column radix base.  The dot of two such keys
@@ -761,31 +797,13 @@ def radix_col_key(col_scalar: Node) -> Node:
     otherwise (cancellation-free one-hot dot).
 
     The column may be the soft (~0.02 leak) output of a ``pick_most_recent``
-    recovery: ``thermometer_floor_div`` and the low-digit sawtooth both place
-    their ramps at ``k*B - 0.5`` (bucket-consistent, and 0.45 away from any
-    integer, far beyond the leak), so a leaked value stays on the right
-    (bucket, digit) pair, and ``one_hot`` rounds it to a clean integer
-    one-hot — no pre-snap is needed and a matched key's dot is exactly 2.
-
-    The low digit is one sawtooth PWL of the column (``x - B*floor((x+0.5)/B)``,
-    breakpoint pairs bracketing each ``k*B - 0.5`` jump by 0.05) running in
-    parallel with the bucket thermometer, replacing the serial
-    ``mod_const`` chain (thermometer -> scale -> subtract) that sat on the
-    compiled depth floor via the clip-memory query (paint_cascade_plan.md).
-    A digit read just below a bucket edge comes out slightly negative
-    (e.g. -0.02 at a leaked ``k*B``) — inside ``one_hot`` slot 0's
-    in_range window, exactly matching the old subtract form."""
+    recovery: ``thermometer_floor_div`` and ``mod_sawtooth`` place their
+    ramps at the same ``k*B - 0.5`` transitions (bucket-consistent, and
+    0.45 away from any integer, far beyond the leak), so a leaked value
+    stays on the right (bucket, digit) pair, and ``one_hot`` rounds it to
+    a clean integer one-hot — no pre-snap is needed and a matched key's
+    dot is exactly 2 (paint_cascade_plan.md, step 5)."""
     b = COL_RADIX_BASE
     hi = thermometer_floor_div(col_scalar, b, COLUMN_COUNT)
-    lo_grid: list[float] = [-0.45]
-    for k in range(1, N_COL_BUCKETS + 1):
-        edge = float(k * b)
-        lo_grid += [edge - 0.55, edge - 0.45]
-    lo_grid.append(float(N_COL_BUCKETS * b) + float(b) - 0.55)
-    lo = piecewise_linear(
-        col_scalar,
-        lo_grid,
-        lambda v: v - b * math.floor((v + 0.5) / b),
-        name="col_mod",
-    )
+    lo = mod_sawtooth(col_scalar, b, COLUMN_COUNT)
     return concat(one_hot(hi, N_COL_BUCKETS), one_hot(lo, COL_RADIX_BASE))

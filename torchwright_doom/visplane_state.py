@@ -42,7 +42,6 @@ from typing import TYPE_CHECKING
 
 from torchwright.ops.swiglu.arithmetic_ops import (
     compare,
-    mod_const,
     piecewise_linear,
     thermometer_floor_div,
 )
@@ -55,6 +54,7 @@ from .render_ops import (
     N_COL_BUCKETS as _N_BUCKETS,
     SCREEN_X_CLAMP,
     add_const,
+    mod_sawtooth,
     neg,
     one_minus,
     or_,
@@ -184,7 +184,7 @@ def _radix_plane_key(plane_scalar: Node) -> Node:
     — 2 on an exact plane match, <= 1 otherwise — a sum of one-hot products with
     no large-magnitude cancellation."""
     hi = thermometer_floor_div(plane_scalar, _PLANE_RADIX_BASE, N_PLANES_MAX)
-    lo = mod_const(plane_scalar, _PLANE_RADIX_BASE, N_PLANES_MAX)
+    lo = mod_sawtooth(plane_scalar, _PLANE_RADIX_BASE, N_PLANES_MAX)
     return concat(one_hot(hi, _PLANE_N_BUCKETS), one_hot(lo, _PLANE_RADIX_BASE))
 
 
@@ -489,7 +489,7 @@ class RuntimeVisplaneState:
         query_instance_lift = _lifted_instance_query(query_instance_idx)
 
         hi1 = thermometer_floor_div(x1, _RADIX_BASE, COLUMN_COUNT)
-        lo1 = mod_const(x1, _RADIX_BASE, COLUMN_COUNT)
+        lo1 = mod_sawtooth(x1, _RADIX_BASE, COLUMN_COUNT)
         hi1_bucket_oh = one_hot(hi1, _N_BUCKETS)
         lo1_threshold = one_hot(lo1, _RADIX_BASE)  # reads I(lo >= lo1) from lo_ge
         hi1_threshold = one_hot(hi1, _N_BUCKETS)  # reads I(hi > hi1) from hi_above
@@ -594,7 +594,7 @@ class RuntimeVisplaneState:
         plane_sentinel = constant(float(N_PLANE_SENTINEL))
         up = self.used_plane
         query_hi = thermometer_floor_div(threshold, _PLANE_RADIX_BASE, N_PLANES_MAX)
-        query_lo = mod_const(threshold, _PLANE_RADIX_BASE, N_PLANES_MAX)
+        query_lo = mod_sawtooth(threshold, _PLANE_RADIX_BASE, N_PLANES_MAX)
         query_bucket_oh = one_hot(query_hi, _PLANE_N_BUCKETS)
         # Digit threshold shifted +1: slot 0 = "above -1" (find-first), slots
         # 1..B = "above 0..B-1". So threshold == -1 -> query_lo == -1 -> slot 0.
@@ -724,11 +724,12 @@ def _publish_occupancy_radix(
 
     The bucket keys are published raw (not gated): the bucketed-argmin op rejects
     inactive rows via ``validity`` (= ``occupied_active``), so no ``gate`` /
-    ``cond_gate`` is involved. ``thermometer_floor_div`` / ``mod_const`` are exact
+    ``cond_gate`` is involved. ``thermometer_floor_div`` / ``mod_sawtooth`` are exact
     on integer columns (the radix-successor derisk showed ``floor_int(v/B +
-    0.5/B)`` is wrong at B=13; these place transitions at ``k*B - 0.5``)."""
+    0.5/B)`` is wrong at B=13; these place transitions at ``k*B - 0.5``,
+    and the sawtooth digit runs in the bucket thermometer's layer)."""
     col_hi = thermometer_floor_div(occupied_x_value, _RADIX_BASE, COLUMN_COUNT)
-    col_lo = mod_const(occupied_x_value, _RADIX_BASE, COLUMN_COUNT)
+    col_lo = mod_sawtooth(occupied_x_value, _RADIX_BASE, COLUMN_COUNT)
     col_bucket_onehot = one_hot(col_hi, _N_BUCKETS)
     lo_ge = linear(one_hot(col_lo, _RADIX_BASE), _LO_GE_TABLE)
     hi_above = linear(one_hot(col_hi, _N_BUCKETS), _HI_ABOVE_TABLE)
@@ -785,7 +786,7 @@ def _publish_used_plane_successor(
     plane_hi = thermometer_floor_div(
         used_plane_value_raw, _PLANE_RADIX_BASE, N_PLANES_MAX
     )
-    plane_lo = mod_const(used_plane_value_raw, _PLANE_RADIX_BASE, N_PLANES_MAX)
+    plane_lo = mod_sawtooth(used_plane_value_raw, _PLANE_RADIX_BASE, N_PLANES_MAX)
     bucket_onehot = one_hot(plane_hi, _PLANE_N_BUCKETS)
     above_lo = linear(one_hot(plane_lo, _PLANE_RADIX_BASE), _PLANE_LO_ABOVE_TABLE)
     hi_for_h2 = select(used_plane_active, plane_hi, constant(float(_PLANE_INVALID_HI)))

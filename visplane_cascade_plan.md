@@ -233,3 +233,133 @@ plan's three, plus one:
 
 (append here: the Phase 0 consolidation result, the P0 map, P1
 answers, per-change floor deltas, gate results)
+
+### Phase 0 — consolidation (2026-07-05)
+
+Rebased `worktree-paint_cascade` (6 commits) onto
+`depth-flatten@eae3c9e`. **No conflicts** — the expected `std.py`
+collision auto-merged (the two sides' appends — paint's `compare`
+re-export, depth's `pick_const_by_index` — touch non-overlapping
+hunks even in the import/`__all__` regions).
+
+**Post-consolidation floor: 41** (`fused=734
+critical_path_layers=41`) — inside the predicted ~41–42. Paint's
+standalone 43 gained 2 from D1: the old witness's L37–39 pixel-tail
+select ladder is gone; the tail after the emit digit-quad is now just
+cond_gate → dispatch Linears (L37–L40).
+
+Zero-slack set: 80 of 6542 nodes — 48 `proj/plan`, 13 `proj/pmrk`,
+6 `pix/emit`, 5 `dispatch`, 3 each `proj/input` / `pix`. The witness
+is the work order's sketch shifted down 2:
+
+- L0–L2 `[proj/input]` PLANE_MARK gating (is_type dot → compare →
+  cond_gate → select).
+- L3–L8 `[proj/pmrk]` Attn read ∥ `_radix_plane_key`: thermometer
+  (L3) → mod_const's fused multiply-negate (L4) → Add (L5) →
+  one_hot's in_range (L6) → affine/Linear (L7) → cond_gate (L8).
+- L9–L13 `[proj/plan]` the three chained reads: Attn (L9) → Attn
+  (L10) → split → `visplane_instance_query_square` (L11) → neg/add
+  (L12) → Attn (L13).
+- L14–L21 the compare/select ladder (select, add_const,
+  fused_sub_compare, then compare×4 at L18–L21).
+- L22–L29 cond_gate → Attn (L23) → SIX chained selects (L24–L29).
+- L30 `[pix/plan]` Attn → clamp_0_2 (L31) → the setCursorX
+  digit-quad emit (L32–L36: div floor_int → saturate → add →
+  snap-half floor_int → saturate → add/c2) → cond_gate → dispatch
+  Linears (L37–L40).
+
+Full provenance trace: `scripts/chain_provenance.py` output archived
+in the session scratchpad (`prov_41.out` / `crit_41.out`).
+
+### P0 + P1 — the 41-floor map with per-read proofs (measured)
+
+The map wins over the sketch, and it differs in one big way: **the
+witness never touches `check_conflict`** (H1/H2/H3 and the presence
+ladders all have slack). The chain is the R_MapPlane read pipeline —
+`min_x`/`max_x` → `column_range` → R_MakeSpans → the chunk fold —
+with every attention read bound by a SAME-PASS published key or
+value, plus one genuinely query-chained read:
+
+- **L3 read** (`attend_to_offset` for the plane-mark (p, vp),
+  `visplane_state.py:329`): V-bound at L2 — the
+  `plane_mark_p_or_zero` select (`seg_projection.py:488`) published
+  in the same pass.
+- **L3–L8** the `_radix_plane_key(occupied_p_value)` publish chain
+  (`:186-188` via `:359`): thermometer (L3) → `mod_const`'s
+  multiply-negate (L4) → Add (L5) → one_hot in_range (L6) → fused
+  affine+scale Linear (L7) → `gate` (L8, `:356`).
+- **L9 reads** (`min_x`/`max_x`, `:688`/`:699`): Q binds L6 (their
+  own query-side `_radix_plane_key`), **K binds L8** — the same-pass
+  `visplane_bounds_min/max_key` publish. Key-bound; the read moves up
+  1:1 as the publish chain shortens.
+- **L10 read** (`flat_visplane_row.pick`, `flat_state.py:259`):
+  **V binds L9** — `flat_visplane_state_pub` carries the `min_x` /
+  `max_x` results. Value-bound.
+- **L11–L12**: `_lifted_instance_query` on the recovered
+  (`flat_p`, `flat_vp`) — the instance square (L11) + neg/add-const
+  (L12).
+- **L13 read** (`column_range`, `visplane_state.py:712`): **Q binds
+  L12** — the lifted query chains on the L10 read's output. This is
+  the genuinely serial read pair of this spine (the sketch guessed
+  H2→H3; it is actually flat-visplane→column_range). K (the `col_key`
+  publish, `:403`) has slack at L7.
+- **L14–L22** the R_MakeSpans boundary chain (`flat_state.py`):
+  `t1`/`b1` selects (L14, `:276-277`) → `add_const` + `max_screen`
+  (L15–L16, `:300`) → `le_span_y` (L17, `:303`) → the
+  opening-indicator select (L18, `:313`) → `or_` = `bool_any_true`'s
+  TWO compare layers (L19–L20, `:321`) → the `and_` (L21) →
+  `gate(opening_active, chunk)` (L22, `:331`).
+- **L23 read** (the chunk-head `pick_most_recent`, `:389`): **K binds
+  L22** — the same-pass `flat_opening_key_k` publish. Key-bound.
+- **L24–L29**: the chunk fold (`:401-406`) — SIX chained selects
+  (7 chunks at 320×200). The compare conds are off-chain
+  (`span_row_y` is input-derived); only the select data path binds.
+- **L30 read** (`flat_span_values`, `:571`): **V binds L29** —
+  `flat_span_state_pub` carries the fold output (`:402` via `:415`).
+  The closure splits (`:413`) bind at only L21.
+- **L31–L40**: clamp_0_2 → the setCursorX digit-quad emit (5 layers)
+  → cond_gate → dispatch Linears. Rides the L30 read 1:1.
+
+P1 answer: no hoist wins exist (all queries except L13's are
+positional/off-chain); the depth is entirely in **same-pass
+publish→read chains**, so every layer cut in a published key/value
+chain moves the floor 1:1 until a parallel spine binds. Refined
+design targets, in expected-value order:
+
+1. Chunk fold → `pick_by_one_hot` over `one_hot(y // CHUNK)`
+   (design 3): L24–L29 collapse to one pick sublayer, worth up to −5.
+2. R_MakeSpans chain (designs 2+4): one-compare
+   `and(x, or(a, b))` = `compare(2x + a + b, 1)` (margin 1, clean-±1
+   inputs) kills the or_/and_ stack (−2); `le(max(a,c), b)` =
+   `and(le(a,b), le(c,b))` restructures the max/le serial pair (−1).
+3. `_radix_plane_key` publish chain → sawtooth low digit (design 1):
+   −2 on L3–L8, moving the L9 K-bound reads up.
+4. Precompute the instance square AT PUBLISH TIME: publish
+   `flat_p·N + flat_vp` and its square in `flat_visplane_state_pub`
+   (input-derived, off-chain at publish), recover both in the L10
+   read, and build `_lifted_instance_query` linearly (2q fuses into
+   the Q projection) — kills L11–L12, moving the L13 read up −2.
+
+### P2/P3 — change → floor ledger
+
+Baseline 41 (post-consolidation).
+
+1. **41 → 39.** `render_ops.mod_sawtooth(scalar, base, max_value)` —
+   the col_mod sawtooth generalized (grid extended to −1.45 holding
+   the identity below the k=0 edge, so `next_plane_after`'s
+   `threshold == −1` find-first digit stays −1 instead of clamping at
+   −0.45; slope-1 extension, zero extra lanes). Applied at the five
+   planned `mod_const` sites in `visplane_state.py` and the two
+   `solid_intervals.py` twins (`:193`, `:277` — off-floor, hardened
+   per the D1 all-three-branches precedent); `radix_col_key` now
+   calls the shared helper. Numerics: new-vs-old worst diff 4.8e-07
+   on the shared domain (identical function); integer-exactness
+   worst 1.05e-02 at base 13 — the PRE-existing swish-fillet tail of
+   the landed col_mod form, two orders under the 0.5 slot windows and
+   unit argmin gaps its consumers resolve; `f(−1) = −1.000000` exact.
+   **At 39 the spine flips**: the witness leaves the visplane suffix
+   and lands on the wall texel twins — zero-slack set 314 of 6518
+   with THREE co-binding spines (`stor/R_StoreWallRange` 86,
+   `pix/R_DrawColumn` 86, `proj/plan`+`pmrk` 68) over a shared
+   `proj/paint` prefix (L0–L19). Steps 2–4 (the plan-suffix cuts)
+   can no longer move the floor alone.

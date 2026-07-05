@@ -27,7 +27,6 @@ from torchwright.graph import Node
 from torchwright.graph import annotated
 from torchwright.ops.swiglu.arithmetic_ops import (
     compare,
-    mod_const,
     thermometer_floor_div,
 )
 
@@ -42,6 +41,7 @@ from .render_ops import (
     N_COL_BUCKETS as _N_BUCKETS,
     add_const,
     and_,
+    mod_sawtooth,
     one_minus,
     snap_bool,
 )
@@ -190,7 +190,7 @@ class SolidIntervals:
     def next_start_after(self, column: Node) -> Node:
         """Return the nearest solid interval start strictly after `column`."""
         query_hi = thermometer_floor_div(column, _RADIX_BASE, COLUMN_COUNT)
-        query_lo = mod_const(column, _RADIX_BASE, COLUMN_COUNT)
+        query_lo = mod_sawtooth(column, _RADIX_BASE, COLUMN_COUNT)
         query_bucket_onehot = one_hot(query_hi, _N_BUCKETS)
         query_lo_threshold = one_hot(query_lo, _RADIX_BASE)
 
@@ -274,7 +274,7 @@ def _publish_successor_fields(
     start_s_h = past.publish("solid_interval_start", start_s)
 
     start_hi = thermometer_floor_div(start_s, _RADIX_BASE, COLUMN_COUNT)
-    start_lo = mod_const(start_s, _RADIX_BASE, COLUMN_COUNT)
+    start_lo = mod_sawtooth(start_s, _RADIX_BASE, COLUMN_COUNT)
     start_bucket_onehot = one_hot(start_hi, _N_BUCKETS)
     start_above_lo = linear(one_hot(start_lo, _RADIX_BASE), _LO_ABOVE_TABLE)
 
