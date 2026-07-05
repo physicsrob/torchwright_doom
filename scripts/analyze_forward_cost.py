@@ -201,21 +201,18 @@ _FUSE_PREDICATES = {
 
 
 def _apply_fusion(output_node, verbose=False, eject_budget=None):
-    """Apply fusion; FUSE_FILTER selects all|safe|budget|narrow|wide|smallout|bigout.
+    """Apply fusion; FUSE_FILTER selects all|narrow|wide|smallout|bigout.
 
-    ``safe`` = conservative relu-ejection gate; ``budget`` = budget-aware gate
-    (needs ``eject_budget`` = available residual columns).
+    ``all`` is the production always-on pre-pass (``fuse_consecutive_linears``,
+    now FFN-aware; the relu-era ``safe``/``budget`` ejection gates are gone
+    with the relu — ``eject_budget`` is accepted and ignored for call-site
+    compatibility).
     """
     filt = os.environ.get("FUSE_FILTER", "all")
-    if filt in ("all", "safe", "budget"):
+    if filt == "all":
         from torchwright.graph.optimize import fuse_consecutive_linears
 
-        return fuse_consecutive_linears(
-            {output_node},
-            verbose=verbose,
-            skip_relu_ejecting=(filt == "safe"),
-            eject_budget=eject_budget if filt == "budget" else None,
-        )
+        return fuse_consecutive_linears({output_node}, verbose=verbose)
     return _selective_fuse({output_node}, _FUSE_PREDICATES[filt], verbose=verbose)
 
 
@@ -231,7 +228,12 @@ def compile_capture(
     """Compile once; return (compiled, node_to_layer, peak_width, peak_live).
 
     ``run_optimize_graph`` applies ``optimize_graph`` (``fuse_consecutive_linears``)
-    in place BEFORE compiling — the pre-pass the compile pipeline never runs.
+    in place BEFORE compiling.  The production ONNX pipeline
+    (``compile_to_onnx_path``) applies this pre-pass ALWAYS-ON (656 fused
+    pairs on the production graph — see the swiglu cutover record, find #4,
+    and ``inference/compile_cache.py``'s debug-session mirror), so
+    production-comparable depth/width numbers need ``OPT_GRAPH=1``;
+    without it you are measuring the unfused topology.
     ``d_hidden`` caps MLP weight memory (must be >= the widest single-layer MLP op).
     """
     n_fused = None
@@ -305,12 +307,16 @@ def schedule_only_capture(
     from torchwright.compiler.forward.residual_map import ResidualStreamMap
     from torchwright.compiler.forward.scheduling_policy import SchedulingPolicy
     from torchwright.compiler.forward.compile import _run_heuristic_warm_start
+    from torchwright.compiler.lower import lower
 
     n_fused = None
     if run_optimize_graph:
         n_fused = _apply_fusion(output_node, verbose=False, eject_budget=d - 1)
 
-    graph = GraphAnalyzer(output_node)
+    # GraphAnalyzer requires a wrapper-free graph: lower() strips
+    # Assert/DebugWatch into the compiler-private copy (fresh node_ids;
+    # names/annotations carried by reference, so bucketing still works).
+    graph = GraphAnalyzer(lower(output_node).output_node)
     output_node = graph.get_output_node()
     input_nodes = [n for n in graph.get_all_nodes() if graph.is_input_node(n)]
     rmap = ResidualStreamMap(d)
@@ -383,14 +389,17 @@ def scheduled_preds(node, n2l, _memo):
     return out
 
 
-def critical_path(output_node, n2l, id_to_node):
-    """Trace the deepest dependency chain (the depth-determining critical path)."""
+def critical_path(n2l, id_to_node):
+    """Trace the deepest dependency chain (the depth-determining critical path).
+
+    Seeds from the globally deepest *scheduled* node: the schedule's layer
+    count is max(layer)+1, so the depth-determining chain ends there.  Both
+    capture paths schedule the compiler-private lowered copy (fresh node_ids),
+    so tracing from the source output node would find nothing — the walk must
+    stay inside the scheduled copy via id_to_node.
+    """
     memo: dict = {}
-    # Seed from the deepest scheduled node reachable from the output.
-    start = max(
-        scheduled_preds(output_node, n2l, memo) or [output_node],
-        key=lambda n: n2l.get(n.node_id, -1),
-    )
+    start = id_to_node[max(n2l, key=lambda nid: n2l[nid])]
     chain = [start]
     cur = start
     while True:
@@ -458,9 +467,11 @@ def main():
         # schedule can beat. Bounds how far the in-solver "fuse anything"
         # version (Option B) could improve on a width-safe gate.
         from torchwright.compiler.forward.cpsat_scheduler import critical_path_layers
+        from torchwright.compiler.lower import lower
 
         nf = _apply_fusion(nt, eject_budget=d - 1) if run_og else 0
-        cp = critical_path_layers(nt)
+        # critical_path_layers -> GraphAnalyzer requires a wrapper-free graph.
+        cp = critical_path_layers(lower(nt).output_node)
         print(
             f"=== CRIT_PATH: FUSE_FILTER={os.environ.get('FUSE_FILTER', 'all')} "
             f"fused={nf} critical_path_layers={cp} ==="
@@ -495,7 +506,7 @@ def main():
         )
 
     # ---- DEPTH: critical path by subsystem ----
-    path = critical_path(nt, n2l, id_to_node)
+    path = critical_path(n2l, id_to_node)
     print(
         f"\n--- critical path (depth driver): {len(path)} scheduled nodes "
         f"spanning layers 0..{n2l.get(path[-1].node_id, '?')} ---"
