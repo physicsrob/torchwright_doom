@@ -34,6 +34,8 @@ from .render_ops import (
     gt_y_ceil_boundary,
     gt_y_floor_boundary,
     le_span_y,
+    max_screen,
+    min_screen,
     mul_height_scale,
     one_minus,
     or_,
@@ -42,14 +44,18 @@ from .render_ops import (
     sub,
 )
 from .std import (
+    compare,
     concat,
     constant,
     gate,
     indicator_to_bool,
     linear,
     one_hot,
+    pick_by_one_hot,
+    reduce_sum,
     select,
     split,
+    sum as node_sum,
 )
 
 if TYPE_CHECKING:
@@ -92,10 +98,21 @@ class ClipMemory:
 
     DOOM: ceilingclip[]/floorclip[] (r_plane.c) — per-column occlusion arrays
     read each R_RenderSegLoop column; walls mark both as fully opaque.
+
+    ``ceiling``/``floor`` are the resolved values (recovered clip when
+    ``present``, the open clip otherwise). The raw pick outputs and the
+    presence flag are exposed so depth-critical consumers can compute
+    their recovered-clip and open-clip variants in parallel and pick once
+    on ``present`` at the end, instead of chaining behind the resolved
+    selects (paint-cascade flatten). ``recovered_*`` are only meaningful
+    where ``present`` is +1.
     """
 
     ceiling: Node
     floor: Node
+    recovered_ceiling: Node
+    recovered_floor: Node
+    present: Node
 
     @classmethod
     @annotated("paint")
@@ -158,6 +175,9 @@ class ClipMemory:
         return cls(
             ceiling=select(present, recovered_ceiling, clip_ceiling_initial),
             floor=select(present, recovered_floor, clip_floor_initial),
+            recovered_ceiling=recovered_ceiling,
+            recovered_floor=recovered_floor,
+            present=present,
         )
 
 
@@ -299,16 +319,28 @@ class WallColumnState:
         # bot_y_raw is very negative and yh should reflect that to make
         # le_span_y(yl, yh) correctly mark the middle span empty.
         yh_unclipped = FLOOR_Y_WIDE(bot_y_raw)
-        ceiling_min = add_const(clip.ceiling, 1.0)
-        floor_max = add_const(clip.floor, -1.0)
-        # With integer yl_unclipped/yh_unclipped, switch to integer-aware
-        # gt_screen (threshold 0.5) instead of the y-boundary comparators
-        # whose thresholds were tuned to absorb the +0.5/-0.5 _ceilish/_floorish
-        # offsets.
-        ceiling_unclipped_wins = gt_screen(yl_unclipped, ceiling_min)
-        floor_clip_wins = gt_screen(yh_unclipped, floor_max)
-        yl = select(ceiling_unclipped_wins, yl_unclipped, ceiling_min)
-        yh = select(floor_clip_wins, floor_max, yh_unclipped)
+        # Two-variant clip clamp (paint-cascade flatten): the resolved
+        # clip.ceiling/floor sit one select behind the clip pick, and the
+        # sequential clamp (+-1 -> gt -> select) chained after them put the
+        # span bounds four sublayers past the pick. Instead compute the
+        # clamp against the recovered clip and against the open default in
+        # parallel — each needs values available at the pick itself — and
+        # resolve once on clip.present. gt_screen keeps the integer-aware
+        # half-integer thresholds (the +0.5/-0.5 _ceilish/_floorish
+        # comparators stay out, as before).
+        rec_ceiling_min = add_const(clip.recovered_ceiling, 1.0)
+        rec_floor_max = add_const(clip.recovered_floor, -1.0)
+        open_ceiling_min = constant(float(OPEN_CLIP_CEILING) + 1.0)
+        yl = select(
+            clip.present,
+            max_screen(yl_unclipped, rec_ceiling_min),
+            max_screen(yl_unclipped, open_ceiling_min),
+        )
+        yh = select(
+            clip.present,
+            min_screen(yh_unclipped, rec_floor_max),
+            min_screen(yh_unclipped, screen_height_m1),
+        )
 
         # --- Phase: portal flag and wall-clip markceiling/markfloor gates ---
         portal = scene.segs.is_portal(seg_i)
@@ -337,10 +369,11 @@ class WallColumnState:
         # to 0 and lose the "upper region above screen -> invisible" signal
         # needed by `le_span_y(yl, upper_mid)`.
         upper_mid_unclipped = FLOOR_Y_WIDE(high_y_raw)
+        # Same two-variant clip clamp as yl/yh above.
         upper_mid = select(
-            gt_screen(upper_mid_unclipped, floor_max),
-            floor_max,
-            upper_mid_unclipped,
+            clip.present,
+            min_screen(upper_mid_unclipped, rec_floor_max),
+            min_screen(upper_mid_unclipped, screen_height_m1),
         )
         upper_y1 = yl
         upper_y2 = upper_mid
@@ -361,9 +394,21 @@ class WallColumnState:
         )
         lower_y1 = lower_mid
         lower_y2 = yh
+        # Two-variant span-ok flag: le(lower_mid, yh) with
+        # yh = min(yh_unclipped, eff_floor-1) expands exactly to
+        # le(lower_mid, yh_unclipped) AND le(lower_mid, eff_floor-1), so
+        # each clip variant is one conjunction over compares available at
+        # the clip pick itself, resolved once on clip.present — instead of
+        # chaining behind the resolved yh select.
+        lower_ok_shared = le_span_y(lower_mid, yh_unclipped)
+        lower_span_ok_value = select(
+            clip.present,
+            and_(lower_ok_shared, le_span_y(lower_mid, rec_floor_max)),
+            and_(lower_ok_shared, le_span_y(lower_mid, screen_height_m1)),
+        )
         lower_texture = scene.segs.lower_texture(seg_i)
         lower_textured = and_(lower_geom, lower_texture)
-        lower_visible = and_(lower_textured, le_span_y(lower_y1, lower_y2))
+        lower_visible = and_(lower_textured, lower_span_ok_value)
         floor_if_lower_textured = select(
             lower_visible,
             lower_y1,
@@ -473,15 +518,68 @@ class WallColumnState:
         )
 
         # --- Phase: span visibility flags + clamped published y bounds ---
-        middle_span_ok_value = le_span_y(yl, yh)
-        upper_span_ok_value = le_span_y(upper_y1, upper_y2)
-        lower_span_ok_value = le_span_y(lower_y1, lower_y2)
-        middle_y1 = SPAN_Y_CLAMP(yl)
-        middle_y2 = SPAN_Y_CLAMP(yh)
-        upper_y1_published = SPAN_Y_CLAMP(upper_y1)
-        upper_y2_published = SPAN_Y_CLAMP(upper_y2)
+        # (lower_span_ok_value is defined next to lower_mid above, in the
+        # same two-variant form as everything here.)
+        #
+        # Flags: le(max(a, c), min(b, d)) expands exactly to the four
+        # pairwise le's (both max arguments below both min arguments), so
+        # each clip variant of a span-ok flag is one conjunction over
+        # compares available at the clip pick, resolved once on
+        # clip.present. All values are integers, so the half-integer
+        # le thresholds are untouched.
+        mid_ok_shared = le_span_y(yl_unclipped, yh_unclipped)
+        middle_span_ok_value = select(
+            clip.present,
+            and_(
+                and_(mid_ok_shared, le_span_y(yl_unclipped, rec_floor_max)),
+                and_(
+                    le_span_y(rec_ceiling_min, yh_unclipped),
+                    le_span_y(rec_ceiling_min, rec_floor_max),
+                ),
+            ),
+            and_(mid_ok_shared, le_span_y(open_ceiling_min, yh_unclipped)),
+        )
+        up_ok_shared = le_span_y(yl_unclipped, upper_mid_unclipped)
+        upper_span_ok_value = select(
+            clip.present,
+            and_(
+                and_(up_ok_shared, le_span_y(yl_unclipped, rec_floor_max)),
+                and_(
+                    le_span_y(rec_ceiling_min, upper_mid_unclipped),
+                    le_span_y(rec_ceiling_min, rec_floor_max),
+                ),
+            ),
+            and_(up_ok_shared, le_span_y(open_ceiling_min, upper_mid_unclipped)),
+        )
+        # Bounds: SPAN_Y_CLAMP is monotone, so it commutes with max/min —
+        # clamp the two candidates first, then one gt+select per bound,
+        # resolved on clip.present folded into the select cond. The open
+        # variant needs no max/min at all: the open ceiling_min equals the
+        # clamp's lower bound and the open floor_max equals its upper
+        # bound, so the clamp subsumes them.
+        cl_yl_u = SPAN_Y_CLAMP(yl_unclipped)
+        cl_yh_u = SPAN_Y_CLAMP(yh_unclipped)
+        cl_um_u = SPAN_Y_CLAMP(upper_mid_unclipped)
+        cl_rec_c1 = SPAN_Y_CLAMP(rec_ceiling_min)
+        cl_rec_f1 = SPAN_Y_CLAMP(rec_floor_max)
+        middle_y1 = select(
+            and_(clip.present, gt_screen(cl_rec_c1, cl_yl_u)),
+            cl_rec_c1,
+            cl_yl_u,
+        )
+        middle_y2 = select(
+            and_(clip.present, gt_screen(cl_yh_u, cl_rec_f1)),
+            cl_rec_f1,
+            cl_yh_u,
+        )
+        upper_y1_published = middle_y1  # upper_y1 is yl; same clamped bound
+        upper_y2_published = select(
+            and_(clip.present, gt_screen(cl_um_u, cl_rec_f1)),
+            cl_rec_f1,
+            cl_um_u,
+        )
         lower_y1_published = SPAN_Y_CLAMP(lower_y1)
-        lower_y2_published = SPAN_Y_CLAMP(lower_y2)
+        lower_y2_published = middle_y2  # lower_y2 is yh; same clamped bound
         new_floor_published = CLIP_Y_CLAMP(new_floor)
 
         # --- Phase: assemble and publish the state handles ---
@@ -664,7 +762,6 @@ class WallSpanRuntimeDraft:
         span_ordinal_0 = constant(0.0)
         span_ordinal_1 = constant(1.0)
         span_ordinal_2 = constant(2.0)
-        false_ = constant(-1.0)
 
         # WALL_SPAN_META is the internal span marker. It precedes the
         # host-visible SET_CURSOR_Y(y), keeping cursor tokens simple while
@@ -684,16 +781,13 @@ class WallSpanRuntimeDraft:
         k_part_0 = seg_facts.K_part_0(seg_i_active)
         k_part_1 = seg_facts.K_part_1(seg_i_active)
         k_part_2 = seg_facts.K_part_2(seg_i_active)
-        has_mid = seg_facts.has_mid(seg_i_active)
-        has_upper = seg_facts.has_upper(seg_i_active)
-        has_lower = seg_facts.has_lower(seg_i_active)
         wall_span = wall_column.span_values(past)
-        mid_visible = and_(has_mid, wall_span.middle_ok)
-        upper_visible = and_(has_upper, wall_span.upper_ok)
-        lower_visible = and_(has_lower, wall_span.lower_ok)
 
-        def y_start_for_part(part_idx: Node) -> Node:
-            part_oh_local = one_hot(part_idx, 3)
+        part_oh_0 = one_hot(k_part_0, 3)
+        part_oh_1 = one_hot(k_part_1, 3)
+        part_oh_2 = one_hot(k_part_2, 3)
+
+        def y_start_for_part(part_oh_local: Node) -> Node:
             part_is_mid_local = _part_is_mid(part_oh_local)
             part_is_upper_local = _part_is_upper(part_oh_local)
             return select(
@@ -702,24 +796,34 @@ class WallSpanRuntimeDraft:
                 select(part_is_upper_local, wall_span.upper_y1, wall_span.lower_y1),
             )
 
-        k0_y1_value = y_start_for_part(k_part_0)
-        k1_y1_value = y_start_for_part(k_part_1)
-        k2_y1_value = y_start_for_part(k_part_2)
+        k0_y1_value = y_start_for_part(part_oh_0)
+        k1_y1_value = y_start_for_part(part_oh_1)
+        k2_y1_value = y_start_for_part(part_oh_2)
 
-        def part_visible_for(part_idx: Node) -> Node:
-            part_oh_local = one_hot(part_idx, 3)
-            part_is_mid_local = _part_is_mid(part_oh_local)
-            part_is_upper_local = _part_is_upper(part_oh_local)
-            visible = select(
-                part_is_mid_local,
-                mid_visible,
-                select(part_is_upper_local, upper_visible, lower_visible),
-            )
-            exists = one_minus(same_int(part_idx, part_sentinel))
-            return and_(exists, visible)
-
-        k1_visible = part_visible_for(k_part_1)
-        k2_visible = part_visible_for(k_part_2)
+        # --- Flat candidate-visibility masks (paint-cascade flatten; see
+        # paint_cascade_plan.md, execution record) ---
+        # A candidate k_j is visible iff it exists (k_part_j != PART_NONE)
+        # and its part's span is ok. The old per-part has_* conjunction is
+        # structural here: vocab._K_PART_TABLES only lists parts whose
+        # has_* bit is set in ``pat``, so a non-sentinel k_part_j always
+        # names a part that exists on this seg.
+        #
+        # m_j is a 0/1 slot mask over (mid, upper, lower), all-zero when
+        # the candidate is absent. Everything below that depends on the
+        # span-state read resolves through ONE gated slot-sum + compare —
+        # the read-to-publish depth this replaces was the compiled floor's
+        # binding chain (nested selects + two-layer or_).
+        #
+        # Degenerate rows: this state is built eagerly at every position;
+        # on non-span rows k_part_j / the ordinal are junk, so the one-hots
+        # can be fractional or all-zero. That is broadcast_select's
+        # documented junk-mask contract (bounded blend), and the published
+        # state is only read back at rows selected by the span_start_row
+        # marker, which junk rows never carry.
+        exists_1 = one_minus(same_int(k_part_1, part_sentinel))
+        exists_2 = one_minus(same_int(k_part_2, part_sentinel))
+        m_1 = gate(exists_1, part_oh_1)
+        m_2 = gate(exists_2, part_oh_2)
         cursor_y = inp.wall_span_meta_y
         ordinal_at_span = inp.wall_span_meta_ordinal
         is_k0 = same_int(ordinal_at_span, span_ordinal_0)
@@ -732,32 +836,56 @@ class WallSpanRuntimeDraft:
         part_oh = one_hot(selected_part, 3)
         part_is_mid = _part_is_mid(part_oh)
         part_is_upper = _part_is_upper(part_oh)
-        span_y_start_value = select(
-            part_is_mid,
-            wall_span.middle_y1,
-            select(part_is_upper, wall_span.upper_y1, wall_span.lower_y1),
+        # Selected-part y bounds / height as one-hot picks instead of the
+        # nested two-select ladder — the ladder was the binding chain
+        # between the span-state read and this publish. On a real span row
+        # ``part_oh`` is a clean one-hot (the ordinal is real there and the
+        # next-ordinal chain only advances to existing parts); on junk rows
+        # it is fractional/all-zero and the pick blends toward zero —
+        # bounded, published, never read back (span_start_row marker). The
+        # per-part height table entries are linear in the read, so they
+        # fuse into the pick rather than trailing it.
+        span_y_start_value = pick_by_one_hot(
+            part_oh,
+            concat(wall_span.middle_y1, wall_span.upper_y1, wall_span.lower_y1),
         )
-        span_y_end_value = select(
-            part_is_mid,
-            wall_span.middle_y2,
-            select(part_is_upper, wall_span.upper_y2, wall_span.lower_y2),
+        span_y_end_value = pick_by_one_hot(
+            part_oh,
+            concat(wall_span.middle_y2, wall_span.upper_y2, wall_span.lower_y2),
         )
-        span_height_value = add_const(sub(span_y_end_value, span_y_start_value), 1.0)
+        span_height_value = pick_by_one_hot(
+            part_oh,
+            concat(
+                add_const(sub(wall_span.middle_y2, wall_span.middle_y1), 1.0),
+                add_const(sub(wall_span.upper_y2, wall_span.upper_y1), 1.0),
+                add_const(sub(wall_span.lower_y2, wall_span.lower_y1), 1.0),
+            ),
+        )
 
-        more_after_k0 = or_(k1_visible, k2_visible)
-        span_has_next_value = select(
-            is_k0,
-            more_after_k0,
-            select(is_k1, k2_visible, false_),
+        # --- Flat next-span logic over the masks above ---
+        # Candidates drawn after this span: k1 and k2 at ordinal 0, k2 at
+        # ordinal 1, none at ordinal 2. ``marked_next`` marks their part
+        # slots; the picked sum over marked slots of the ±1 ok flags is
+        # 2·(#visible) − (#marked), so "at least one next candidate is
+        # visible" is (picked sum + #marked) >= 2 — one compare with
+        # threshold 1, margin 1 on both sides (softmax-recovery noise on
+        # the ok flags is ~1e-3, far inside).
+        oks = concat(wall_span.middle_ok, wall_span.upper_ok, wall_span.lower_ok)
+        marked_k1 = gate(is_k0, m_1)
+        marked_next = node_sum(marked_k1, gate(or_(is_k0, is_k1), m_2))
+        span_has_next_value = compare(
+            node_sum(pick_by_one_hot(marked_next, oks), reduce_sum(marked_next)),
+            1.0,
         )
-        next_y_after_k0 = select(k1_visible, k1_y1_value, k2_y1_value)
-        span_next_y_value = select(is_k0, next_y_after_k0, k2_y1_value)
-        next_ordinal_after_k0 = select(k1_visible, span_ordinal_1, span_ordinal_2)
-        span_next_ordinal_value = select(
-            is_k0,
-            next_ordinal_after_k0,
-            span_ordinal_2,
+        # The next span is k1 exactly when this is ordinal 0 AND k1 is
+        # visible (same single-compare shape, k1's slot only); otherwise k2
+        # — which matches the old nested selects on every ordinal.
+        choose_k1 = compare(
+            node_sum(pick_by_one_hot(marked_k1, oks), reduce_sum(marked_k1)),
+            1.0,
         )
+        span_next_y_value = select(choose_k1, k1_y1_value, k2_y1_value)
+        span_next_ordinal_value = select(choose_k1, span_ordinal_1, span_ordinal_2)
 
         span_dc_iscale_value, span_u_native_value, span_cmap_row_value = split(
             wall_column.pick(past, wallcol_render_state),

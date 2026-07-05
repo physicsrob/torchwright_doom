@@ -43,7 +43,6 @@ from torchwright.ops.swiglu.arithmetic_ops import (
     clamp,
     compare,
     floor_int,
-    mod_const,
     multiply,
     piecewise_linear,
     thermometer_floor_div,
@@ -413,9 +412,33 @@ def max_screen(a: Node, b: Node) -> Node:
 
 
 def same_int(a: Node, b: Node) -> Node:
-    """±1: are two integer-valued nodes equal?"""
-    diff_abs = ABS_SMALL_INT(sub(a, b))
-    return one_minus(compare(diff_abs, 0.5))  # not (|a-b| > 0.5)
+    """±1: are two integer-valued nodes equal?
+
+    One hat-shaped PWL over the difference: +1 where ``|a-b| <= 0.4``, -1
+    where ``|a-b| >= 0.6``, linear ramp between. The ``sub`` fuses into the
+    PWL's input projection, so integer equality costs one sublayer instead
+    of the previous abs -> compare -> not three (it sat on the compiled
+    depth floor via the clip-presence check; paint_cascade_plan.md).
+    Integer inputs land squarely in the flats; the 0.4 flat margin covers
+    the recovered-value noise the old compare-threshold-at-0.5 form
+    absorbed (attention recoveries here carry ~0.02). Differences beyond
+    +-64 stay in the outer flats, matching ABS_SMALL_INT's clamp range.
+    """
+
+    def hat(v: float) -> float:
+        av = abs(v)
+        if av <= 0.4:
+            return 1.0
+        if av >= 0.6:
+            return -1.0
+        return 1.0 - 2.0 * (av - 0.4) / 0.2
+
+    return piecewise_linear(
+        sub(a, b),
+        [-64.0, -0.6, -0.4, 0.4, 0.6, 64.0],
+        hat,
+        name="same_int",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -575,8 +598,13 @@ def gt_y_floor_boundary(raw_y: Node, boundary: Node) -> Node:
 
 
 def le_span_y(y1: Node, y2: Node) -> Node:
-    """±1: integer span non-empty test ``y1 <= y2`` = ``not (y1 - y2 > 0.5)``."""
-    return one_minus(compare(sub(y1, y2), 0.5))
+    """±1: integer span non-empty test ``y1 <= y2`` as ``y2 - y1 > -0.5``.
+
+    One fused sub+compare sublayer (the old ``not (y1 - y2 > 0.5)`` form
+    spent a second sublayer on the negation, and sat on the compiled depth
+    floor via the span-ok flags; paint_cascade_plan.md). Same half-integer
+    threshold contract on integer y values."""
+    return compare(sub(y2, y1), -0.5)
 
 
 def SPAN_Y_CLAMP(x: Node) -> Node:
@@ -733,10 +761,31 @@ def radix_col_key(col_scalar: Node) -> Node:
     otherwise (cancellation-free one-hot dot).
 
     The column may be the soft (~0.02 leak) output of a ``pick_most_recent``
-    recovery: ``thermometer_floor_div`` (ramps at ``k*B - 0.5``) and the
-    bucket-consistent ``mod_const`` keep the leaked value on the right digit,
-    and ``one_hot`` rounds it to a clean integer one-hot — so no pre-snap is
-    needed and a matched key's dot is exactly 2."""
-    hi = thermometer_floor_div(col_scalar, COL_RADIX_BASE, COLUMN_COUNT)
-    lo = mod_const(col_scalar, COL_RADIX_BASE, COLUMN_COUNT)
+    recovery: ``thermometer_floor_div`` and the low-digit sawtooth both place
+    their ramps at ``k*B - 0.5`` (bucket-consistent, and 0.45 away from any
+    integer, far beyond the leak), so a leaked value stays on the right
+    (bucket, digit) pair, and ``one_hot`` rounds it to a clean integer
+    one-hot — no pre-snap is needed and a matched key's dot is exactly 2.
+
+    The low digit is one sawtooth PWL of the column (``x - B*floor((x+0.5)/B)``,
+    breakpoint pairs bracketing each ``k*B - 0.5`` jump by 0.05) running in
+    parallel with the bucket thermometer, replacing the serial
+    ``mod_const`` chain (thermometer -> scale -> subtract) that sat on the
+    compiled depth floor via the clip-memory query (paint_cascade_plan.md).
+    A digit read just below a bucket edge comes out slightly negative
+    (e.g. -0.02 at a leaked ``k*B``) — inside ``one_hot`` slot 0's
+    in_range window, exactly matching the old subtract form."""
+    b = COL_RADIX_BASE
+    hi = thermometer_floor_div(col_scalar, b, COLUMN_COUNT)
+    lo_grid: list[float] = [-0.45]
+    for k in range(1, N_COL_BUCKETS + 1):
+        edge = float(k * b)
+        lo_grid += [edge - 0.55, edge - 0.45]
+    lo_grid.append(float(N_COL_BUCKETS * b) + float(b) - 0.55)
+    lo = piecewise_linear(
+        col_scalar,
+        lo_grid,
+        lambda v: v - b * math.floor((v + 0.5) / b),
+        name="col_mod",
+    )
     return concat(one_hot(hi, N_COL_BUCKETS), one_hot(lo, COL_RADIX_BASE))

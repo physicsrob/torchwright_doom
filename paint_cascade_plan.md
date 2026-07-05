@@ -336,3 +336,53 @@ is no hoist win to collect. The entire paint-cascade depth is in the
 feeding the L28 read's V) — every layer cut there is a full compiled
 layer off the floor. `seg_facts.*` reads are off the zero-slack set
 entirely (irrelevant to depth).
+
+### P2/P3 — change → floor ledger
+
+Baseline 49 (depth-flatten @ d61f72f, D1 not landed).
+
+1. **49 → 45.** Flat next-span logic in `WallSpanRuntimeDraft.publish`:
+   `part_visible_for`'s nested selects + `and_` + two-layer `or_` +
+   select ladders replaced by 0/1 candidate slot masks
+   (`gate(exists_j, part_oh_j)`, off-chain) and one
+   gated-slot-sum + compare per boolean
+   (`(picked ±1 ok sum + #marked) >= 2`, threshold 1, margin 1).
+   `span_next_y`/`span_next_ordinal` select on a single
+   `choose_k1 = is_k0 AND k1-visible` compare of the same shape. The
+   `has_*` term of the old visibility conjunction is structural
+   (`vocab._K_PART_TABLES` only lists existing parts) — dropped with
+   the invariant recorded at the use site. `std.compare` re-exported
+   for doom call sites.
+2. **45 → 43.** Two single-sublayer op forms in `render_ops`:
+   `same_int` = one hat-shaped PWL on the difference (flats ±1 inside
+   0.4 / outside 0.6; the sub fuses into the PWL) replacing
+   abs→compare→not; `le_span_y` = `compare(y2−y1, −0.5)` replacing
+   `not(y1−y2 > 0.5)`. Same half-integer integer-input contracts.
+   After step 1 the witness bound through the span_y payload ladders
+   (L21-23) and these two ops held three chain layers (present check
+   L12-14, span-ok L18-19).
+3. **43 → 43 (with 4).** Payload picks: `span_y_start/end/height` as
+   `pick_by_one_hot(part_oh, ...)` with per-part height table entries
+   linear in the read (fuse into the pick). Junk rows: fractional
+   one-hot → bounded blend, published, never read back (span marker).
+4. **43 → 43.** Two-variant clip clamp: `ClipMemory` now
+   exposes `recovered_ceiling/recovered_floor/present`;
+   `yl`/`yh`/`upper_mid` and the published span bounds/flags compute
+   recovered-clip and open-clip variants in parallel and resolve once
+   on `present`. Identities used (exact on integers, stated in code):
+   `le(max(a,c), min(b,d)) = and of 4 pairwise le`; monotone
+   `SPAN_Y_CLAMP` commutes with max/min; the open clip's
+   ceiling_min/floor_max coincide with the clamp bounds, so the open
+   variant needs no max/min. `lower_visible` now reuses the
+   two-variant `lower_span_ok_value` instead of a duplicate
+   `le_span_y`. The floor did not move: after step 2 the 43 floor is
+   bound by at least one other chain that steps 3–4 don't touch
+   (tracer identifies it below); these cuts stay because the paint
+   publish must not re-bind once that chain is cut.
+5. **43 → (measuring).** Radix column key: the low digit of
+   `render_ops.radix_col_key` is one sawtooth PWL
+   (`x − B·floor((x+0.5)/B)`, ramp pairs bracketing each `k·B − 0.5`
+   jump by ±0.05, numerically validated over every column ± the 0.02
+   leak) running in parallel with the bucket thermometer, replacing
+   the serial `mod_const` (thermometer → scale → subtract). Ramps stay
+   bucket-consistent with the thermometer's `k·B − 0.5` placement.

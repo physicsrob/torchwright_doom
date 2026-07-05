@@ -46,6 +46,7 @@ from torchwright.ops.swiglu.logic_ops import (
     cond_gate,
 )
 from torchwright.ops.swiglu.map_select import in_range
+from torchwright.ops.swiglu.arithmetic_ops import compare as _compare
 from torchwright.ops.swiglu.arithmetic_ops import clamp as _clamp
 from torchwright.ops.swiglu.arithmetic_ops import piecewise_linear as _piecewise_linear
 from torchwright.ops.inout_nodes import create_literal_value
@@ -78,6 +79,7 @@ __all__ = [
     "bool_and",
     "bool_or",
     "bool_not",
+    "compare",
     "sum",
     "select",
     "type_switch",
@@ -215,6 +217,11 @@ def bool_or(*conds: Node) -> Node:
 def bool_not(cond: Node) -> Node:
     """Boolean negation over a ±1 predicate."""
     return _bool_not(cond)
+
+
+def compare(node: Node, thresh: float) -> Node:
+    """±1 sharpened step: +1 where ``node`` is above ``thresh``, else -1."""
+    return _compare(node, thresh=thresh, true_level=1.0, false_level=-1.0)
 
 
 def sum(*nodes: Node) -> Node:  # noqa: A001 - intentional std-surface shadow
