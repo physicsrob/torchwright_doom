@@ -387,6 +387,25 @@ Baseline 49 (depth-flatten @ d61f72f, D1 not landed).
    the serial `mod_const` (thermometer → scale → subtract). Ramps stay
    bucket-consistent with the thermometer's `k·B − 0.5` placement.
 
+### Gate fix — junk-row mask overlap in the has-next dot
+
+`make test` caught one real bug in step 1 (the AR-rollout gate,
+`test_forward_ar_rollout`): on junk rows both next-candidate slots can
+read the same junk part (junk `k_part_1 = k_part_2 = 0`, and junk 0 ≠
+the PART_NONE sentinel so both `exists` flags read true), so the
+SUMMED candidate mask hit 2 and `indicator_to_bool(2) = 3` violated
+`broadcast_select`'s 0/1 mask contract — its retained value-range
+assert fired in exact math. Fix: one pick per candidate (each single
+gated one-hot stays in [0,1] on every row) with the ≥2 threshold
+algebra absorbing multiplicity through the outer sum. Same depth (the
+two picks run in the same layer). Lesson recorded: any mask built as a
+SUM of gated one-hots must be justified against junk rows slot-wise,
+not just condition-wise — junk defeats "the parts are distinct"
+arguments that hold on real rows. Dead-code cleanup in the same pass
+(unused `span_y_start/end` picks — the publish only ever carried the
+height; unused `upper_mid`/tier aliases), lint green, `make test`
+green (5/5 shards).
+
 ### P3 conclusion — the paint cascade is off the floor; 43 binds elsewhere
 
 Two consecutive steps moved the floor by 0 → stop per the plan. The

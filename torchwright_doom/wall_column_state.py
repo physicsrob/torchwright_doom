@@ -369,14 +369,10 @@ class WallColumnState:
         # to 0 and lose the "upper region above screen -> invisible" signal
         # needed by `le_span_y(yl, upper_mid)`.
         upper_mid_unclipped = FLOOR_Y_WIDE(high_y_raw)
-        # Same two-variant clip clamp as yl/yh above.
-        upper_mid = select(
-            clip.present,
-            min_screen(upper_mid_unclipped, rec_floor_max),
-            min_screen(upper_mid_unclipped, screen_height_m1),
-        )
-        upper_y1 = yl
-        upper_y2 = upper_mid
+        # (upper tier: y1 is yl, y2 is min(upper_mid_unclipped, eff_floor-1)
+        # — the published bound and ok flag below build that min in the
+        # same two-variant clip form as yl/yh above, from the unclipped
+        # value directly; no resolved upper_mid node is needed.)
         # --- Phase: lower-tier y bounds, then portal floor and new clip arrays ---
         lower_geom = gt_height(worldlow, worldbottom)
         low_y_raw = sub(center_y, mul_height_scale(worldlow, scale))
@@ -393,7 +389,8 @@ class WallColumnState:
             lower_min,
         )
         lower_y1 = lower_mid
-        lower_y2 = yh
+        # (lower tier: y2 is yh; the flag and published bound below consume
+        # the unclipped values directly.)
         # Two-variant span-ok flag: le(lower_mid, yh) with
         # yh = min(yh_unclipped, eff_floor-1) expands exactly to
         # le(lower_mid, yh_unclipped) AND le(lower_mid, eff_floor-1), so
@@ -836,23 +833,17 @@ class WallSpanRuntimeDraft:
         part_oh = one_hot(selected_part, 3)
         part_is_mid = _part_is_mid(part_oh)
         part_is_upper = _part_is_upper(part_oh)
-        # Selected-part y bounds / height as one-hot picks instead of the
-        # nested two-select ladder — the ladder was the binding chain
-        # between the span-state read and this publish. On a real span row
-        # ``part_oh`` is a clean one-hot (the ordinal is real there and the
+        # Selected-part span height as a one-hot pick instead of the nested
+        # two-select ladders over y_start/y_end — that ladder was the
+        # binding chain between the span-state read and this publish (the
+        # published y-start is ``cursor_y``; the y bounds themselves were
+        # only ever inputs to the height). On a real span row ``part_oh``
+        # is a clean one-hot (the ordinal is real there and the
         # next-ordinal chain only advances to existing parts); on junk rows
         # it is fractional/all-zero and the pick blends toward zero —
         # bounded, published, never read back (span_start_row marker). The
         # per-part height table entries are linear in the read, so they
         # fuse into the pick rather than trailing it.
-        span_y_start_value = pick_by_one_hot(
-            part_oh,
-            concat(wall_span.middle_y1, wall_span.upper_y1, wall_span.lower_y1),
-        )
-        span_y_end_value = pick_by_one_hot(
-            part_oh,
-            concat(wall_span.middle_y2, wall_span.upper_y2, wall_span.lower_y2),
-        )
         span_height_value = pick_by_one_hot(
             part_oh,
             concat(
@@ -864,17 +855,27 @@ class WallSpanRuntimeDraft:
 
         # --- Flat next-span logic over the masks above ---
         # Candidates drawn after this span: k1 and k2 at ordinal 0, k2 at
-        # ordinal 1, none at ordinal 2. ``marked_next`` marks their part
-        # slots; the picked sum over marked slots of the ±1 ok flags is
-        # 2·(#visible) − (#marked), so "at least one next candidate is
-        # visible" is (picked sum + #marked) >= 2 — one compare with
-        # threshold 1, margin 1 on both sides (softmax-recovery noise on
-        # the ok flags is ~1e-3, far inside).
+        # ordinal 1, none at ordinal 2. Per marked candidate, the picked
+        # ±1 ok flag plus the mark count is 2·(visible), so "at least one
+        # next candidate is visible" is (sum over both candidates) >= 2 —
+        # one compare with threshold 1, margin 1 on both sides
+        # (softmax-recovery noise on the ok flags is ~1e-3, far inside).
+        # The two candidates keep SEPARATE picks: on junk rows both slots
+        # can read the same junk part, and a summed mask would hit 2 —
+        # outside broadcast_select's 0/1 mask contract (its retained
+        # value-range assert fired exactly there). Each single gated
+        # one-hot stays in [0, 1] on every row; the >= 2 algebra handles
+        # multiplicity through the outer sum instead.
         oks = concat(wall_span.middle_ok, wall_span.upper_ok, wall_span.lower_ok)
         marked_k1 = gate(is_k0, m_1)
-        marked_next = node_sum(marked_k1, gate(or_(is_k0, is_k1), m_2))
+        marked_k2 = gate(or_(is_k0, is_k1), m_2)
         span_has_next_value = compare(
-            node_sum(pick_by_one_hot(marked_next, oks), reduce_sum(marked_next)),
+            node_sum(
+                pick_by_one_hot(marked_k1, oks),
+                pick_by_one_hot(marked_k2, oks),
+                reduce_sum(marked_k1),
+                reduce_sum(marked_k2),
+            ),
             1.0,
         )
         # The next span is k1 exactly when this is ordinal 0 AND k1 is
