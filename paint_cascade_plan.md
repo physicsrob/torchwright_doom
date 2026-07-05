@@ -445,3 +445,8 @@ Recommendation: a follow-on `plan_cascade` work order mirroring this
 one, targeting `visplane_state.py` with the already-measured recipes
 (sawtooth radix digit, flat priority ladders, two-variant clip-style
 splits), plus landing D1.
+
+**Follow-on written: `visplane_cascade_plan.md`** (depth item D6) —
+consolidation with `depth-flatten`'s D1/D3 is its Phase 0; the P0/P1
+scratch probes of this record are productized as
+`scripts/chain_provenance.py`.

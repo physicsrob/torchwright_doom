@@ -140,6 +140,12 @@ the hoist question made concrete, the ladder-compression designs, and
 stop conditions. The summary below stands; an agent picking up D5
 starts there.
 
+**Outcome (2026-07-05): 49 → 43 measured standalone** on
+`worktree-paint_cascade` (without D1; consolidation with this branch
+is pending — it is Phase 0 of D6's work order). At 43 the witness
+left `proj/paint` entirely; the execution record in
+`paint_cascade_plan.md` has the ledger and the handoff trace.
+
 The shared L5–L27 prefix (~23 layers) is the depth prize. Composition:
 lighting/paint prep (`clamp_0_2`, `thermometer_floor_div`,
 `in_range`), then compares/selects with two attention reads at L11 and
@@ -160,6 +166,20 @@ selects). Research questions, in order:
 
 No committed estimate — this is research; even 5 of the 23 layers
 would be the largest single depth win available.
+
+## D6 — the plane-mark / visplane spine (follow-on to D5)
+
+**Own work order: `visplane_cascade_plan.md`** — after D5, the floor
+binds through the visplane / plane-mark bookkeeping
+(`visplane_state.py` primary, `flat_state.py` secondary — the latter
+is width-track-owned per the consolidation contract; the work order
+carries the coordination note). Phase 0 there consolidates the two
+branch lines (paint 43 + this branch's D1/D3) and runs the one
+combined runtime certification both lines owe; then the measured
+paint recipes (parallel sawtooth radix digit, flat priority ladders,
+presence-block folds, two-variant splits) apply to the new spine.
+`scripts/chain_provenance.py` (the productized paint-session probes)
+pins the witness and the per-read Q/K/V binding depths.
 
 ## Milestones
 
