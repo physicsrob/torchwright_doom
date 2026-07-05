@@ -134,6 +134,12 @@ certifies; D2's caveats de-risk it.
 
 ## D5 — the `proj/paint` cascade (the big one, research)
 
+**Promoted to its own work order: `paint_cascade_plan.md`** — traced
+anatomy (`WallSpanRuntimeDraft.publish`, `wall_column_state.py:652`),
+the hoist question made concrete, the ladder-compression designs, and
+stop conditions. The summary below stands; an agent picking up D5
+starts there.
+
 The shared L5–L27 prefix (~23 layers) is the depth prize. Composition:
 lighting/paint prep (`clamp_0_2`, `thermometer_floor_div`,
 `in_range`), then compares/selects with two attention reads at L11 and
