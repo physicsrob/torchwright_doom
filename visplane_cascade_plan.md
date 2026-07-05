@@ -366,6 +366,37 @@ showing y=0 does NOT prove bug (1) survived; it reproduces via bug
 fixed: make test, then the 10-min harness, then the lowres cert —
 in that order.
 
+### Post-fix verification on torchwright @ 7d71884 (2026-07-05)
+
+Rob's fixes landed (`214ccd6` compute_add self-add; `299792e` weight
+writer coalesces duplicate source columns + concat fold merges
+duplicate leaves — the Linear-over-Concatenate ≡ 0 bug). Re-ran the
+recorded sequence against a clean shared checkout at `7d71884`:
+
+1. **`make test` GREEN** — 275 passed, 2 skipped, incl. both
+   `test_check_conflict_high_instance_compiled` params (the eb4a0f8
+   escalation witnesses).
+2. **Harness GREEN** (`scripts/clip_compiled_probe.py`, Modal 64-CPU,
+   692s): prediction at pos 4400 `wallSpanMeta(y=31,ordinal=0)` ==
+   golden (was y=0); the corrupt span-state publish is clean —
+   `publish@977` exact `[31,83,83]` -> compiled `[31,83,83]` at
+   4400/4401, all marked rows agreeing. Confirms the two-bug
+   narrative: the doom consolidation was innocent.
+3. **Floors re-verified** (pinned worktree `torchwright-7d71884`):
+   HEAD **38** (`fused=1215`), depth-flatten@eae3c9e **46**
+   (`fused=1223`) — same floors as the eb4a0f8 measurements (fused
+   counts shift a few nodes with the fusion changes; topology
+   unchanged). The Phase-A answer stands.
+4. **Lowres `make run COMPARE=1` cert GREEN**: coverage 100.0%
+   (15854/15854, zero only-in-generated / only-in-reference),
+   within-option 100.0%, exact color 91.6% — back at the historical
+   bar (the regression run scored 84.8%). 17,336 tokens in 760s.
+   Token dump: `/artifacts/e1m1_lowres__x1056_y-3616_a64__1783292177`.
+
+Still owed before landing (P4): the production 320x200 `COMPARE=1`
+cert, and the branch-land coordination (`depth-flatten` is checked
+out in another session's worktree).
+
 ### Phase 0 — consolidation (2026-07-05)
 
 Rebased `worktree-paint_cascade` (6 commits) onto
