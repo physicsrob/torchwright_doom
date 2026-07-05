@@ -205,3 +205,134 @@ touching the op.
 
 (append here: the P0 layer map, P1 answers, per-change floor deltas,
 gate results)
+
+### Baseline (2026-07-04, depth-flatten @ d61f72f)
+
+Oracle: `fused=686 critical_path_layers=49`. D1 (pixel-tail flatten)
+has NOT landed yet — only its prep commit — so the baseline is 49, not
+47. Zero-slack set: 150 of 6608 nodes; through L5–L27 the set is 1–2
+nodes per layer (the chain is razor-thin). `stor/R_StoreWallRange`
+family min-slack is 2 — currently only the pix spine binds; the stor
+twin sits 2 layers behind it.
+
+### P0 — the layer→line map (measured, provenance-traced)
+
+Method: scratch probe (`p0_chain_map.py` in the session scratchpad)
+monkeypatches `Node.__init__` to record each node's creation stack,
+inverts `lower()`'s source→clone `node_map` to attribute scheduled
+clones back to user code, and re-derives the witness chain. Two
+provenance caveats: (1) an op wrapped in an `Assert` (e.g. `select`'s
+cond assert) can shadow the wrapped node's true creation site in the
+inverted map — L24's site below was recovered from its inputs; (2) the
+L14 node ("compare", created inside `select` at
+`wall_column_state.py:159`) has an unresolved identity — one extra
+compare layer between `present` and the clip-default selects; resolve
+during the P2 rewrite of that stretch.
+
+The map (file = `wall_column_state.py` unless noted):
+
+- **L0–L3** `[scene]` — BOS/global-position recovery (two attention
+  reads + linears). Not this plan's scope.
+- **L4** `[proj]` — attention: `pick_most_recent` recovering the
+  cursor-x screen coordinate (`seg_projection.py:402`), fused with
+  `column_from_screen_x` (`render_ops.py:125`).
+- **L5** — `SCREEN_X_CLAMP(current_x_scalar)` → `query_col`
+  (`:127`, `ClipMemory.publish`).
+- **L6–L8** — `_radix_col_key(query_col)` (`render_ops.py:735-743`
+  via `:128`): `thermometer_floor_div` bucket (L6), `mod_const`'s
+  multiply-negate + add (L7–L8).
+- **L9–L10** — `one_hot(digit)` = `in_range` (L9) + `bool_to_01`
+  affine (L10, unfused into the attention query projection)
+  (`std.py:191` via `render_ops.py:742`).
+- **L11** — attention: **the clip-memory pick** —
+  `past.pick_most_recent(query, clip_range_key, clip_range_value)`
+  (`:149`), recovering (ceiling, floor, col) for the current column.
+- **L12–L13** — `present = same_int(recovered_col, query_col)`
+  (`:157`): `ABS_SMALL_INT` PWL (L12) + compare (L13).
+- **L14–L15** — the clip default selects
+  (`select(present, recovered, open-clip)`, `:159-160`); L14 is the
+  unresolved extra compare noted above.
+- **L16–L17** `[R_RenderSegLoop]` — clamp the middle-tier span bounds
+  to the recovered clip: `ceiling_min`/`gt_screen` (L16, `:302,:308`),
+  `yl`/`yh` selects (L17, `:310-311`).
+- **L18–L19** — `middle_span_ok_value = le_span_y(yl, yh)`
+  (`render_ops.py:579` via `:476`): sub+compare (L18) + `bool_not`
+  compare (L19). Published as `wall_column_span_state` (`:498-511`).
+- **L20** — attention: the span-state read
+  (`span_values` → `row.pick`, `:534/:538` via `:690`,
+  `WallSpanRuntimeDraft.publish`).
+- **L21** — `mid/upper/lower_visible = and_(has_*, *_ok)`
+  (`:691-693`, `bool_all_true` = 1 compare).
+- **L22–L23** — `part_visible_for`'s nested selects (`:713-716`).
+- **L24** — `and_(exists, visible)` → `k1_visible`/`k2_visible`
+  (`:719`).
+- **L25–L26** — `more_after_k0 = or_(k1_visible, k2_visible)`
+  (`:747`): `bool_any_true` is TWO compare layers (per-input 0/1
+  normalize, then sum threshold — torchwright
+  `ops/swiglu/logic_ops.py:52`), unlike `bool_all_true`'s one.
+- **L27** — the `span_has_next` / `span_next_y` selects
+  (`:748-754`). Published as `span_start_state` (`:792-808`).
+- **L28** — attention `[pix/R_DrawColumn]`: reads `span_start_state`
+  back; the pixel tail begins.
+
+### P0 — where the map contradicts the plan sketch (map wins)
+
+1. **L5–L15 is `ClipMemory.publish`** — the per-column ceiling/floor
+   clip recovery (DOOM's `ceilingclip`/`floorclip`), NOT span-ordinal
+   logic. The radix bucketing is the clip column key
+   (`render_ops.py:741`), not `solid_intervals.py`.
+2. **L11 is the clip pick, not `recent_drawseg_i`.** The drawseg pick
+   and every `seg_facts.*` read are OFF the zero-slack set — they
+   never appear in the 1–2-node critical layers.
+3. **The `same_int` compares at L12–L13 test clip presence**
+   (`recovered_col == query_col`), not the span ordinal. The
+   span-ordinal compares (`:725-726`) are input-token-derived and have
+   slack.
+4. **L16–L19 serialize BEFORE the L20 read** because the read's VALUE
+   matrix contains the current position's just-published
+   `span_state` — publish→read within one forward pass, not a query
+   dependence.
+5. **The five payload ladders (`:735-790`) are NOT on the chain.**
+   Their conds (`part_oh` via `selected_part`) derive from the input
+   token + seg facts (off-chain); their data arrives at L20. They sit
+   at ~read+2 with ~5 layers of slack. The binding tail L21–L27 is the
+   **visibility → next-span** path (`k1_visible`/`k2_visible` →
+   `or_` → `span_has_next`/`span_next_y`).
+
+Consequence: P2's design 1 (payload ladders → `pick_by_one_hot`)
+buys little to nothing on its own — the chain runs through the
+visibility/next-span logic and through ClipMemory. Re-planned targets
+in priority order: (a) L21–L27 flatten (~7 → ~3-4), (b) L12–L19
+ClipMemory-consumer flatten (~8 → ~4-5), (c) L5–L10 clip-query
+shortening, (d) payload ladders only insofar as they'd become the new
+binder.
+
+### P1 — attention-read dependency proof (graph-walked, per node)
+
+Probe: `p1_attn_deps.py` (scratchpad) — for each witness-chain Attn,
+walks each direct input (order `query_in`, `key_in`, `value`) through
+unscheduled concat glue to its deepest *scheduled* dependency.
+
+- **L11 (clip pick, `wall_column_state.py:149`)** — Q binds at L10
+  (the radix column one-hot, L5–L10); K binds at L9 (the gated clip
+  key, `:138`, same `_radix_col_key` shape on the publish side); V
+  binds at L5 (`:143-145` selects). **Query-bound → cannot hoist.**
+  The only lever is shortening `_radix_col_key` itself, which moves Q
+  and K together.
+- **L20 (span-state read, `:534/:538`)** — Q binds at L0 (marker
+  recency: constants + the marker flag); K at L4; **V at L19** (the
+  `le_span_y` ok-flags, `:476-478`). The read is placed by its VALUE —
+  the same-pass `span_state` publish — exactly finding 4 above.
+  "Hoisting" is a no-op; the read moves up 1:1 as the published
+  value's depth drops.
+- **L28 (`span_start_state` read, `:601`)** — same shape: Q at L0, K
+  at L3, **V at L27** (`span_has_next`/`span_next_y`/`span_next_ordinal`
+  selects, `:748-756`). The whole 21-layer pixel tail (L28–L48) rides
+  on the depth of the `span_start_state` publish.
+
+Answer to the plan's P1: both reads are already query-parallel; there
+is no hoist win to collect. The entire paint-cascade depth is in the
+**published-value chains** (L5→L19 feeding the L20 read's V, L21→L27
+feeding the L28 read's V) — every layer cut there is a full compiled
+layer off the floor. `seg_facts.*` reads are off the zero-slack set
+entirely (irrelevant to depth).
