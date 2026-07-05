@@ -239,6 +239,37 @@ positions ≈ 80 GB. Two caveats, both root-caused:
 The local oracle command below now needs `RESERVE=1` to match
 production feasibility.
 
+**M4 progress (2026-07-05):**
+
+- Full `make test` suite on the branch: **green** (all 5 shards,
+  277 tests incl. the flat-pixel oracle and AR rollout).
+- **Lowres 160×100 COMPARE at d=4096: PASS** — coverage 100.0%,
+  within-option 100.0%, exact 91.1%; 17,336 tokens in 703 s
+  (~40 ms/token). Bonus datapoint: on the smaller lowres graph the
+  no-eager warm start passes (75 layers) and **CP-SAT optimizes to 64
+  layers** in 184 s — confirming the CP-SAT path works at d=4096
+  whenever the no-eager hint exists; only the production graph's
+  margin blocks it.
+- **Production 320×200 COMPARE: NOT YET RUN — the one remaining
+  gate.** The first attempt recompiled instead of reusing the M3
+  artifact (the cache key includes the doom git SHA, and two
+  formatting commits had landed since M3), and that recompile
+  deadlocked while reporting a critical path of 49 (vs M3's 52 on
+  the same doom code). Not chased down: torchwright was moving
+  concurrently (the radix_floor_int commit was being landed to
+  torchwright main at the time), so the two compiles likely shipped
+  different torchwright states — Rob's call. The M3 85-layer artifact
+  is still in the Modal CACHE_VOLUME under its original key
+  (b8bf94dc87…). **Next session: with torchwright settled, recompile
+  fresh (`make compile CONFIG=/tmp/e1m1_d4096.yaml`, recreate the
+  /tmp config with `d: 4096` if gone) and run
+  `make run COMPARE=1 CONFIG=/tmp/e1m1_d4096.yaml`. If the eager
+  schedule flakes again on a settled tree, THEN treat the
+  compile-determinism question as real and escalate per D1.**
+  After the production PASS: consolidation per the contract below
+  (flip both committed configs to `d: 4096` + fanout/cert-comment
+  refresh in lockstep, land branches in merge order).
+
 ## The oracle (run after every landing, ~70 s local, CPU)
 
     TORCHWRIGHT_DOOM_RENDER_SCALE=1 TORCHWRIGHT_DOOM_SCREEN_WIDTH=320 \
