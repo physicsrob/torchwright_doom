@@ -320,6 +320,13 @@ def schedule_only_capture(
     output_node = graph.get_output_node()
     input_nodes = [n for n in graph.get_all_nodes() if graph.is_input_node(n)]
     rmap = ResidualStreamMap(d)
+    # RESERVE=n mirrors the production compile's RMSNorm pinned-constant
+    # reservation (1 column at even log2(d), 2 at odd). Without it this probe
+    # overstates feasibility at razor-thin widths: d=4096/fanout=3 schedules
+    # at 4,096 free columns and deadlocks at 4,095 (measured 2026-07-05).
+    n_reserve = int(os.environ.get("RESERVE", "0"))
+    if n_reserve:
+        rmap.reserve(range(d - n_reserve, d))
     # Mirror forward_compile's RoPE-era residual seed (torchwright compile.py):
     # position is a rotation inside attention, not a residual node, so instead of
     # allocating a pos column we reserve the never-freed const-1 column the Δ=0

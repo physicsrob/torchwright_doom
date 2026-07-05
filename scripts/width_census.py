@@ -71,6 +71,11 @@ def main():
     d_hidden = int(os.environ.get("DH", "16384"))
     run_og = os.environ.get("OPT_GRAPH", "1") == "1"
     admit = float(os.environ.get("ADMIT", "0.4"))
+    # RESERVE=n withholds n columns before scheduling, mirroring the
+    # production compile's RMSNorm pinned-constant reservation (1 column at
+    # even log2(d), 2 at odd) — the probe-vs-production feasibility gap at
+    # razor-thin widths.
+    reserve = int(os.environ.get("RESERVE", "0"))
 
     print(
         f"[env] screen={os.environ['TORCHWRIGHT_DOOM_SCREEN_WIDTH']}x"
@@ -98,6 +103,8 @@ def main():
     output_node = graph.get_output_node()
     input_nodes = [n for n in graph.get_all_nodes() if graph.is_input_node(n)]
     rmap = ResidualStreamMap(d)
+    if reserve:
+        rmap.reserve(range(d - reserve, d))
     # Mirror forward_compile's RoPE-era residual seed (see
     # analyze_forward_cost.schedule_only_capture for the rationale).
     reserve_node_id_above(graph.get_all_nodes())

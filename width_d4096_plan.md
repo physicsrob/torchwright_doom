@@ -215,6 +215,30 @@ digit-quad intermediates not covered by W1. Re-census at that point
 (`scripts/lane_census.py` + the peak `LIVE_DUMP`) rather than trusting
 this list.
 
+**M3 RESULT (2026-07-05): d=4096 COMPILES — 85 layers, production
+CP-SAT container, artifact cached.** `make compile
+CONFIG=/tmp/e1m1_d4096.yaml` (fanout=3 graph): 431 s total, 3.64 B
+params used (14.5 GB fp32 weights, vs ~28 GB at d=8192); KV at 57.4k
+positions ≈ 80 GB. Two caveats, both root-caused:
+
+- **The schedule is the EAGER heuristic's 85 layers, not a CP-SAT
+  optimum.** The no-eager warm start deadlocks on the production
+  compile — measured cause: the RMSNorm pinned-constant reservation.
+  At d=4096/fanout=3 the no-eager schedule is feasible at exactly
+  4,096 free columns and infeasible at 4,095 (probe `RESERVE=1`,
+  now supported by `analyze_forward_cost` / `width_census`); fanout=2
+  doesn't restore the margin. With no hint, CP-SAT's floor probe
+  (horizon 53) is infeasible and the 180 s descent finds nothing, so
+  the compile falls back to eager — valid but unoptimized.
+- **Path to a CP-SAT-optimized (~60-layer, ~56 GB KV) compile**: buy
+  the no-eager form a few columns — the emit digit-quad radix
+  conversion is the next lever, and the slack tables must be re-run
+  on the fanout=3 graph (floor 52, schedule 85: pix/emit chains have
+  far more slack than the old 49-floor table's 5–7).
+
+The local oracle command below now needs `RESERVE=1` to match
+production feasibility.
+
 ## The oracle (run after every landing, ~70 s local, CPU)
 
     TORCHWRIGHT_DOOM_RENDER_SCALE=1 TORCHWRIGHT_DOOM_SCREEN_WIDTH=320 \
