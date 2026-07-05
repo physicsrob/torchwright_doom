@@ -39,7 +39,12 @@ import torch
 
 from torchwright.graph import Concatenate, Linear, Node
 from torchwright.ops.linear import bool_to_01, sum_nodes
-from torchwright.ops.swiglu.logic_ops import bool_all_true, bool_any_true, cond_gate
+from torchwright.ops.swiglu.logic_ops import (
+    bool_all_true,
+    bool_any_true,
+    bool_not as _bool_not,
+    cond_gate,
+)
 from torchwright.ops.swiglu.map_select import in_range
 from torchwright.ops.swiglu.arithmetic_ops import clamp as _clamp
 from torchwright.ops.swiglu.arithmetic_ops import piecewise_linear as _piecewise_linear
@@ -71,6 +76,7 @@ __all__ = [
     "constant",
     "bool_and",
     "bool_or",
+    "bool_not",
     "sum",
     "select",
     "type_switch",
@@ -202,6 +208,11 @@ def bool_and(*conds: Node) -> Node:
 def bool_or(*conds: Node) -> Node:
     """Boolean disjunction over ±1 predicates."""
     return bool_any_true(list(conds))
+
+
+def bool_not(cond: Node) -> Node:
+    """Boolean negation over a ±1 predicate."""
+    return _bool_not(cond)
 
 
 def sum(*nodes: Node) -> Node:  # noqa: A001 - intentional std-surface shadow
