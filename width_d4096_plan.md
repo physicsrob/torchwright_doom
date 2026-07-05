@@ -1,0 +1,196 @@
+# Width plan — make d=4096 schedulable (the KV play)
+
+Execution plan for one of two parallel tracks (the other is
+`depth_flatten_plan.md`). Written 2026-07-05 from the measurements in
+`swiglu_opportunities_findings.md` — that doc is the evidence base;
+this one is the work order. Self-contained for a fresh session.
+
+**Branch**: doom `width-d4096`, plus a torchwright branch for the new
+ops (this track is the ONLY writer to torchwright — the depth track
+touches doom only). See "Consolidation contract" at the bottom.
+
+## Goal and why
+
+The production 320×200 certification is blocked on KV-cache size
+(~221 GB total demand vs a B200's 178 GiB). The KV cache is
+`layers × d_model × positions` — at 57.4k positions and d=8192,
+~3.8 GB per layer, ~184 GB at 49 layers. **d_model must be a power of
+two** (RMSNorm cancellation — Rob's constraint, stated not
+re-verified), so the one narrower legal width is **d=4096** (32
+uniform heads at d_head=128). At d=4096, KV is 92–113 GB at 49–60
+layers — under the ceiling with margin, and it also shrinks the
+attention weight blocks.
+
+Today the graph does NOT schedule at d=4096: the heuristic scheduler
+deadlocks (measured). The bracket (production graph and env, heuristic
+schedule-only, fusion pre-pass, d_hidden=16,384): d=8192 → 65 layers,
+7168 → 64, 6144 → 66, 5120 → 67, 4608 → 80, 4096 → deadlock. Depth is
+flat down to ~5120, so the residual-width demand sits somewhere in
+(4096, 4608]. This plan removes enough resident width to move the
+knee below 4096.
+
+## What occupies the width (measured, production env)
+
+At the heuristic's peak (residual fully used at 8192):
+
+- **`ray_scaled` — 2 × 1,024 columns.** Stage 1 of the graph's atan2
+  (`render_ops.py::signed_world_angle` / `_ray_count`): the angle of a
+  vector is computed as a count of threshold crossings against 1,024
+  candidate angles per half-quadrant, and the 1,024-wide indicator
+  vector of each half is materialized in the residual so stage 2 can
+  count it. Both halves are live simultaneously: **2,048 columns —
+  half of a d=4096 stream on its own.**
+- **`floor_int` stage-1 step chunks — ~2,600 columns at the peak.** A
+  floor over N boundaries materializes a step vector (up to 512
+  columns per chunk) between its two stages; the emit digit-quad and
+  paint floors were the residents at the measured peak.
+- **~600 one-wide glue nodes** (compares, gates, emit scalars) plus
+  `in_range` mask vectors (1,024-wide instances exist:
+  `proj/pmrk`, `pmrk/R_CheckPlane`) elsewhere in the schedule.
+
+## W0 — resident-width floor census (go/no-go, do first)
+
+Before building anything: measure the width that can never be
+reclaimed — the embedding row's fixed columns, the never-freed
+const-one column, input nodes, and any node the schedule must hold
+live across the whole pass. If (irreducible residents + the widest
+unavoidable transient working set) already crowds 4,096, this plan
+stops here and reports that instead.
+
+Method: instrument `ResidualStreamMap` the way
+`scripts/analyze_forward_cost.py::schedule_only_capture` does, but
+report allocations that are never freed (no cancel layer) separately
+from transients; alternatively read the allocation of input nodes +
+embedding width directly at warm-start setup. Output: one number
+(permanent columns) + the top permanent residents by name.
+
+## W1 — radix-decomposed floors (shared with the lane story)
+
+`floor_int` over N boundaries costs 3N lanes, 2 sublayers, and an
+N-up-to-512-per-chunk-wide residual intermediate. The radix form —
+`hi = floor(x/D)`, snap `hi` to an exact integer, `lo = floor(x −
+D·hi)` with D ≈ √N — costs ~9√N lanes, ~6 sublayers, and **~√N-wide
+intermediates**. This is the emit digit-quad generalized
+(`emit.py::_digit_quad_payload` is the existing instance), and it
+must inherit the digit-quad's boundary-sliver fix: an input just under
+a multiple of D lands in the hi floor's ramp and the fractional hi is
+amplified ×D in the low part; the integer snap caps it at ±1 step
+(cutover find #3; regression template
+`test_two_digit_boundary_sliver_snaps_to_one_step`).
+
+Work items:
+
+1. Torchwright: a `radix_floor_int` op (or a `levels=2` mode on
+   `floor_int`), with the ramp/flat-zone contract re-derived for the
+   composed form (the outer floor's legal-input contract must hold for
+   `x − D·hi`), the sharpness/spacing audit at each site's input
+   scale, and a **measured noise entry** in `docs/op_noise_data.json`
+   before doom leans on it (repo rule).
+2. Doom: convert the floor sites in slack order. Site list, lanes, and
+   per-site slack are tabulated in the findings doc (R5 section);
+   phase 1 = every site with slack ≥ 5 (`pix/R_DrawSpan`'s four
+   N=2046 native-coordinate floors first — 24.5k lanes, slack 9).
+   NOTE: the slack table was computed at the 49-layer floor at d=8192;
+   re-run `scripts/critical_chain.py` after the depth track lands
+   anything, and expect the schedule to reshuffle at d=4096 — the
+   oracle below is the real arbiter.
+
+Payoff for THIS plan: the step-chunk residents shrink ~10×. (The
+~41k-lane saving is the same work's other dividend.)
+
+## W2 — two-level ray count (mandatory: 2,048 → ~64 columns)
+
+Replace each 1,024-threshold thermometer with a two-level count:
+
+1. **Coarse**: 32 thresholds at every 32nd candidate angle — same
+   exact-count machinery as today (`_ray_count`), 32-wide
+   intermediate, exact by the same argument (each term exactly 0/1 in
+   fp32).
+2. **Segment select**: the coarse count picks which 32-angle segment
+   the true angle falls in; the 32 fine slopes for that segment come
+   from a compile-time 32×32 constant table (a `broadcast_select` /
+   `onehot_lookup` row pick — constants, cheap).
+3. **Fine**: 32 ray tests with the selected slopes. The test becomes
+   `|dy| − slope·|dx|` with a **runtime** slope — a gated product,
+   which the swiglu multiply supports (this design was impossible on
+   relu grids).
+
+Derivation this plan owes before landing (the real research risk of
+the track): today's exactness argument runs on *constant* slopes — the
+smallest nonzero fixture ray (~1.5e-4) clears the hinge's unsaturated
+band ~36×, so every indicator is exactly 0/1
+(`render_ops.py:232-237`, pinned by `tests/scene/test_ray_count.py`).
+With runtime slopes the ray value carries multiply noise (~2 ulp
+relative), so the clearance argument must be re-derived: bound
+|product noise| against the band at the fixture-extreme rays, and
+extend `test_ray_count.py` to the two-level form (including
+segment-boundary angles, the analogue of the digit-quad's
+boundary-sliver hazard: a true angle exactly at a coarse threshold).
+
+Cost estimate: ~3×32 lanes coarse + ~32 gated lanes select + ~2×32
+fine + counts ≈ ~250 lanes (vs 4,096 today) and ~64-wide residents
+(vs 2,048); +3–4 sublayers on the angle chain — check
+`scripts/critical_chain.py` slack for `proj` first (the angle chain
+feeds the BSP walk; it was NOT on the 49-layer zero-slack spine, but
+verify at the current floor).
+
+## W3 — if the oracle still says no
+
+Next widest residents, in order: the 1,024-wide `in_range` mask
+instances (`proj/pmrk`, `pmrk/R_CheckPlane` — can the consumer
+consume 2×32 radix-split masks instead of one 1,024-wide mask?), the
+`bos_weight_to_position` 1,024-lane PWL's resident output, emit
+digit-quad intermediates not covered by W1. Re-census at that point
+(`scripts/lane_census.py` + the peak `LIVE_DUMP`) rather than trusting
+this list.
+
+## The oracle (run after every landing, ~70 s local, CPU)
+
+    TORCHWRIGHT_DOOM_RENDER_SCALE=1 TORCHWRIGHT_DOOM_SCREEN_WIDTH=320 \
+    TORCHWRIGHT_DOOM_SCREEN_HEIGHT=200 TORCHWRIGHT_DOOM_DETAIL=low \
+    TORCHWRIGHT_DOOM_HUD=1 \
+    SCHED_ONLY=1 OPT_GRAPH=1 D=4096 D_HEAD=128 DH=16384 \
+    uv run python -m scripts.analyze_forward_cost
+
+Deadlock (`RuntimeError: heuristic deadlocked`) = not yet; a layer
+count = feasible, and the printed depth prices the KV. **The env vars
+are load-bearing** — without them you measure the 60×50 hud-off graph
+(the screen-env trap; findings doc, Method).
+
+## Milestones and gates
+
+- M1: W0 census says d=4096 is not structurally impossible.
+- M2: first oracle PASS (any layer count) after W1/W2.
+- M3: production CP-SAT compile at d=4096 via a **/tmp config
+  variant** (copy `configs/e1m1.yaml`, set `d: 4096`; two-committed-
+  configs rule — no third YAML). Record layers + solve time.
+- M4: full gate stack — `make test`, the flat-pixel oracle + AR
+  rollout, then `make run COMPARE=1` at lowres and production. The
+  production 320×200 cert on the B200 is the finish line.
+- Config lockstep: only at consolidation do `configs/e1m1.yaml` /
+  `e1m1_lowres.yaml` change (`d`, and the certified-numbers comments),
+  in the same commit.
+
+Every torchwright op lands with its noise entry; every doom conversion
+lands gate-green on its branch. No host-side computation anywhere
+(dumb host principle).
+
+## Consolidation contract (mirrored in `depth_flatten_plan.md`)
+
+- **File ownership** — width track: torchwright `ops/swiglu/*` (new
+  ops only), doom `render_ops.py` (`_ray_count` /
+  `signed_world_angle` / floor shims), `emit.py` (digit-quad floors),
+  `uv_compute.py`, `flat_state.py`, floor call sites. Depth track:
+  `pixel_dispatcher.py`, `lighting.py`, `assets.py`,
+  `statusbar_renderer.py`, `wall_column_renderer.py`,
+  `doom_lighting.py`. Shared, additive-only: `std.py`, small
+  `render_ops.py` helpers — keep those diffs minimal and coordinate.
+- **Each branch stays independently green** (`make test` + its own
+  oracle numbers recorded per landing) so either can land first.
+- **Merge order**: whichever certifies first lands to `main`; the
+  other rebases and re-runs its oracle (depth wins change the floor
+  and the slack tables; width wins change nothing the depth oracle
+  measures). The umbrella pointer bumps only on `main` landings.
+- **The joint finish**: production CP-SAT at d=4096 with both tracks
+  merged; KV multiplies (e.g. 45 layers × 4096 ≈ 85 GB at 57.4k
+  positions). Config + doc refresh in lockstep.
