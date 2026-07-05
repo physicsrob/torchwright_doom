@@ -88,7 +88,7 @@ import torch
 from torchwright.graph import Concatenate, Linear, Node
 from torchwright.graph import annotated
 from torchwright.graph.spherical_codes import index_to_vector
-from torchwright.ops.relu.arithmetic_ops import floor_int
+from torchwright.ops.swiglu.arithmetic_ops import floor_int
 from torchwright.ops.inout_nodes import create_literal_value
 
 from .embedding import (
@@ -108,7 +108,10 @@ from .tokens import FloatSlot, IntSlot, TokenType
 # (`BASE/sharpness` wide in q-space) must be narrower than that:
 # `256/sharpness < 0.0156` ⇒ `sharpness > 16400`. 32768 gives a 0.0078-wide ramp
 # (~2× clearance on the worst carrier value); raising it shrinks the residual
-# boundary sliver further but steepens the ramp for compiled fp32.
+# boundary sliver further but steepens the ramp for compiled fp32. A q that
+# lands INSIDE the ramp anyway (a float64 value straddling a byte boundary —
+# a per-carrier coin flip) is handled by the integer snap on the high byte in
+# `_digit_quad_payload`, which caps the damage at ±1 step.
 _DQ_HI_SHARPNESS: int = 32768
 
 __all__ = [
@@ -681,11 +684,25 @@ def _digit_quad_payload(
         # a range-encoded integer carrier lands just BELOW a boundary (q = m·BASE
         # − k for small k) — squarely in the floor's flat zone — so the high byte
         # stays a clean integer and the shared low byte recovery 2·(q − BASE·hi_q)
-        # below is exact. Only a value within BASE/sharpness of a boundary itself
-        # is soft, and the low byte then truncates (no carry into the high byte):
-        # a ±1-step round-DOWN. _DQ_HI_SHARPNESS sets the ramp width.
+        # below is exact. _DQ_HI_SHARPNESS sets the ramp width.
         q_over_base = _affine_1d(q_node, 1.0 / float(BASE), 0.0, name=f"{name}_hi_div")
-        hi_q = floor_int(q_over_base, 0, max_q // BASE, sharpness=_DQ_HI_SHARPNESS)
+        hi_raw = floor_int(q_over_base, 0, max_q // BASE, sharpness=_DQ_HI_SHARPNESS)
+        # Snap the high byte to an integer before the low byte reads it. A q
+        # inside the boundary ramp itself produces a FRACTIONAL hi_raw (e.g.
+        # 111.75 at q = 112·BASE − 0.002), and the low-byte recovery
+        # 2·(q − BASE·hi) amplifies that fraction by BASE — a ~192-row emitted
+        # error, not the ±1-step truncation the split promises (bitten at the
+        # swiglu cutover: the flat-pixel oracle's segDcTmidMid carrier landed
+        # 0.002 q below a byte boundary; the value straddles the boundary in
+        # float64, so which side the graph's sub-noise lands on is a coin
+        # flip). Rounding hi to the nearest integer makes EITHER neighboring
+        # byte pair reconstruct q correctly — lo compensates, the error stays
+        # ≤ 1 step whichever side wins. The snap's own half-integer ramp is
+        # hit only when the hi ramp ALREADY produced a fraction within its
+        # narrow band of 0.5 — two independent slivers, so the residual
+        # hazard is their product (~1e-9 per carrier) instead of ~3e-5.
+        hi_half = _affine_1d(hi_raw, 1.0, 0.5, name=f"{name}_hi_snap_half")
+        hi_q = floor_int(hi_half, 0, max_q // BASE + 1)
     hi_c_2 = _affine_1d(hi_q, 2.0, -2.0 * CENTER, name=f"{name}_hi_c2")
     # lo_q = q − BASE·hi_q realised as a single Linear over the
     # concat of (q, hi_q). The ``subtract(q, multiply_const(hi_q,

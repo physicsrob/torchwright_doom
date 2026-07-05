@@ -288,3 +288,46 @@ def test_narrow_slot_high_byte_is_constant_no_floor() -> None:
         # additive constant shared across the type's rows, so it cannot bias the
         # pick.
         assert _project_and_argmax(value) == _row_for(NODE, {"j": k})
+
+
+def test_two_digit_boundary_sliver_snaps_to_one_step() -> None:
+    """A continuous q landing INSIDE the hi-byte floor's ramp — a float64
+    carrier value straddling a byte boundary, which is a per-carrier coin
+    flip (the swiglu-cutover segDcTmidMid case, flat oracle pos 7780) —
+    must still emit within ~1 step. The integer snap on the high byte keeps
+    the byte split consistent (lo compensates whichever side the snap
+    lands), so a fractional hi cannot leak ×BASE into the low byte (the
+    unsnapped failure mode: a 192-row emitted error)."""
+    from torchwright_doom.emit import _DQ_HI_SHARPNESS
+    from torchwright_doom.inference.diagnostic import carrier_delta
+    from torchwright_doom.inference.tokens_bridge import row_index
+
+    slot = _value_slot()
+    span = slot.hi - slot.lo
+    step_v = span / (slot.levels - 1)
+    ramp_q = float(BASE) / float(_DQ_HI_SHARPNESS)  # hi-ramp width in q units
+
+    for m in (32, 112, 200):
+        for frac in (0.1, 0.5, 0.9):
+            q = m * BASE - frac * ramp_q
+            v = slot.lo + q * step_v
+            with fresh_graph_session():
+                v_in = create_input(
+                    "v",
+                    1,
+                    value_range=(float(slot.lo) - 1.0, float(slot.hi) + 1.0),
+                )
+                out = emit_float_slot_token(VALUE, v=v_in)
+                cache = reference_eval(
+                    out,
+                    input_values={"v": torch.tensor([[float(v)]])},
+                    n_pos=1,
+                )
+                value = cache[out]
+            argmax = _project_and_argmax(value)
+            expected = row_index(VALUE, {"v": v})
+            delta = carrier_delta("value", argmax, expected)
+            assert delta is not None and delta <= 1.5 * step_v, (
+                f"boundary sliver q={q} (= {m}·BASE − {frac}·ramp): "
+                f"argmax row {argmax} vs reference {expected}, delta {delta}"
+            )
