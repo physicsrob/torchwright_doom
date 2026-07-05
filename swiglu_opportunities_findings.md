@@ -11,7 +11,7 @@ see "Tooling"). Prototypes were built, measured, and reverted.
 
 | Item | Verdict | Measured size |
 |---|---|---|
-| Narrow-d compile (post-review find) | **MEASURE FIRST** | graph schedules at d=5120 at 67 heuristic layers; KV 184 → ≤157 GB, possibly ~115 GB with CP-SAT — may unblock production cert with zero graph changes |
+| d=4096 via width reduction (post-review find) | **GO, gated** | d_model must be a power of two (RMSNorm cancellation), so the target is 4096 — today it deadlocks; ray two-level + R5 unblock it; payoff 92–113 GB KV vs 184 |
 | R5 radix floors | **GO** (phased) | 73,452 lanes (50.1% of all hidden lanes); phase 1 saves ~41k at zero depth cost; also shrinks the residual peak (min-d lever) |
 | Colormap → `table_lookup_2d` (new find) | **GO** | 21,168 → ~3,600 lanes (~12% of total width), depth-neutral |
 | R2 flatten select ladders | **GO** (highest strategic value) | measured **49 → 47 layers** from one mechanical edit; ~7.6 GB of full-frame KV |
@@ -32,10 +32,11 @@ The two structural facts that reframe the whole plan:
    layer saved must come from shortening a dependency chain.
    **Correction (Rob, post-review): depth is not the only KV lever.**
    The KV cache is `layers × d_model × positions` — narrowing the
-   residual stream cuts it exactly like removing layers does, and the
-   measured d-bracket below shows the graph schedules essentially as
-   deep at d=5120 as at d=8192. See "Width is a KV lever" below; the
-   first-listed follow-up experiment now lives there.
+   residual stream cuts it exactly like removing layers does. The
+   measured d-bracket below shows the width slack survives down to
+   ~d=5120; with d_model constrained to powers of two (RMSNorm
+   cancellation), the actionable target is d=4096, gated on the width
+   reducers. See "Width is a KV lever" below.
 2. **The critical spine is narrow and known.** Only 150 of 6,608
    schedulable nodes have zero slack. The spine: BOS/global-position
    recovery (layers 0–4) → the wall lighting + branch cascade under the
@@ -411,12 +412,22 @@ schedule deadlocks at 4096. Two readings:
   The near-flat heuristic curve to 5120 is strong evidence the width
   slack survives, not proof.
 
-**The decisive experiment — zero graph changes**: run the production
-CP-SAT compile at d=5120 and d=6144 (a /tmp config variant; the compile
-pipeline and cache key already parameterize d). If the solve lands
-anywhere ≤ 60 layers at d=5120, the production 320×200 certification
-unblocks with no renderer changes at all. This supersedes every other
-item in this doc for KV purposes and should run first.
+**Constraint (Rob, stated not re-verified): d_model must be a power of
+two — RMSNorm cancellation.** That removes every intermediate bracket
+point from play: of the measured widths only 8192 and 4096 are legal,
+and 4096 is exactly where the heuristic deadlocks. So there is **no
+zero-graph-change narrow-d shortcut**; the intermediate rows in the
+table above are evidence about where width slack lives, not landable
+configurations. The KV-via-width path goes through **making d=4096
+feasible**, and the peak arithmetic says what that takes: the two
+1,024-wide `ray_scaled` halves alone are 2,048 columns — half of a
+d=4096 stream — so the two-level ray count below is mandatory, not
+optional, alongside the R5 step-chunk shrinkage (~2.6k columns) and a
+look at the 1,024-wide `in_range` masks. The payoff: at d=4096
+(32 uniform heads), 49–60 layers is 92–113 GB of KV — under the
+ceiling with room for weights. Sequence for a follow-up: land the
+width reducers → re-run this bracket's d=4096 point (heuristic
+feasibility is the cheap gate) → production CP-SAT at d=4096.
 
 **What pins the minimum d** (the peak live-set at the production-env
 heuristic peak): the two 1,024-wide `ray_scaled` intermediates (the
@@ -464,18 +475,20 @@ changes and could not run at all:
 
 ## What a landing session should do first
 
-1. **Run the production CP-SAT compile at d=5120 and d=6144** (a /tmp
-   config variant, zero graph changes — see "Width is a KV lever").
-   Anything ≤ 60 layers at d=5120 unblocks the production 320×200
-   certification outright.
-2. Land the R2 pixel-tail flatten (mechanical; the prototype shape is
+1. Land the R2 pixel-tail flatten (mechanical; the prototype shape is
    in the R2 section) behind the full gate stack. 49 → 47 measured.
-3. Land the colormap → `table_lookup_2d` rewrite (verify the two
+2. Land the colormap → `table_lookup_2d` rewrite (verify the two
    integrality caveats first). ~17.6k lanes.
-4. Build the radix-floor op in torchwright (derivation + noise entry),
-   then convert phase-1 floor sites. ~41k lanes, and it lowers the
-   minimum feasible d (the step-chunk intermediates at the residual
-   peak).
+3. Build the radix-floor op in torchwright (derivation + noise entry),
+   then convert phase-1 floor sites. ~41k lanes, and it shrinks the
+   residual peak (a d=4096 enabler).
+4. Build the two-level ray count (the `ray_scaled` halves are 2,048
+   residual columns — half of a d=4096 stream; see "Width is a KV
+   lever"). With 3 and the `in_range` masks addressed, re-run the
+   d=4096 heuristic-feasibility check, then the production CP-SAT at
+   d=4096 — the KV payoff (92–113 GB vs 184) is the certification
+   unblock. d_model is power-of-two-only (RMSNorm cancellation), so
+   there is no cheaper intermediate-width shortcut.
 5. Swap the ~8–10 constant-table picks to `onehot_lookup` (mechanical;
    measure the floor before/after — the bank-metadata reads sit
    upstream of both critical spines).
