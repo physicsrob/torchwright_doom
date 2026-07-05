@@ -50,7 +50,8 @@ from torchwright.ops.swiglu.logic_ops import bool_all_true, bool_any_true, bool_
 from torchwright.ops.swiglu.swiglu_ffn import swiglu_ffn
 
 from .constants import COLUMN_COUNT, PIXEL_WIDTH, SCREEN_WIDTH, VIEW_HEIGHT
-from .std import concat, constant, linear, one_hot, pwl_def, select
+from .std import concat, constant, linear, one_hot, pick_by_one_hot, pwl_def, select
+from .std import sum as vec_sum
 from .vocab import _TAN_FOV_HALF, ANGLE_BAM, N_NODES_MAX
 
 
@@ -218,8 +219,85 @@ _HIGH_COTS = [1.0 / math.tan(t * 2.0 * math.pi / ANGLE_BAM) for t in _HIGH_THRES
 # Applied to ``concat(abs_dy, abs_dx)`` (row 0 weights abs_dy, row 1 abs_dx):
 #   low  col k = abs_dy - slope_k·abs_dx
 #   high col k = cot_k·abs_dy - abs_dx
+# These full 1,024-wide forms are the REFERENCE shape: the production graph
+# builds the two-level count below (same thresholds, ~64-wide residents
+# instead of 1,024); ``tests/scene/test_ray_count.py`` pins the two forms
+# equal on angle sweeps.
 _LOW_RAY_MATRIX = [[1.0] * len(_LOW_SLOPES), [-slope for slope in _LOW_SLOPES]]
 _HIGH_RAY_MATRIX = [list(_HIGH_COTS), [-1.0] * len(_HIGH_COTS)]
+
+# --- Two-level ray count constants -----------------------------------------
+#
+# Each 1,024-threshold half splits into 32 segments of 32. The coarse level
+# counts crossings of every 32nd threshold; the fine level tests only the
+# active segment's 32 thresholds, with the segment's slope DELTAS applied at
+# runtime (a gated ± product — possible on the swiglu machine, impossible on
+# relu grids). All thresholds — coarse (32j − 0.5) and fine (32s + i + 0.5) —
+# are members of today's half-integer threshold set, so the committed-fixture
+# ray-clearance bound (min nonzero |ray| ~1.5e-4, the _RAY_SHARPNESS note)
+# applies to every ray this scheme evaluates.
+#
+# Fine rays are computed as ``v_base + Δ·op`` where ``v_base`` is the active
+# segment's COARSE ray value (constant-slope Linear, picked through the
+# segment one-hot) and ``Δ`` is a constant-table slope delta (|Δ| <= ~0.05).
+# Algebraically ``v_base + Δ_i·op`` IS the flat form's ray ``i`` — the split
+# changes only fp32 rounding: the runtime product magnitude is <= ~160
+# (rounding ~1e-5) instead of a full-magnitude slope product, keeping total
+# fine-ray noise ~2.5e-5 — 6x under the 1.5e-4 fixture clearance and well
+# clear of the 4.2e-6 saturation band.
+#
+# Slot layout (uniform for both halves): slot j of the one-hot means "the
+# coarse count is j". vals[j] is slot j's base ray; the count runs over
+# vals[1:]. The low half's slot 0 base sits at BAM −0.5 (always crossed by
+# construction, so it is excluded from the count); the high half's slot 0
+# means "the angle is below this half entirely" — its base ray (1023.5,
+# duplicated from slot 1) is then negative and drives every fine ray
+# negative, so the fine count contributes 0, and its base constant is 0.
+_SEG = 32
+_N_SEGS = _N8 // _SEG  # 32 segments per half
+
+
+def _bam_tan(t: float) -> float:
+    return math.tan(t * 2.0 * math.pi / ANGLE_BAM)
+
+
+def _bam_cot(t: float) -> float:
+    return 1.0 / _bam_tan(t)
+
+
+# Low half [0, 1024): slot j base threshold 32j − 0.5; fine i at 32j + i + 0.5.
+_LOW_BASE_T = [_SEG * j - 0.5 for j in range(_N_SEGS)]
+_LOW_VALS_MATRIX = [
+    [1.0] * _N_SEGS,
+    [-_bam_tan(t) for t in _LOW_BASE_T],
+]
+_LOW_COUNT_MATRIX = [row[1:] for row in _LOW_VALS_MATRIX]
+# fine ray = v_base + Δ·|dx| with Δ = −(tan(fine) − tan(base)) <= 0.
+_LOW_DELTA_TABLE = [
+    [-(_bam_tan(_SEG * j + i + 0.5) - _bam_tan(_LOW_BASE_T[j])) for i in range(_SEG)]
+    for j in range(_N_SEGS)
+]
+_LOW_BASE_CONSTS = [[float(_SEG * j)] for j in range(_N_SEGS)]
+
+# High half [1024, 2048): slot j >= 1 base threshold 1024 + 32(j−1) − 0.5;
+# slot 0 duplicates slot 1 (below-half case). Fine i at 1024 + 32(j−1) + i + 0.5.
+_HIGH_BASE_T = [1023.5] + [1024.0 + _SEG * (j - 1) - 0.5 for j in range(1, _N_SEGS + 1)]
+_HIGH_VALS_MATRIX = [
+    [_bam_cot(t) for t in _HIGH_BASE_T],
+    [-1.0] * (_N_SEGS + 1),
+]
+_HIGH_COUNT_MATRIX = [row[1:] for row in _HIGH_VALS_MATRIX]
+
+
+def _high_delta_row(j: int) -> list[float]:
+    base = _HIGH_BASE_T[max(j, 1)]
+    seg0 = 1024.0 + _SEG * (max(j, 1) - 1)
+    return [_bam_cot(seg0 + i + 0.5) - _bam_cot(base) for i in range(_SEG)]
+
+
+# fine ray = v_base + Δ·|dy| with Δ = cot(fine) − cot(base) <= 0.
+_HIGH_DELTA_TABLE = [_high_delta_row(j) for j in range(_N_SEGS + 1)]
+_HIGH_BASE_CONSTS = [[0.0]] + [[float(_SEG * (j - 1))] for j in range(1, _N_SEGS + 1)]
 
 # Q2/Q3 reflections of the first-quadrant base angle, as affine maps over
 # ``concat(base, 1)``.
@@ -332,15 +410,110 @@ def MUL_SCREEN(a: Node, b: Node) -> Node:
     return multiply(a, b)
 
 
+def _vector_scale_product(vec: Node, op: Node, *, name: str) -> Node:
+    """Elementwise ``vec_i · op`` for a live vector and a live scalar — the
+    swiglu exact ± lane pair (``Swish(a)·b + Swish(−a)·(−b) = a·b``), one
+    pair per component. Exact in real math; fp32 leaves ~1–2 ulp of the
+    product magnitude per lane (the two-level ray budget rides on the
+    DELTA products staying <= ~160 in magnitude, see the constants note)."""
+    n = len(vec)
+    x = concat(vec, op)
+    gate = torch.zeros((2 * n, n + 1), dtype=torch.float32)
+    up = torch.zeros((2 * n, n + 1), dtype=torch.float32)
+    out = torch.zeros((2 * n, n), dtype=torch.float32)
+    for i in range(n):
+        gate[2 * i, i] = 1.0
+        up[2 * i, n] = 1.0
+        out[2 * i, i] = 1.0
+        gate[2 * i + 1, i] = -1.0
+        up[2 * i + 1, n] = -1.0
+        out[2 * i + 1, i] = 1.0
+    return swiglu_ffn(
+        x,
+        gate,
+        torch.zeros(2 * n, dtype=torch.float32),
+        out,
+        torch.zeros(n, dtype=torch.float32),
+        up_proj=up,
+        up_bias=torch.zeros(2 * n, dtype=torch.float32),
+        name=name,
+    )
+
+
+def _two_level_half_count(
+    abs_pair: Node,
+    vals_matrix: list[list[float]],
+    count_matrix: list[list[float]],
+    delta_table: list[list[float]],
+    base_consts: list[list[float]],
+    mult_operand: Node,
+    *,
+    name: str,
+) -> Node:
+    """One half's threshold-crossing count via the two-level scheme.
+
+    See the two-level constants note above for the derivation. Chain:
+    coarse ray values (constant Linear) → coarse count (``_ray_count`` over
+    vals[1:]) → segment one-hot → base ray pick + Δ-row / base-const Linears
+    → Δ·operand products → fine rays → fine count → base_const + fine.
+    Residual residents stay <= ~2·32 columns; the flat form held a
+    1,024-wide stage-1 vector live instead.
+    """
+    n_slots = len(vals_matrix[0])
+    vals = linear(abs_pair, vals_matrix)
+    coarse = _ray_count(linear(abs_pair, count_matrix))
+    seg_oh = one_hot(coarse, n_slots)
+    v_base = pick_by_one_hot(seg_oh, vals)
+    # One-hot × constant table = a plain Linear (the onehot_lookup identity):
+    # the picked Δ row and base constant are exact table entries.
+    drow = Linear(
+        seg_oh,
+        torch.tensor(delta_table, dtype=torch.float32),
+        name=f"{name}_delta_row",
+    )
+    base_c = Linear(
+        seg_oh,
+        torch.tensor(base_consts, dtype=torch.float32),
+        name=f"{name}_base_const",
+    )
+    prods = _vector_scale_product(drow, mult_operand, name=f"{name}_fine_scale")
+    # fine_i = v_base + Δ_i·op — algebraically the flat form's ray i.
+    fine_matrix = torch.zeros((1 + _SEG, _SEG), dtype=torch.float32)
+    fine_matrix[0, :] = 1.0
+    for i in range(_SEG):
+        fine_matrix[1 + i, i] = 1.0
+    fine_rays = Linear(
+        concat(v_base, prods), fine_matrix, name=f"{name}_fine_rays"
+    )
+    fine = _ray_count(fine_rays)
+    return vec_sum(base_c, fine)
+
+
 # DOOM: R_PointToAngle (r_main.c) — BAM angle of (dx, dy) via atan2 octant count.
 def signed_world_angle(dx: Node, dy: Node) -> Node:
     """Signed BAM angle in [-ANGLE_BAM/2, ANGLE_BAM/2) of the vector (dx, dy)
-    (unified on the 3072 clamp)."""
+    (unified on the 3072 clamp; two-level ray count per half)."""
     abs_dx = _abs_coord(dx)
     abs_dy = _abs_coord(dy)
     abs_pair = concat(abs_dy, abs_dx)
-    low_count = _ray_count(linear(abs_pair, _LOW_RAY_MATRIX))
-    high_count = _ray_count(linear(abs_pair, _HIGH_RAY_MATRIX))
+    low_count = _two_level_half_count(
+        abs_pair,
+        _LOW_VALS_MATRIX,
+        _LOW_COUNT_MATRIX,
+        _LOW_DELTA_TABLE,
+        _LOW_BASE_CONSTS,
+        abs_dx,
+        name="ray_low",
+    )
+    high_count = _two_level_half_count(
+        abs_pair,
+        _HIGH_VALS_MATRIX,
+        _HIGH_COUNT_MATRIX,
+        _HIGH_DELTA_TABLE,
+        _HIGH_BASE_CONSTS,
+        abs_dy,
+        name="ray_high",
+    )
     base = Linear(
         concat(low_count, high_count),
         torch.tensor([[1.0], [1.0]], dtype=torch.float32),

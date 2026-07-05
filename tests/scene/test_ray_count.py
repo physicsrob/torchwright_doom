@@ -111,3 +111,149 @@ def test_ray_count_exact_integers_when_compiled():
     vals = reference_eval(out, inputs, n_pos)[out]
     for i, (label, _vec, expected) in enumerate(cases):
         assert vals[i, 0].item() == float(expected), (label, expected)
+
+
+# ---------------------------------------------------------------------------
+# Two-level ray count (the width-d4096 track): the production
+# ``signed_world_angle`` counts each 1,024-threshold half as 32 coarse
+# crossings + 32 fine tests with runtime slope DELTAS (constant-table row
+# picked by the segment one-hot, applied via the exact ± product pair).
+# Every threshold it evaluates — coarse (32j − 0.5) and fine (32s + i + 0.5)
+# — is a member of the flat form's half-integer threshold set, and each fine
+# ray is ALGEBRAICALLY the flat form's ray (v_base + Δ·op with constant
+# Δ = slope(fine) − slope(base)), so the two forms may differ only by fp32
+# rounding of the delta product (~1e-5, vs the ~1.5e-4 fixture ray
+# clearance). These tests pin the two forms EQUAL — including at
+# segment-boundary-adjacent angles, the two-level analogue of the
+# digit-quad's boundary-sliver hazard.
+# ---------------------------------------------------------------------------
+
+import math
+
+from torchwright_doom.render_ops import (
+    _HIGH_RAY_MATRIX,
+    _LOW_RAY_MATRIX,
+    _abs_coord,
+    signed_world_angle,
+)
+from torchwright_doom.std import concat as _concat, linear as _linear
+from torchwright_doom.vocab import ANGLE_BAM
+
+_BAM_U = 2.0 * math.pi / ANGLE_BAM
+
+
+def _flat_signed_world_angle(dx, dy):
+    """The reference 1,024-wide-thermometer form of ``signed_world_angle``
+    (the shape production used before the two-level rewrite), rebuilt from
+    the committed reference matrices — quadrant folding matches
+    ``render_ops.signed_world_angle``."""
+    import torch as _t
+
+    from torchwright.graph import Linear as _Linear
+
+    from torchwright_doom.render_ops import _ray_count
+    from torchwright_doom.std import constant as _constant, select as _select
+    from torchwright_doom.render_ops import compare as _compare, neg as _neg
+
+    abs_dx = _abs_coord(dx)
+    abs_dy = _abs_coord(dy)
+    abs_pair = _concat(abs_dy, abs_dx)
+    low = _ray_count(_linear(abs_pair, _LOW_RAY_MATRIX))
+    high = _ray_count(_linear(abs_pair, _HIGH_RAY_MATRIX))
+    base = _Linear(
+        _concat(low, high), _t.tensor([[1.0], [1.0]], dtype=_t.float32)
+    )
+    one = _constant(1.0)
+    q2 = _linear(_concat(base, one), [[-1.0], [float(ANGLE_BAM // 2)]])
+    q3 = _linear(_concat(base, one), [[1.0], [-float(ANGLE_BAM // 2)]])
+    q4 = _neg(base)
+    dx_pos = _compare(dx, 0.0)
+    dy_pos = _compare(dy, 0.0)
+    upper = _select(dx_pos, base, q2)
+    lower = _select(dx_pos, q4, q3)
+    return _select(dy_pos, upper, lower)
+
+
+def _angle_cases() -> list[tuple[float, float]]:
+    """(dx, dy) fixtures spanning both halves, all quadrants, segment
+    boundaries, and the fixture-extreme radii."""
+    angles = [
+        1.0, 2.0, 30.0, 31.0, 32.0, 33.0,  # around the first coarse boundary
+        511.0, 512.0, 513.0,               # mid-low-half boundary
+        1022.0, 1023.0, 1024.0, 1025.0,    # the low/high half seam
+        1055.0, 1056.0, 1057.0,            # first high-half coarse boundary
+        1536.0, 2046.0, 2047.0,            # deep high half
+        # segment-boundary-adjacent (0.25 BAM off a 32j - 0.5 coarse
+        # threshold — inside a segment, outside every ramp/band):
+        31.25, 31.75, 1055.25, 1055.75,
+    ]
+    # Radii keep dx, dy clear of the quadrant compare(·, 0) deadband (0.1
+    # at default sharpness) even at the 1-BAM extreme (sin(1u) ≈ 7.7e-4):
+    # world-coordinate deltas are map-unit scale, so production inputs sit
+    # far outside it too.
+    radii = [200.0, 1000.0, 2752.0]
+    cases: list[tuple[float, float]] = []
+    for a in angles:
+        for r in radii:
+            th = a * _BAM_U
+            cases.append((r * math.cos(th), r * math.sin(th)))
+    # Quadrant reflections at a couple of representative angles/radii:
+    for a in (33.0, 1055.0):
+        th = a * _BAM_U
+        dx, dy = 300.0 * math.cos(th), 300.0 * math.sin(th)
+        cases += [(-dx, dy), (dx, -dy), (-dx, -dy)]
+    return cases
+
+
+def test_two_level_equals_flat_thermometer():
+    """The production two-level ``signed_world_angle`` computes the SAME
+    fp32 angle as the reference 1,024-thermometer form on the sweep —
+    bit-equal counts (both are exact integers away from ramp zones)."""
+    import torch as _t
+
+    from torchwright.ops.inout_nodes import create_input
+
+    cases = _angle_cases()
+    n_pos = len(cases)
+    dx = create_input("dx", 1)
+    dy = create_input("dy", 1)
+    new = signed_world_angle(dx, dy)
+    old = _flat_signed_world_angle(dx, dy)
+    inputs = {
+        "dx": _t.tensor([[c[0]] for c in cases], dtype=_t.float32),
+        "dy": _t.tensor([[c[1]] for c in cases], dtype=_t.float32),
+    }
+    new_vals = reference_eval(new, inputs, n_pos)[new]
+    old_vals = reference_eval(old, inputs, n_pos)[old]
+    for i, (cdx, cdy) in enumerate(cases):
+        got, want = new_vals[i, 0].item(), old_vals[i, 0].item()
+        assert got == want, (
+            f"case {i} (dx={cdx:.4f}, dy={cdy:.4f}): two-level {got} != "
+            f"flat {want}"
+        )
+
+
+def test_two_level_exact_integer_angles():
+    """At integer BAM angles (radius large enough that fp32 coordinate
+    rounding stays far inside the half-BAM threshold distance) the count IS
+    the angle — an absolute pin, not just old/new agreement."""
+    import torch as _t
+
+    from torchwright.ops.inout_nodes import create_input
+
+    angles = [1.0, 31.0, 32.0, 512.0, 1023.0, 1024.0, 1056.0, 2047.0]
+    n_pos = len(angles)
+    dx = create_input("dx", 1)
+    dy = create_input("dy", 1)
+    new = signed_world_angle(dx, dy)
+    inputs = {
+        "dx": _t.tensor(
+            [[1000.0 * math.cos(a * _BAM_U)] for a in angles], dtype=_t.float32
+        ),
+        "dy": _t.tensor(
+            [[1000.0 * math.sin(a * _BAM_U)] for a in angles], dtype=_t.float32
+        ),
+    }
+    vals = reference_eval(new, inputs, n_pos)[new]
+    for i, a in enumerate(angles):
+        assert vals[i, 0].item() == a, (a, vals[i, 0].item())

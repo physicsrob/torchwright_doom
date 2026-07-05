@@ -70,6 +70,7 @@ def main():
     d_head = int(os.environ.get("D_HEAD", "128"))
     d_hidden = int(os.environ.get("DH", "16384"))
     run_og = os.environ.get("OPT_GRAPH", "1") == "1"
+    admit = float(os.environ.get("ADMIT", "0.4"))
 
     print(
         f"[env] screen={os.environ['TORCHWRIGHT_DOOM_SCREEN_WIDTH']}x"
@@ -143,7 +144,7 @@ def main():
             residual_map=rmap,
             computed=computed,
             clusters=None,
-            admission_budget_fraction=0.4,
+            admission_budget_fraction=admit,
             policy=policy,
             output_node=output_node,
             max_layers=600,
@@ -152,6 +153,26 @@ def main():
     finally:
         _fc._TrackingResidualStreamMap = _OrigTracking
     if n_layers == 0:
+        # Deadlock diagnosis: the warm start caught the scheduler's
+        # no-progress RuntimeError, so the captured map holds the exact
+        # allocator state at the blocked layer.
+        fmap = captured["map"]
+        live = sorted(fmap._node_to_indices.items(), key=lambda kv: -len(kv[1]))
+        used = fmap.d - len(fmap._free)
+        print(
+            f"\n=== DEADLOCK at d={d}, layer {fmap.current_layer}: "
+            f"{used} cols live, {len(fmap._free)} free ==="
+        )
+        grouped: dict[str, list[int]] = defaultdict(list)
+        for node, cols in live:
+            grouped[_node_label(node) or "?"].append(len(cols))
+        rows = sorted(
+            ((nm, len(ws), sum(ws)) for nm, ws in grouped.items()),
+            key=lambda r: -r[2],
+        )
+        print("    live set at deadlock (count x width = total):")
+        for nm, cnt, tot in rows[:30]:
+            print(f"  {tot:6d} = {cnt:4d} x {tot // cnt:<5d}  {nm}")
         raise RuntimeError(f"heuristic deadlocked at d={d} (schedule-only)")
 
     fmap = captured["map"]

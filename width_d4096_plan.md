@@ -153,6 +153,36 @@ fine + counts ≈ ~250 lanes (vs 4,096 today) and ~64-wide residents
 feeds the BSP walk; it was NOT on the 49-layer zero-slack spine, but
 verify at the current floor).
 
+**RESULT (2026-07-05): W2 landed, and M2 PASSED with it — via the
+dispatch fanout dial.** The two-level count computes fine rays as
+``v_base + Δ·op`` — the active segment's coarse ray value (constant
+Linear, picked through the segment one-hot) plus a constant-table
+slope delta times the live coordinate — which is *algebraically* the
+flat form's ray, so every threshold stays in today's half-integer set
+and the fixture clearance transfers. Delta products stay ≤ ~160 in
+magnitude (fp32 rounding ~1e-5 ≪ the 1.5e-4 clearance).
+`test_ray_count.py` pins the two forms bit-equal on angle sweeps
+(incl. segment-boundary-adjacent angles and quadrant reflections).
+`ray_scaled` residents: 2×1,024 → 2×31. DAG floor stays 49.
+
+After W2 the d=4096 deadlock (at the default dispatch `max_fanout=8`)
+is no longer any single wide node — it's aggregate crowding at ~L45
+(11 `in_range` masks ~1.3k cols + 20 held `Attn` outputs ~1.2k cols +
+emit glue; the census's `DEADLOCK` dump shows it). The admission
+budget doesn't unjam it; **the dispatch `type_switch` fanout does**:
+
+| dispatch max_fanout | d=4096 heuristic | DAG floor |
+|---|---|---|
+| 8 (production) | deadlock | 49 |
+| 4 | deadlock | — |
+| 3 | **81 layers** | — |
+| 2 | **100 layers** | 59 |
+
+KV at 57.4k positions: 81×4096 ≈ 76 GB, and CP-SAT can push toward
+the 59 floor (~55 GB) — far under the B200 ceiling. M3 should compile
+with `max_fanout=2` or `3` (a one-line `render_main.py` change at
+consolidation, output-identical per `check_fanout_equivalence`).
+
 ## W3 — if the oracle still says no
 
 Next widest residents, in order: the 1,024-wide `in_range` mask
