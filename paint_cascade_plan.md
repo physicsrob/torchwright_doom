@@ -404,7 +404,8 @@ not just condition-wise — junk defeats "the parts are distinct"
 arguments that hold on real rows. Dead-code cleanup in the same pass
 (unused `span_y_start/end` picks — the publish only ever carried the
 height; unused `upper_mid`/tier aliases), lint green, `make test`
-green (5/5 shards).
+green (5/5 shards). Floor re-verified at 43 after the fix (the two
+per-candidate picks run in one layer, as designed).
 
 ### P3 conclusion — the paint cascade is off the floor; 43 binds elsewhere
 
