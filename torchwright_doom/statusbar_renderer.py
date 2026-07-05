@@ -54,7 +54,7 @@ from torchwright.ops.swiglu.arithmetic_ops import compare
 
 from .hud_assets import HUD_TRANSPARENT
 from .render_ops import add_const, gt_screen, sub
-from .std import constant, make_token_head, pick_by_index, select
+from .std import constant, make_token_head, pick_const_by_index, select
 from .std import sum as vec_sum
 from .vocab import DONE, HUD_ITEM, PIXEL, SET_CURSOR_X, SET_CURSOR_Y
 
@@ -87,7 +87,7 @@ class StatusBarRenderer:
 
     def _table(self, values: list[float], index: "Node") -> "Node":
         banks = self.projection.core.scene.assets.banks
-        return pick_by_index(index, constant(values), banks.n_hud_items)
+        return pick_const_by_index(index, values, banks.n_hud_items)
 
     # --- The phase prefix (one transition each, never shared) ------------------
 

@@ -24,12 +24,11 @@ from torchwright.graph import annotated
 
 from .std import (
     concat,
-    constant,
     indicator_to_bool,
     linear,
     one_hot,
-    pick_by_index,
     pick_by_one_hot,
+    pick_const_by_index,
     pwl_def,
     table_lookup_2d,
 )
@@ -60,12 +59,12 @@ _U_MOD_BY_BANK = tuple(
 
 
 def _snap_index(index: Node, n: int, values: list[float]) -> Node:
-    """Round ``index`` to its exact integer value via ``one_hot`` -> pick.
+    """Round ``index`` to its exact integer value via ``one_hot`` -> lookup.
 
-    ``values`` is raw data (the original passes a ``constant(...)`` node); the
-    ``constant`` is built here, inside the call, not at module level.
+    ``values`` is raw data baked into the ``pick_const_by_index`` selection
+    Linear — no ``constant`` node, no gated table copy on the residual stream.
     """
-    return pick_by_one_hot(one_hot(index, n), constant(values))
+    return pick_const_by_index(index, values, n)
 
 
 @dataclass(frozen=True)
@@ -91,41 +90,41 @@ class WallAssets:
 
     @annotated("tex")
     def bank_id(self, tex_id: Node) -> Node:
-        return pick_by_index(
+        return pick_const_by_index(
             tex_id,
-            constant(list(self.banks.wall_tex_bank_id)),
+            list(self.banks.wall_tex_bank_id),
             self.banks.n_wall_textures + 1,
         )
 
     @annotated("tex")
     def local_id(self, tex_id: Node) -> Node:
-        return pick_by_index(
+        return pick_const_by_index(
             tex_id,
-            constant(list(self.banks.wall_tex_local_id)),
+            list(self.banks.wall_tex_local_id),
             self.banks.n_wall_textures + 1,
         )
 
     @annotated("tex")
     def width(self, tex_id: Node) -> Node:
-        return pick_by_index(
+        return pick_const_by_index(
             tex_id,
-            constant(list(self.banks.wall_tex_width)),
+            list(self.banks.wall_tex_width),
             self.banks.n_wall_textures + 1,
         )
 
     @annotated("tex")
     def height(self, tex_id: Node) -> Node:
-        return pick_by_index(
+        return pick_const_by_index(
             tex_id,
-            constant(list(self.banks.wall_tex_height)),
+            list(self.banks.wall_tex_height),
             self.banks.n_wall_textures + 1,
         )
 
     @annotated("tex")
     def h_idx_oh(self, tex_id: Node) -> Node:
-        return pick_by_index(
+        return pick_const_by_index(
             tex_id,
-            constant(list(self.banks.wall_tex_h_idx_oh)),
+            list(self.banks.wall_tex_h_idx_oh),
             self.banks.n_wall_textures + 1,
             d_fill=len(self.banks.wall_height_bank),
         )
@@ -168,8 +167,8 @@ class FlatAssets:
     @annotated("tex")
     def is_sky(self, flat_id: Node) -> Node:
         return indicator_to_bool(
-            pick_by_index(
-                flat_id, constant(list(self.banks.flat_is_sky)), self.banks.n_flats
+            pick_const_by_index(
+                flat_id, list(self.banks.flat_is_sky), self.banks.n_flats
             )
         )
 
@@ -225,8 +224,8 @@ class HudAssets:
     @annotated("tex/ST_Drawer")
     def color_or_transparent(self, patch_id: Node, u: Node, v: Node) -> Node:
         # row = base_rows[patch_id] + v; column = u (local to the patch).
-        base = pick_by_index(
-            patch_id, constant(self.banks.hud_base_rows), self.banks.n_hud_patches
+        base = pick_const_by_index(
+            patch_id, self.banks.hud_base_rows, self.banks.n_hud_patches
         )
         row = linear(concat(base, v), [[1.0], [1.0]])
         return table_lookup_2d(row, u, self.banks.hud_table_2d, sharpness=1000.0)

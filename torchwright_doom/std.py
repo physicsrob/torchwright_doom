@@ -49,6 +49,7 @@ from torchwright.ops.swiglu.map_select import in_range
 from torchwright.ops.swiglu.arithmetic_ops import clamp as _clamp
 from torchwright.ops.swiglu.arithmetic_ops import piecewise_linear as _piecewise_linear
 from torchwright.ops.inout_nodes import create_literal_value
+from torchwright.ops.swiglu.onehot_table import onehot_lookup
 from torchwright.ops.swiglu.map_select import (
     broadcast_select as _broadcast_select,
     dynamic_extract as _dynamic_extract,
@@ -87,6 +88,7 @@ __all__ = [
     "indicator_to_bool",
     "pick_by_one_hot",
     "pick_by_index",
+    "pick_const_by_index",
     "pwl_def",
     "table_lookup_2d",
     "clamp",
@@ -297,8 +299,44 @@ def pick_by_index(index: Node, table: Node, n_slots: int, d_fill: int = 1) -> No
     torchwright ``dynamic_extract``, which is itself
     ``in_range`` -> ``broadcast_select`` -> fixed ``Linear`` sum. Result width
     is ``d_fill``.
+
+    For a compile-time-constant table prefer :func:`pick_const_by_index`,
+    which bakes the table into a selection Linear instead of gating a live
+    table copy on the residual stream.
     """
     return _dynamic_extract(table, index, n_slots, d_fill)
+
+
+def pick_const_by_index(
+    index: Node, values: list[float], n_slots: int, d_fill: int = 1
+) -> Node:
+    """Slot value(s) from a compile-time-CONSTANT slot-major table by index.
+
+    Same selection semantics as ``pick_by_index(index, constant(values), ...)``
+    — integer ``index`` in ``[0, n_slots)`` picks slot ``index``, out-of-range
+    picks zeros — but the table lives in weights: lowers to ``one_hot`` ->
+    ``onehot_lookup``, whose single-block case is one selection ``Linear``
+    (zero hidden lanes, and one FFN sublayer shallower than the gated pick).
+    The ``one_hot`` blend-zone behavior at half-integer inputs is the same
+    trapezoidal blend of adjacent slots as the gated form.
+    """
+    table = torch.tensor([float(v) for v in values], dtype=torch.float32)
+    if len(table) != n_slots * d_fill:
+        raise ValueError(
+            f"pick_const_by_index: table length {len(table)} != n_slots "
+            f"{n_slots} * d_fill {d_fill}"
+        )
+    rows = table.reshape(n_slots, d_fill)
+    key_to_value = {}
+    for slot in range(n_slots):
+        key = torch.zeros(n_slots, dtype=torch.float32)
+        key[slot] = 1.0
+        key_to_value[key] = rows[slot]
+    return onehot_lookup(
+        one_hot(index, n_slots),
+        key_to_value,
+        torch.zeros(d_fill, dtype=torch.float32),
+    )
 
 
 def pwl_def(
