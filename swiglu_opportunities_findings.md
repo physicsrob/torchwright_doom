@@ -11,7 +11,8 @@ see "Tooling"). Prototypes were built, measured, and reverted.
 
 | Item | Verdict | Measured size |
 |---|---|---|
-| R5 radix floors | **GO** (phased) | 73,452 lanes (50.1% of all hidden lanes); phase 1 saves ~41k at zero depth cost |
+| Narrow-d compile (post-review find) | **MEASURE FIRST** | graph schedules at d=5120 at 67 heuristic layers; KV 184 → ≤157 GB, possibly ~115 GB with CP-SAT — may unblock production cert with zero graph changes |
+| R5 radix floors | **GO** (phased) | 73,452 lanes (50.1% of all hidden lanes); phase 1 saves ~41k at zero depth cost; also shrinks the residual peak (min-d lever) |
 | Colormap → `table_lookup_2d` (new find) | **GO** | 21,168 → ~3,600 lanes (~12% of total width), depth-neutral |
 | R2 flatten select ladders | **GO** (highest strategic value) | measured **49 → 47 layers** from one mechanical edit; ~7.6 GB of full-frame KV |
 | R6 unadopted library | **1 adoption** (`onehot_lookup`), 4 passes | ~8–10 constant-table pick sites; 1 sublayer each, some upstream of the critical spines |
@@ -21,16 +22,20 @@ see "Tooling"). Prototypes were built, measured, and reverted.
 
 The two structural facts that reframe the whole plan:
 
-1. **Production depth is purely dependency-bound.** The compiled 49
-   layers exactly equal the dependency-graph longest path after the
-   always-on linear-fusion pre-pass (measured: unfused floor 52, fused
-   floor 49, production compile 49). The CP-SAT schedule sits AT the
-   topological floor — the residual stream has slack, width constrains
-   nothing. Consequences: **lane savings buy zero layers** (they buy
-   weight memory and per-layer compute), and **every layer saved must
-   come from shortening a dependency chain**. The KV-cache blocker
-   (~221 GB vs 178 GiB B200, ~3.8 GB per layer at full frame) moves
-   only via depth.
+1. **Production depth is purely dependency-bound — at d=8192.** The
+   compiled 49 layers exactly equal the dependency-graph longest path
+   after the always-on linear-fusion pre-pass (measured: unfused floor
+   52, fused floor 49, production compile 49). The CP-SAT schedule sits
+   AT the topological floor; at the production width the residual
+   stream has slack. Consequences: **hidden-lane savings buy zero
+   layers** (they buy weight memory and per-layer compute), and every
+   layer saved must come from shortening a dependency chain.
+   **Correction (Rob, post-review): depth is not the only KV lever.**
+   The KV cache is `layers × d_model × positions` — narrowing the
+   residual stream cuts it exactly like removing layers does, and the
+   measured d-bracket below shows the graph schedules essentially as
+   deep at d=5120 as at d=8192. See "Width is a KV lever" below; the
+   first-listed follow-up experiment now lives there.
 2. **The critical spine is narrow and known.** Only 150 of 6,608
    schedulable nodes have zero slack. The spine: BOS/global-position
    recovery (layers 0–4) → the wall lighting + branch cascade under the
@@ -304,11 +309,15 @@ harness (`docs/op_noise_data.json`) before doom leans on it — the op
 does not exist in torchwright today.
 
 **What R5 buys and doesn't.** With production depth dependency-bound,
-these lanes buy weight memory and per-layer compute, not layers and not
-KV. If d_hidden could drop 16,384 → 8,192 after phases 1+2 (peak-layer
-packing must be re-checked — the heuristic peak sat at 8,192-of-8,192
-residual columns, but d_hidden packing is a separate CP-SAT question),
-the MLP weight blocks halve.
+these lanes buy weight memory and per-layer compute, not layers. If
+d_hidden could drop 16,384 → 8,192 after phases 1+2 (peak-layer packing
+must be re-checked), the MLP weight blocks halve. **And R5 has a
+second, residual-width effect** (see "Width is a KV lever" below): a
+floor's stage-1 step vector is a residual-resident intermediate up to
+512 columns wide per chunk — the production peak live-set contains
+2,627 columns of floor-step intermediates — and a radix floor's
+intermediates are ~√N wide instead. So R5 also lowers the minimum
+feasible d_model, which IS a KV lever.
 
 ## R6 — the unadopted swiglu library: one adoption, four confirmed passes
 
@@ -365,6 +374,61 @@ The four passes, each with a confirmed reason:
   (~200 lanes per digit pair); doom adds scalars in one Linear.
   Inapplicable.
 
+## Width is a KV lever: the d_model bracket (added after review)
+
+Rob's correction to the first draft of this doc: the KV cache is
+`layers × d_model × positions`, so narrowing the residual stream cuts
+KV exactly like removing layers — compiling at a similar depth at
+d=4096 would halve the uniform head count and halve the cache. The
+first draft's "width constrains nothing" was true only of the 49-layer
+schedule at d=8192.
+
+**Measured bracket** (production graph, production env, heuristic
+schedule-only with the production fusion pre-pass, d_hidden held at
+16,384, d_head=128 — head counts divide cleanly at every point):
+
+| d_model | heuristic layers | layers×d | KV at 57.4k positions |
+|---|---|---|---|
+| 8192 | 65 | 532k | 245 GB — production CP-SAT: 49 → 184 GB |
+| 7168 | 64 | 459k | 211 GB |
+| 6144 | 66 | 405k | 186 GB |
+| **5120** | **67** | **343k** | **157 GB** |
+| 4608 | 80 | 369k | 169 GB |
+| 4096 | deadlock | — | — |
+
+The knee is sharp: heuristic depth is essentially flat from 8192 down
+to 5120 (+2 layers), then serialization bites (80 at 4608) and the
+schedule deadlocks at 4096. Two readings:
+
+- **Even the unoptimized heuristic schedule at d=5120 fits the KV
+  cache under the B200's 178 GiB** (157 GB; weights add roughly
+  15–25 GB at that width, so margin is thin but CP-SAT has 18 layers
+  of headroom to reclaim — the dependency floor is width-independent
+  and stays 49, worth 115 GB at d=5120).
+- The caveat that keeps this a "measure next" and not a "done": the
+  heuristic runs 16 layers above CP-SAT's floor at d=8192, and CP-SAT's
+  behavior under tighter width is exactly what the bracket cannot see.
+  The near-flat heuristic curve to 5120 is strong evidence the width
+  slack survives, not proof.
+
+**The decisive experiment — zero graph changes**: run the production
+CP-SAT compile at d=5120 and d=6144 (a /tmp config variant; the compile
+pipeline and cache key already parameterize d). If the solve lands
+anywhere ≤ 60 layers at d=5120, the production 320×200 certification
+unblocks with no renderer changes at all. This supersedes every other
+item in this doc for KV purposes and should run first.
+
+**What pins the minimum d** (the peak live-set at the production-env
+heuristic peak): the two 1,024-wide `ray_scaled` intermediates (the
+atan2 thermometer's stage-1 indicator vectors — the widest single
+resident, 2,048 columns), ~2,600 columns of `floor_int` step-chunk
+intermediates (R5 shrinks these to ~√N), and ~600 one-wide glue nodes.
+If d is to go below ~5120 later, the recorded idea for the ray banks:
+a two-level count (32 coarse thresholds, then 32 fine thresholds with
+gate-selected slopes — a runtime-slope ray test the swiglu multiply
+makes possible) takes the live intermediate from 2,048 columns to ~64
+for a few extra layers — same trade family as the radix floors.
+
 ## Others surfaced by the census (recorded, no verdict forced)
 
 - **`in_range` (13,584 lanes, 9.3%)** — 4 lanes per tested slot,
@@ -400,14 +464,20 @@ changes and could not run at all:
 
 ## What a landing session should do first
 
-1. Land the R2 pixel-tail flatten (mechanical; the prototype shape is
+1. **Run the production CP-SAT compile at d=5120 and d=6144** (a /tmp
+   config variant, zero graph changes — see "Width is a KV lever").
+   Anything ≤ 60 layers at d=5120 unblocks the production 320×200
+   certification outright.
+2. Land the R2 pixel-tail flatten (mechanical; the prototype shape is
    in the R2 section) behind the full gate stack. 49 → 47 measured.
-2. Land the colormap → `table_lookup_2d` rewrite (verify the two
+3. Land the colormap → `table_lookup_2d` rewrite (verify the two
    integrality caveats first). ~17.6k lanes.
-3. Build the radix-floor op in torchwright (derivation + noise entry),
-   then convert phase-1 floor sites. ~41k lanes.
-4. Swap the ~8–10 constant-table picks to `onehot_lookup` (mechanical;
+4. Build the radix-floor op in torchwright (derivation + noise entry),
+   then convert phase-1 floor sites. ~41k lanes, and it lowers the
+   minimum feasible d (the step-chunk intermediates at the residual
+   peak).
+5. Swap the ~8–10 constant-table picks to `onehot_lookup` (mechanical;
    measure the floor before/after — the bank-metadata reads sit
    upstream of both critical spines).
-5. Open the `proj/paint` cascade investigation (the attention-hoist
+6. Open the `proj/paint` cascade investigation (the attention-hoist
    question) — it gates everything below 47.
