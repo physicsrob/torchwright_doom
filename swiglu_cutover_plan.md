@@ -487,6 +487,37 @@ SHA.
   M-bounding purpose and that `signed_world_angle` re-clamps to the
   same ±3072 internally via `_abs_coord` — so the dispatch clamps may
   be fully redundant; verify value-range bookkeeping before deleting.
+- **Near/far scale-regime collapse — requires log-encoded carriers,
+  NOT unlocked by exact multiplication (assessed 2026-07-04).** The
+  drawseg scale chain's near/far split (`MUL_FAR_DEN` / `MUL_NEAR_DEN`
+  / `NEAR_DEN_SCALE_UP` / `DIST_GT_ONE`, `wall_range_builder.py:382-434`)
+  survives the cutover because multiply precision was only one of its
+  three origins, and the other two stand:
+  1. *Linear carrier quantization is the binding constraint.* The
+     denominator is emitted as the `DRAWSEG_SCALE1_DEN` VALUE carrier
+     and inverted later on the recovered value. Carriers encode
+     linearly (65,536 uniform steps over the range span); the raw
+     denominator spans ~6 decades (0.0007–1500), and 0.0007 quantizes
+     to zero in one linear range. The split + the ×1024 near scale-up
+     exist to co-locate both regimes into one narrow range class
+     (near `[0.0007,1]`·1024 → `[0.72,1024]`, inside far's
+     `[0.7,1500]`) that survives 16-bit linear encoding and shares
+     one reciprocal domain. Exact products change none of this.
+  2. *Part of the branching is DOOM semantics pydoom reproduces*
+     (`DIST_GT_ONE` → the `MAX_SCALE_VALUE`=64 sentinel; the `sineb`
+     floor — `R_ScaleFromGlobalAngle`'s own degenerate-geometry
+     guards), so it must survive any precision improvement.
+  3. *The split is protocol-baked*: the regime conditioning defines
+     what value the carrier holds, so removal is a protocol +
+     `value_ranges.py` (R6) + pydoom-drafter lockstep change.
+  What WOULD collapse it: a logarithmic carrier encoding for the
+  denominator (constant relative quantization, like the swiglu
+  reciprocal's geometric grid) — then one merged regime is
+  representable and the reciprocal takes it in one domain. That is an
+  encoding/protocol redesign (vocab + pydoom + oracle), an order of
+  magnitude past D4 cleanup scope; recorded here so the option isn't
+  re-derived from scratch. Already harvested by the flip: every grid
+  parameter and the extrapolation sizing those ops carried.
 - **`table_lookup_2d` axis rebalance.** The swiglu op costs 3 lanes
   per boundary on *both* axes (`3(A+B)`), so balanced axes minimize
   lanes: the spec's example flat bank goes ~6.5k lanes at 2048×128 to
