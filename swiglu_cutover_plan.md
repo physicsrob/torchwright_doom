@@ -33,6 +33,43 @@ both-zero collapse, torchwright `2fb6bd6` floor_int residual range
 pins — which also un-wedged the d=4096 compile gate, strict xfail
 removed on XPASS — and the doom digit-quad hi-snap). **D3 landed.**
 
+**D3 gate results (2026-07-04).** Full doom suite green over the D3
+tree. Debug gate (`scripts/d3_debug_gate.py`, on a /tmp-workflow
+80×50 `bias=False` variant — the production artifact's 3.3 GB
+`embed_table` exceeds ORT's 2 GB embedded-initializer limit):
+residual self-consistency PASS, `probe_compiled` vs the exact-math
+oracle PASS (both bias modes, atol=500, no divergent node).
+**Lowres walkthrough CERTIFIED**: 100.0% coverage, 100.0%
+within-option color, 91.6% exact (17,336 tokens to terminal DONE).
+
+**Two open items, neither a cutover numerics failure:**
+
+1. *Debug-surface anomaly (torchwright follow-up).* Under
+   `OnnxDebugSession.step()` chunked feeding, a `bias=False` artifact
+   reads the BOS global-position recovery at its PWL plateau (148352
+   at every depth), while the identical positions are oracle-clean
+   under the probe's single-pass `build_prefill` feed on the SAME
+   artifact, and `bias=True` is clean under both feeds. The
+   production HF runtime is unaffected (the certified lowres
+   walkthrough exercises recency over 20k+ live positions). Isolated
+   to the step()-feed × bias=False interaction; root cause not yet
+   pinned.
+
+2. *Production 320×200 certification BLOCKED on KV memory.* The
+   stock-Phi3 conversion pads per-layer trimmed heads back to uniform
+   (`num_key_value_heads = max over layers` = 64 of 64 — one layer
+   uses every slot, so the ONNX head pruning's 2181/3136 savings
+   vanish from the cache). At 49 layers × 64 heads × fp32 that is
+   ~3.3 MB/position; the full frame (~57.4k positions) needs ~188 GB
+   of KV + 33 GB weights ≈ 221 GB — over a B200's 178 GiB even
+   unfragmented (observed OOM at ~15.6k positions with DynamicCache
+   torch.cat fragmentation ~2.8×). The swiglu compile itself IMPROVED
+   (49 layers vs the relu 51; CP-SAT schedule-cache hit). Options
+   parked for Rob: multi-GPU cert run (device_map sharding), busiest-
+   layer head packing (drops the uniform pad), windowed-cache re-add
+   (the recorded big-ticket item), or accept lowres certification for
+   the cutover and treat full-res as the pre-existing ceiling item.
+
 **Execution deviation — the walkthrough stages merged.** Settled
 decision 1's "certification runs twice (2 configs × 2 stages)" turned
 out impossible at the D2 stage: torchwright's HF conversion routes

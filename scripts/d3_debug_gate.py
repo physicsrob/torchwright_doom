@@ -35,12 +35,34 @@ def main() -> None:
     parser.add_argument("--ar-window", type=int, default=64)
     parser.add_argument("--probe-positions", type=int, default=1024)
     parser.add_argument("--chunk-size", type=int, default=256)
+    parser.add_argument(
+        "--debug-first-chunk",
+        action="store_true",
+        help="run the debug=True step on the FIRST chunk (positions 0..chunk) "
+        "instead of the last — separates position-depth effects from the "
+        "debug feed itself",
+    )
     args = parser.parse_args()
 
     from torchwright_doom.inference.config import apply_screen_env, load_render_config
 
     config = load_render_config(args.config)
     apply_screen_env(config)  # BEFORE any graph-module import (the env trap)
+
+    # Stash the global-position node from the session's own graph build so
+    # debug_value can read its compiled value (the 148352-plateau diagnosis).
+    import torchwright_doom.past as _past_mod
+
+    _gp_nodes: list = []
+    _orig_gp = _past_mod.GraphPast.global_position
+
+    def _gp_patched(self):
+        node = _orig_gp(self)
+        if node not in _gp_nodes:
+            _gp_nodes.append(node)
+        return node
+
+    _past_mod.GraphPast.global_position = _gp_patched  # type: ignore[method-assign]
 
     import torchwright_doom.pydoom as pydoom
     from torchwright_doom.graph_debug import silenced_graph_asserts
@@ -76,8 +98,11 @@ def main() -> None:
         offset = 0
         while offset < n_dbg:
             chunk = rows[offset : offset + args.chunk_size]
-            is_last = offset + len(chunk) >= n_dbg
-            if is_last and debug_last:
+            if args.debug_first_chunk:
+                is_dbg = offset == 0
+            else:
+                is_dbg = offset + len(chunk) >= n_dbg
+            if is_dbg and debug_last:
                 if silence:
                     with silenced_graph_asserts():
                         _out, past = compiled.step(
@@ -94,6 +119,17 @@ def main() -> None:
     print("[gate] leg 1a: debug=True step (asserts SILENCED — consistency only)")
     _feed(debug_last=True, silence=True)
     print("[gate] leg 1a PASS: residual self-consistency holds on the folded artifact")
+
+    if _gp_nodes:
+        gp_val = compiled.debug_value(_gp_nodes[0])
+        if gp_val is not None:
+            lo, hi = float(gp_val.min()), float(gp_val.max())
+            print(
+                f"[gate] global-position compiled values over the debug chunk: "
+                f"min={lo:.1f} max={hi:.1f} "
+                f"(chunk positions ~{0 if args.debug_first_chunk else n_dbg - args.chunk_size}"
+                f"..{args.chunk_size if args.debug_first_chunk else n_dbg})"
+            )
 
     print("[gate] leg 1b: debug=True step (asserts LIVE)")
     try:
@@ -121,7 +157,7 @@ def main() -> None:
         report = probe_compiled(
             compiled,
             next_token,
-            rows_to_input(rows[:n_probe]),
+            {"token_ids": rows_to_input(rows[:n_probe])},
             n_probe,
             atol=500.0,
         )
