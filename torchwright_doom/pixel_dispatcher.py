@@ -40,7 +40,16 @@ from .render_ops import (
     screen_x_from_column,
     sub,
 )
-from .std import constant, linear, make_token_head, pick_by_index, select
+from .std import (
+    bool_and,
+    bool_not,
+    constant,
+    linear,
+    make_token_head,
+    pick_by_index,
+    select,
+    type_switch,
+)
 from .std import sum as vec_sum
 from .uv_compute import compute_v_at_pixel, compute_v_native_at_screen_y
 from .value_ranges import ValueRange
@@ -64,11 +73,53 @@ class PixelDispatcher:
 
     # --- The three shared pixel/cursor branches (forked on flat_span_seen) ----
 
-    # Each shared branch wraps its existing wall/flat select in an OUTER select on
-    # weapon_seen, so the weapon (drawn last) takes the SET_CURSOR_X / SET_CURSOR_Y
-    # / PIXEL arrows once R_DrawPlayerSprites has fired. The outer placement keeps
-    # the wall/flat width keystone (after_pixel_color) structurally intact; the
-    # weapon arms are shallow (a table lookup + a counter).
+    # Each shared branch is a PRIORITY over the pass latch flags — hud (drawn
+    # last) over weapon over flat over wall. The naive encoding is a select
+    # ladder, but a ladder's depth is the sum of its rungs and this one sits on
+    # the compiled critical path (layers 42-45 of the 49-layer spine). The flat
+    # form below derives mutually-exclusive masks from the latch flags in one
+    # parallel boolean layer and picks the winning arm with a single
+    # type_switch. The masks derive from flags that exist by layer ~1, so the
+    # mask network runs in parallel with the (much deeper) branch-arm chains
+    # and adds no depth of its own; measured DAG floor 49 -> 47.
+    #
+    # Numerically this extends the pattern the main dispatch already certifies
+    # (flat-folding emit heads through type_switch/cond_gate): at a clean +-1
+    # condition the losing branch contributes exactly zero in fp32. Every mask
+    # input here is a latch flag or a bool_* output, so all conds are snapped
+    # +-1 booleans. Degenerate case preserved: before the flat pass,
+    # flat_span_seen is structurally false, so m_wall is the one true mask and
+    # the switch degenerates to the wall arm — same behavior as the ladder.
+
+    def _pixel_priority_switch(
+        self,
+        weapon_arm: "Node",
+        flat_arm: "Node",
+        wall_arm: "Node",
+        hud_arm: "Node | None",
+    ) -> "Node":
+        """One-layer exclusive-mask form of hud > weapon > flat > wall."""
+        flats = self.projection.flats
+        weapon_seen = flats.weapon.weapon_seen
+        flat_seen = flats.flat_pass.flat_span_seen
+        not_weapon = bool_not(weapon_seen)
+        not_flat = bool_not(flat_seen)
+        # HUD off: no HUD arm built at all (bit-identical to pre-HUD).
+        if hud_arm is None:
+            return type_switch(
+                (weapon_seen, weapon_arm),
+                (bool_and(flat_seen, not_weapon), flat_arm),
+                (bool_and(not_flat, not_weapon), wall_arm),
+            )
+        hud = flats.hud
+        assert hud is not None  # built on the HUD_ENABLED path (guarded above)
+        not_hud = bool_not(hud.hud_seen)
+        return type_switch(
+            (hud.hud_seen, hud_arm),
+            (bool_and(weapon_seen, not_hud), weapon_arm),
+            (bool_and(flat_seen, not_weapon, not_hud), flat_arm),
+            (bool_and(not_flat, not_weapon, not_hud), wall_arm),
+        )
 
     @annotated("pix")
     def after_wall_column(self) -> "Node":
@@ -84,69 +135,38 @@ class PixelDispatcher:
             # (Token(PIXEL, w=PIXEL_WIDTH)); identity at high-detail.
             w=constant(float(PIXEL_WIDTH)),
         )
-        below = select(
-            projection.flats.weapon.weapon_seen,
-            PspriteRenderer(projection).after_set_cursor_x_weapon(),
-            select(
-                projection.flats.flat_pass.flat_span_seen,
-                flat_first_pixel,
-                self.wall_column_output(),
+        return self._pixel_priority_switch(
+            weapon_arm=PspriteRenderer(projection).after_set_cursor_x_weapon(),
+            flat_arm=flat_first_pixel,
+            wall_arm=self.wall_column_output(),
+            hud_arm=(
+                StatusBarRenderer(projection).after_set_cursor_x_hud()
+                if HUD_ENABLED
+                else None
             ),
-        )
-        # HUD off: no HUD arm built at all (bit-identical to pre-HUD).
-        if not HUD_ENABLED:
-            return below
-        hud = projection.flats.hud
-        assert hud is not None  # built on the HUD_ENABLED path (guarded above)
-        return select(
-            hud.hud_seen,
-            StatusBarRenderer(projection).after_set_cursor_x_hud(),
-            below,
         )
 
     @annotated("pix")
     def after_set_cursor_y(self) -> "Node":
         projection = self.projection
         flat_span = projection.flats.flat_pass.flat_span_values(projection.core.past)
-        below = select(
-            projection.flats.weapon.weapon_seen,
-            PspriteRenderer(projection).decision(),
-            select(
-                projection.flats.flat_pass.flat_span_seen,
-                make_token_head(SET_CURSOR_X, x=screen_x_from_column(flat_span.x1)),
-                make_value(ValueRange.R3, self.span_v0_at_top()),
+        return self._pixel_priority_switch(
+            weapon_arm=PspriteRenderer(projection).decision(),
+            flat_arm=make_token_head(
+                SET_CURSOR_X, x=screen_x_from_column(flat_span.x1)
             ),
-        )
-        if not HUD_ENABLED:
-            return below
-        hud = projection.flats.hud
-        assert hud is not None  # built on the HUD_ENABLED path (guarded above)
-        return select(
-            hud.hud_seen,
-            StatusBarRenderer(projection).decision(),
-            below,
+            wall_arm=make_value(ValueRange.R3, self.span_v0_at_top()),
+            hud_arm=(StatusBarRenderer(projection).decision() if HUD_ENABLED else None),
         )
 
     @annotated("pix")
     def after_pixel_color(self) -> "Node":
         projection = self.projection
-        below = select(
-            projection.flats.weapon.weapon_seen,
-            PspriteRenderer(projection).decision(),
-            select(
-                projection.flats.flat_pass.flat_span_seen,
-                self.after_flat_pixel_color(),
-                self.after_wall_pixel_color(),
-            ),
-        )
-        if not HUD_ENABLED:
-            return below
-        hud = projection.flats.hud
-        assert hud is not None  # built on the HUD_ENABLED path (guarded above)
-        return select(
-            hud.hud_seen,
-            StatusBarRenderer(projection).decision(),
-            below,
+        return self._pixel_priority_switch(
+            weapon_arm=PspriteRenderer(projection).decision(),
+            flat_arm=self.after_flat_pixel_color(),
+            wall_arm=self.after_wall_pixel_color(),
+            hud_arm=(StatusBarRenderer(projection).decision() if HUD_ENABLED else None),
         )
 
     # --- Wall texel pass -----------------------------------------------------
