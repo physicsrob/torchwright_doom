@@ -379,10 +379,49 @@ Baseline 49 (depth-flatten @ d61f72f, D1 not landed).
    bound by at least one other chain that steps 3–4 don't touch
    (tracer identifies it below); these cuts stay because the paint
    publish must not re-bind once that chain is cut.
-5. **43 → (measuring).** Radix column key: the low digit of
+5. **43 → 43.** Radix column key: the low digit of
    `render_ops.radix_col_key` is one sawtooth PWL
    (`x − B·floor((x+0.5)/B)`, ramp pairs bracketing each `k·B − 0.5`
    jump by ±0.05, numerically validated over every column ± the 0.02
    leak) running in parallel with the bucket thermometer, replacing
    the serial `mod_const` (thermometer → scale → subtract). Ramps stay
    bucket-consistent with the thermometer's `k·B − 0.5` placement.
+
+### P3 conclusion — the paint cascade is off the floor; 43 binds elsewhere
+
+Two consecutive steps moved the floor by 0 → stop per the plan. The
+reason is not diminishing ladder math: after step 2 the witness chain
+left `proj/paint` entirely — the paint cascade (this plan's D5 scope)
+no longer appears ANYWHERE in the zero-slack set (81 nodes, none
+annotated `proj/paint`). D5's outcome: **49 → 43 measured**, and the
+publish-side cuts of steps 3–5 additionally hardened the paint chain
+against re-binding when the new spine is cut.
+
+The 43-floor witness (handoff for the next depth item; full trace in
+the session record) is the **plane-mark / visplane spine**:
+
+- L0–L2 `[proj/input]` — PLANE_MARK input gating.
+- L3–L8 `[proj/pmrk]` — an attention read, then the plane radix key
+  `visplane_state._radix_plane_key` (`:181-188`): the SAME serial
+  `mod_const` shape step 5 just removed from the column key
+  (thermometer → scale → subtract → in_range → affine), plus the
+  `cond_gate` at `:~187`. The step-5 sawtooth recipe applies verbatim
+  (≈2 layers), and `visplane_state.py:492` has a third copy.
+- L9–L13 `[proj/plan]` — three chained attention reads with the
+  lifted-instance query square between reads 2 and 3
+  (`_lifted_instance_key` / `pick_argmin_above_in_bucket`, the H1/H2
+  visplane instance resolution).
+- L14–L21 — a compare/select ladder (same class as the old paint
+  ladder; step-1/step-4 recipes apply).
+- L22–L29 — cond_gate → attention read → SIX chained selects
+  (`proj/plan`) — a priority ladder, the exclusive-mask flatten's
+  canonical target.
+- L30–L42 — pix/plan read → setCursorX digit-quad emit → the
+  pixel-tail select ladder (L37–39; this is exactly depth plan D1,
+  measured 49→47 in the research session and reverted — landing D1
+  now cuts real layers again) → dispatch.
+
+Recommendation: a follow-on `plan_cascade` work order mirroring this
+one, targeting `visplane_state.py` with the already-measured recipes
+(sawtooth radix digit, flat priority ladders, two-variant clip-style
+splits), plus landing D1.
