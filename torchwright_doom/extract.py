@@ -47,9 +47,9 @@ from torchwright.graph import Concatenate, Linear, Node
 from torchwright.graph.asserts import assert_matches_value_type
 from torchwright.graph.spherical_codes import index_to_vector
 from torchwright.graph.value_type import NodeValueType, Range
-from torchwright.ops.relu.arithmetic_ops import compare
+from torchwright.ops.swiglu.arithmetic_ops import compare
 from torchwright.ops.inout_nodes import create_literal_value
-from torchwright.ops.relu.logic_ops import cond_gate
+from torchwright.ops.swiglu.logic_ops import cond_gate
 
 from .embedding import D_CATEGORY, TOKEN_VOCAB
 from .tokens import FloatSlot, IntSlot, TokenType

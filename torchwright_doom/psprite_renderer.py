@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from torchwright.graph import annotated
-from torchwright.ops.relu.arithmetic_ops import compare
+from torchwright.ops.swiglu.arithmetic_ops import compare
 
 from .constants import HUD_ENABLED, PIXEL_WIDTH
 from .render_ops import (

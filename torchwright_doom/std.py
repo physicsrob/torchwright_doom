@@ -39,12 +39,12 @@ import torch
 
 from torchwright.graph import Concatenate, Linear, Node
 from torchwright.ops.linear import bool_to_01, sum_nodes
-from torchwright.ops.relu.logic_ops import bool_all_true, bool_any_true, cond_gate
-from torchwright.ops.relu.map_select import in_range
-from torchwright.ops.relu.arithmetic_ops import clamp as _clamp
-from torchwright.ops.relu.arithmetic_ops import piecewise_linear as _piecewise_linear
+from torchwright.ops.swiglu.logic_ops import bool_all_true, bool_any_true, cond_gate
+from torchwright.ops.swiglu.map_select import in_range
+from torchwright.ops.swiglu.arithmetic_ops import clamp as _clamp
+from torchwright.ops.swiglu.arithmetic_ops import piecewise_linear as _piecewise_linear
 from torchwright.ops.inout_nodes import create_literal_value
-from torchwright.ops.relu.map_select import (
+from torchwright.ops.swiglu.map_select import (
     broadcast_select as _broadcast_select,
     dynamic_extract as _dynamic_extract,
     select as _select,
@@ -260,14 +260,16 @@ def pick_by_one_hot(mask: Node, table: Node, d_fill: int = 1) -> Node:
         )
     mask_pm1 = indicator_to_bool(mask)
     zero = create_literal_value(torch.zeros(d_fill, dtype=torch.float32))
-    # approximate=False drops the ±1 c_tol assert: this helper is built eagerly
-    # at every position (the renderer builds all branch candidates and masks by
-    # token type), so a recovered one-hot mask can be fractional at the
-    # *discarded* rows. The winning branch (active row) carries a clean one-hot,
-    # where approximate=False is float-exact.
-    selected = _broadcast_select(
-        mask_pm1, table, zero, n_slots, d_fill, approximate=False
-    )
+    # This helper is built eagerly at every position (the renderer builds all
+    # branch candidates and masks by token type), so a recovered one-hot mask
+    # can be fractional at the *discarded* rows. That is the swiglu
+    # broadcast_select's documented contract — no ±1 assert; a fractional mask
+    # blends within the hull of zero and the branch ranges — and the
+    # literal-zero false branch satisfies its one condition (zero lies in the
+    # branch-range union) by construction. The winning row's clean one-hot
+    # picks its value within ~1 ulp relative (gate×value directly; no additive
+    # offset, so nothing scales with the branches' range).
+    selected = _broadcast_select(mask_pm1, table, zero, n_slots, d_fill)
     # Sum slot-major selected[s*d_fill + c] over s, into channel c.
     weights = torch.zeros((n_slots * d_fill, d_fill), dtype=torch.float32)
     for s in range(n_slots):
@@ -369,11 +371,11 @@ def make_token_head(token_type: TokenType, **slot_value_nodes: Node) -> Node:
 def clamp(node: Node, lo: float, hi: float) -> Node:
     """Clamp a 1-wide scalar to ``[lo, hi]`` in one MLP sublayer.
 
-    A thin re-export of :func:`torchwright.ops.relu.arithmetic_ops.clamp`, so a
-    ported renderer file reaches its clamp through the same
+    A thin re-export of :func:`torchwright.ops.swiglu.arithmetic_ops.clamp`, so
+    a ported renderer file reaches its clamp through the same
     ``std`` surface as its other ops instead of importing ``torchwright.ops``
     directly. Used by the dispatch's world-angle collapse to pin each candidate
-    ``(dx, dy)`` to the atan square before the float-exact pick."""
+    ``(dx, dy)`` to the atan square before the pick."""
     return _clamp(node, lo, hi)
 
 
@@ -382,13 +384,14 @@ def clamp_to_slot(token_type: TokenType, slot_name: str, value: Node) -> Node:
     same clamp :func:`make_token_head` applies internally.
 
     The dispatch's numeric-carrier collapse uses this to bound each candidate
-    scalar *before* the float-exact pick (``pick_by_one_hot``): the pick's
-    ``broadcast_select`` derives its additive offset ``M`` from the union of
-    candidate value ranges, so an un-clamped intermediate (e.g. a raw angle whose
-    value_type is ±millions) would blow the offset past its sanity bound. Pinning
-    each candidate to the slot range first keeps ``M`` at the slot's magnitude;
-    it is byte-identical at the winning row (the per-branch head clamped there
-    too, and the clamp is idempotent under the shared head's re-clamp)."""
+    scalar *before* the pick (``pick_by_one_hot``). Historically this kept the
+    relu-era pick's additive offset (derived from the union of candidate value
+    ranges) inside its sanity bound; the swiglu pick multiplies gate×value
+    directly and has no such offset, so the clamp's stated reason is gone.
+    Retained at the cutover as a cheap idempotent bound on the value-range
+    bookkeeping — removal is the cutover plan's D4 audit, not flip work. It is
+    a no-op at the winning row (the per-branch head clamped there too, and the
+    clamp is idempotent under the shared head's re-clamp)."""
     return _clamp_slot_values(token_type, {slot_name: value})[slot_name]
 
 

@@ -450,12 +450,13 @@ def _collapse_world_angle_inputs(
     ``bbox_world_b``) returns its endpoint's ``(dx, dy)`` wrapped in an
     :class:`AngleInputEmit` instead of running its own atan. Exactly one of the
     four branch predicates is +1 per position (mutual exclusivity), so the active
-    branch's ``(dx, dy)`` is picked float-exact (``pick_by_one_hot``,
-    ``approximate=False``) and a single ``signed_world_angle`` runs over the
-    winning pair. The angle is re-wrapped as an ``ANGLE_VALUE`` :class:`ScalarEmit`
-    at all four branch keys, so the downstream :func:`_collapse_scalar_emits` folds
-    them into the one shared ANGLE_VALUE head exactly as before. Byte-identical at
-    the active row; 8 ray-halves (4 sites × tan/cot) → 2.
+    branch's ``(dx, dy)`` is picked by ``pick_by_one_hot`` — the winning row
+    lands within ~1 ulp relative, a sub-noise offset against the atan's
+    half-integer ray thresholds — and a single ``signed_world_angle`` runs over
+    the winning pair. The angle is re-wrapped as an ``ANGLE_VALUE``
+    :class:`ScalarEmit` at all four branch keys, so the downstream
+    :func:`_collapse_scalar_emits` folds them into the one shared ANGLE_VALUE
+    head exactly as before. 8 ray-halves (4 sites × tan/cot) → 2.
 
     The discriminator is ``isinstance(out, AngleInputEmit)`` — **not** the
     ``"projection_angle"`` / ``"bbox_angle"`` payload group, which also tags the
@@ -468,8 +469,8 @@ def _collapse_world_angle_inputs(
     if not members:
         return dict(branches)
 
-    # Branch-selection glue (mask + per-candidate clamp + the float-exact pick of
-    # the active branch's (dx, dy)) is dispatch work.
+    # Branch-selection glue (mask + per-candidate clamp + the pick of the
+    # active branch's (dx, dy)) is dispatch work.
     with annotate("dispatch"):
         branch_preds = _branch_predicates(inp)
         mask = concat(
@@ -479,12 +480,14 @@ def _collapse_world_angle_inputs(
             ]
         )
 
-        # Clamp each candidate (dx, dy) to the atan's ±3072 square BEFORE the pick.
-        # The raw `dx = sub(vertex, view)` carries a tracked value_range wider than
-        # 3072, which would blow `broadcast_select`'s additive offset past its
-        # sanity bound. Byte-identical at the active row: `signed_world_angle`
-        # re-clamps to the same ±3072 internally via `_abs_coord`, so the clamp is
-        # idempotent there.
+        # Clamp each candidate (dx, dy) to the atan's ±3072 square BEFORE the
+        # pick. Historically load-bearing: the raw `dx = sub(vertex, view)`
+        # carries a tracked value_range wider than 3072, which would have blown
+        # the relu-era pick's additive offset past its sanity bound. The swiglu
+        # pick has no such offset, so the clamps are retained only as a cheap
+        # value-range bound (removal is the cutover plan's D4 audit, not flip
+        # work). A no-op at the active row: `signed_world_angle` re-clamps to
+        # the same ±3072 internally via `_abs_coord`.
         dxs = [
             clamp(emit.dx, -_ATAN_ABS_RANGE, _ATAN_ABS_RANGE) for _n, emit in members
         ]
@@ -493,8 +496,8 @@ def _collapse_world_angle_inputs(
         ]
         # Two d_fill=1 picks sharing the SAME mask — simpler than one d_fill=2 pick
         # + split (no slot-major interleave), and the second pick's cost is
-        # negligible against the 1024-wide atan. Both are float-exact at the active
-        # row.
+        # negligible against the 1024-wide atan. Both land within ~1 ulp at the
+        # active row.
         picked_dx = pick_by_one_hot(mask, concat(*dxs), d_fill=1)
         picked_dy = pick_by_one_hot(mask, concat(*dys), d_fill=1)
 
@@ -523,16 +526,22 @@ def _collapse_scalar_emits(
     ~255-wide-quad head. Here, for each carrier, the active branch's own
     dispatch predicate (exactly one is +1 at any position) picks that branch's
     scalar from the carrier's candidates (``pick_by_one_hot`` — a flat
-    ``broadcast_select`` that is float-exact at the winning row), and ONE
-    :func:`make_token_head` emits it. Pointing all of a carrier's branch keys at
-    that single head node means :func:`_distinct_head_pairs` groups them into one
-    OR-ed dispatch term. ~24 eager 255-wide quads collapse to 2.
+    ``broadcast_select``, equal within ~1 ulp relative at the winning row),
+    and ONE :func:`make_token_head` emits it. Pointing all of a carrier's
+    branch keys at that single head node means :func:`_distinct_head_pairs`
+    groups them into one OR-ed dispatch term. ~24 eager 255-wide quads
+    collapse to 2.
 
-    Byte-identical to building each branch's head eagerly: the picked scalar is
-    the winning branch's scalar bit-for-bit (``approximate=False``), and the
+    Equivalent to building each branch's head eagerly: the picked scalar is
+    the winning branch's scalar within ~1 ulp relative (byte-identical under
+    the relu-era exact pick; the swiglu pick multiplies gate×value), and the
     shared head clamps + quantizes it exactly as the per-branch head did — the
     gate that used to mask the *quantized bytes* now picks the *scalar* before
-    the single shared quantization, on a row where exactly one predicate fires.
+    the single shared quantization, on a row where exactly one predicate
+    fires. ~1e-7·|value| is invisible to the digit-quad decode, whose inputs
+    already carry ~1e-3-class recovered-state noise; the flat-pixel oracle's
+    carrier tolerances (``_VALUE_ENC_TOL`` / ±2 BAM / ±1 wallColU) are the
+    gate on this claim.
     """
     # branch -> its dispatch predicate(s), read exactly as _distinct_head_pairs.
     branch_preds = _branch_predicates(inp)

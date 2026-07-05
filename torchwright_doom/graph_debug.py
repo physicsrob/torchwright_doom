@@ -16,11 +16,11 @@ def silenced_graph_asserts() -> Iterator[None]:
     """Disable ``torchwright`` Assert predicate checks for the duration.
 
     The renderer builds every dispatch branch's candidate at every position
-    and masks by token type, so a ``select`` / ``broadcast_select`` cond on a
+    and masks by token type, so a ``select`` / ``cond_gate`` cond on a
     *discarded* branch can land inside a comparator ramp (e.g. ``gt_height``
-    of two garbage recovered heights) and trip its ±1 ``c_tol`` Assert during
-    ``reference_eval``.  At the active row the cond is clean (DOOM heights
-    are integers).  The oracle gates and the Plan-K diagnostics validate via
+    of two garbage recovered heights) and trip the gated ops' shared ±1
+    Assert during ``reference_eval``.  At the active row the cond is clean
+    (DOOM heights are integers).  The oracle gates and the Plan-K diagnostics validate via
     next-token agreement, not the debug Asserts — and Asserts are stripped on
     the compiled path anyway (re-checked only under ``debug=True``) — so
     exact-math passes silence the predicates instead.

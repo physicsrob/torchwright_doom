@@ -40,7 +40,10 @@ MATCH_GAIN_CLIP = 600_000.0
 # RECENCY_GAIN in the attention logit, so among content-matching keys the most
 # recent wins with softmax weight ``exp(RECENCY_GAIN)/(exp(RECENCY_GAIN)+1)``;
 # at 8 that is ≈ 0.99966 (cond ≈ 0.9993) — sharp enough for the ±1 boolean
-# marker reads (``assert_bool``'s c_tol=0.005 needs cond > 0.995). This mirrors
+# marker reads. The binding consumer is the swiglu gated ops' shared ±1
+# assert (``_assert_cond_pm1``, c_tol=0.005: cond > 0.995; a cond off by δ
+# mis-scales the gated value by δ·|value|); the select-family mask contract
+# is looser (``_MASK_TOL`` ≈ 0.0087, cond > ~0.9913). This mirrors
 # the pre-RoPE scheme's ``SCORE_GAIN = 8`` exactly: old recency was ``8*counter``
 # (a global absolute position × gain 8); the new mechanism recovers the same
 # global absolute position from the BOS softmax weight and applies the same gain,

@@ -17,12 +17,10 @@ from torchwright.ops.attention_ops import (
     attend_argmin_above_in_bucket,
     attend_argmin_above_integer,
     attend_mean_where,
+    attend_most_recent_globally,
     attend_to_offset,
 )
-from torchwright.ops.relu.global_recency import (
-    attend_most_recent_globally,
-    global_position_from_bos,
-)
+from torchwright.ops.swiglu.global_recency import global_position_from_bos
 
 from .extract import input_type_code, is_type
 from .render_constants import RECENCY_GAIN

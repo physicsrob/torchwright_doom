@@ -50,7 +50,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from torchwright.graph import annotated
-from torchwright.ops.relu.arithmetic_ops import compare
+from torchwright.ops.swiglu.arithmetic_ops import compare
 
 from .hud_assets import HUD_TRANSPARENT
 from .render_ops import add_const, gt_screen, sub

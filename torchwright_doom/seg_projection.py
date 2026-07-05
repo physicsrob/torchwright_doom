@@ -54,7 +54,7 @@ from .std import (
     select,
 )
 from .std import sum as vec_sum
-from torchwright.ops.relu.arithmetic_ops import clamp
+from torchwright.ops.swiglu.arithmetic_ops import clamp
 from .render_constants import MATCH_GAIN_LONG
 from .flat_state import FlatPassState, HudPassState, WeaponPassState
 from .visplane_state import RuntimeVisplaneState

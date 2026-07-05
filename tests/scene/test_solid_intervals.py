@@ -5,9 +5,10 @@
 ``_interval_key``: it encodes a fragment ``[x1, x2]`` as a width-3 key
 ``[-2, 2(a+b), -2ab]`` (with ``a=x1-1, b=x2+1``) so the query ``[col², col, 1]``
 scores ``-2(col-a)(col-b)`` — positive inside the padded interval, and the
-flat-1 sentinel key wins outside it. This checks that the ``MUL_SCREEN`` grid
-(the new ``multiply_2d``) plus the affine assembly resolve coverage correctly;
-the full publish/query against the golden stream is covered by the F gate.
+flat-1 sentinel key wins outside it. This checks that ``MUL_SCREEN`` (the
+swiglu ``multiply`` — exact to ~2 ulp, no grid) plus the affine assembly
+resolve coverage correctly; the full publish/query against the golden stream
+is covered by the F gate.
 """
 
 from __future__ import annotations

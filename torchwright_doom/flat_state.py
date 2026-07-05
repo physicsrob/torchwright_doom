@@ -35,7 +35,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from torchwright.ops.relu.arithmetic_ops import compare
+from torchwright.ops.swiglu.arithmetic_ops import compare
 
 from torchwright.graph import annotated
 
@@ -531,10 +531,12 @@ class FlatPassState:
     def make_spans_values(self, past: PastHandleScope) -> MakeSpansValues:
         # pick_most_recent recovers the stored ±1 booleans with ~1e-3 softmax
         # noise; the consumers feed them into selects over wide emit *heads*,
-        # where the approximate select amplifies a noisy cond by its large
-        # offset M (~deviation·M) and flips the emitted token. Snap the boolean
-        # fields back to a clean ±1 (the float64→float32 sharp-step discipline);
-        # the y/x coordinate fields ride the slot quantization and stay raw.
+        # where a noisy cond mis-scales the kept head and leaks a sliver of
+        # the discarded one (~deviation·|head|, and the heads' integer-slot
+        # argmax margins are razor-thin — ~1 part in 5e4), flipping the
+        # emitted token. Snap the boolean fields back to a clean ±1 (the
+        # float64→float32 sharp-step discipline); the y/x coordinate fields
+        # ride the slot quantization and stay raw.
         x, s0v, s0y1, s0y2, s1v, s1y1, s1y2, sent = split(
             self.make_spans_row.pick(past, self.make_spans_state_pub), [1] * 8
         )

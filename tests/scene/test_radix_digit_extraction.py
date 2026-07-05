@@ -29,7 +29,7 @@ import pytest
 import torch
 
 from torchwright.debug.probe import probe_graph, reference_eval
-from torchwright.ops.relu.arithmetic_ops import mod_const, thermometer_floor_div
+from torchwright.ops.swiglu.arithmetic_ops import mod_const, thermometer_floor_div
 from torchwright.ops.inout_nodes import create_input
 
 from torchwright_doom.std import concat, one_hot

@@ -25,7 +25,7 @@ from dataclasses import dataclass
 
 from torchwright.graph import Node
 from torchwright.graph import annotated
-from torchwright.ops.relu.arithmetic_ops import (
+from torchwright.ops.swiglu.arithmetic_ops import (
     compare,
     mod_const,
     thermometer_floor_div,

@@ -37,22 +37,22 @@ import torch
 from torchwright.graph import Linear, Node
 from torchwright.graph.asserts import assert_matches_value_type
 from torchwright.graph.value_type import NodeValueType, Range
-from torchwright.ops.relu.arithmetic_ops import (
+from torchwright.ops.const import scale
+from torchwright.ops.swiglu.arithmetic_ops import (
     ceil_int,
     clamp,
     compare,
     floor_int,
     mod_const,
-    multiply_2d,
+    multiply,
     piecewise_linear,
     thermometer_floor_div,
 )
-from torchwright.ops.relu.linear_relu_linear import linear_relu_linear
-from torchwright.ops.relu.logic_ops import bool_all_true, bool_any_true, bool_not
+from torchwright.ops.swiglu.logic_ops import bool_all_true, bool_any_true, bool_not
+from torchwright.ops.swiglu.swiglu_ffn import swiglu_ffn
 
 from .constants import COLUMN_COUNT, PIXEL_WIDTH, SCREEN_WIDTH, VIEW_HEIGHT
 from .std import concat, constant, linear, one_hot, select
-from .value_ranges import _PROJ_RATIO
 from .vocab import _TAN_FOV_HALF, ANGLE_BAM, N_NODES_MAX
 
 
@@ -156,27 +156,17 @@ def add_const(a: Node, c: float) -> Node:
 
 # DOOM: R_PointOnSide cross-product sign (r_main.c). Only the SIGN feeds
 # SIDE_POSITIVE. The original keeps a magnitude split (MUL_SIDE_SMALL/LARGE)
-# for precision near unit-normal coefficients, but (1) the BSP side test
-# always feeds large node deltas (R2 = [-512, 512]) and (2) the real-side
-# ``multiply_2d`` *extrapolates* out-of-range inputs (the original clamps),
-# so feeding a large coef to a small grid yields a degenerate bound.
-# A single grid over the full coefficient / relative-coordinate ranges is
-# therefore both correct (the sign is robust to the ~step1*step2/4 product
-# noise for poses off the partition planes) and avoids the extrapolation trap.
-# Node deltas are recovered within R2 = [-512, 512]; rel = view - p with both
-# in R1 = [-1152, 1152], so |rel| <= 2304 — all inputs stay in-grid.
+# for precision near unit-normal coefficients; the swiglu ``multiply`` is
+# exact to ~2 ulp of the product at any magnitude (no grid, no range limit,
+# no extrapolation regime), so one op serves every operand class. Node deltas
+# are recovered within R2 = [-512, 512]; rel = view - p with both in
+# R1 = [-1152, 1152], so |rel| <= 2304 and |product| <= ~1.2e6 — the ~2-ulp
+# error (~0.3 abs) is invisible to the sign test, which tolerated ~75 of
+# grid product noise before the cutover.
 def mul_side(coef: Node, rel: Node) -> Node:
     """Product of a partition coefficient and a view-relative coordinate,
     resolved to the sign by ``SIDE_POSITIVE``."""
-    return multiply_2d(
-        coef,
-        rel,
-        max_abs1=512.0,
-        max_abs2=2400.0,
-        step1=8.0,
-        step2=37.5,
-        name="mul_side",
-    )
+    return multiply(coef, rel)
 
 
 def SIDE_POSITIVE(cross_z: Node) -> Node:
@@ -240,8 +230,11 @@ _Q2_AFFINE = [[-1.0], [_HALF_BAM]]  # ANGLE_BAM/2 - base
 _Q3_AFFINE = [[1.0], [-_HALF_BAM]]  # -ANGLE_BAM/2 + base
 
 # The minimum non-zero ray magnitude is bounded below by the BAM granularity
-# (2π/8192) times the slope; sharpness 32000 (ramp width 3.125e-5 input units)
-# sits well inside that bound, so an integer-angle ray never lands in a ramp.
+# (2π/8192) times the slope; the ray step's unsaturated band — |v| <
+# 17/(scale·s) ≈ 4.2e-6 input units, where the swish hinge in ``_ray_count``
+# is not yet exactly 0-or-identity — sits well inside that bound, so an
+# integer-angle ray never lands in the band (the smallest nonzero
+# committed-fixture ray, ~1.5e-4, clears it by ~36x).
 _RAY_SHARPNESS = 32000.0
 
 # Player-relative angles normalize to the signed BAM interval [-4096, 4096);
@@ -265,45 +258,59 @@ def _ray_count(rays: Node) -> Node:
     The reference renderer spells this ``reduce_sum(bool_to_01(...))`` — an
     elementwise ±1 ``compare`` (sharpness 32000), a 0/1 cast, then a sum — and
     runs it in float64. The real graph is float32 and ``compare`` is
-    scalar-only, so the elementwise 0/1 step is built directly, in the
-    **cancellation-free** form ``step(v) = min(relu(s·v), 1) = 1 − relu(1 −
-    relu(s·v))``. The naive ``relu(s·v) − relu(s·v − 1)`` would subtract two
-    near-equal large numbers — a ray reaches ~6000, ``s·v`` ~2e8, and the
-    ``−1`` is lost to fp32 ulp (~16 at that magnitude; even ~0.004 at the
-    saturated ~32000 scale accumulates to ~0.2 over 1024 rays). The ``min``
-    form instead computes ``relu(1 − big) = 0`` exactly for a saturated ray
-    (no subtraction of two big numbers), so each step is exactly 1 or 0 and the
-    sum is an exact integer — matching the reference renderer on any ray outside
-    the ±1/s ramp (the smallest nonzero fixture ray ≈1.5e-4 clears the 3.1e-5
-    ramp).
+    scalar-only, so the elementwise 0/1 step is built directly on the swish
+    hinge ``hinge(z) = Swish(scale·z)/scale``, which equals ``relu(z)``
+    exactly once ``|scale·z| >= 17`` (fp32 sigmoid saturation; the machine
+    ``scale`` = 128 and the ·scale / /scale shifts are exact powers of two).
+    The construction ports the relu-era min-form hinge-for-hinge and keeps
+    its **cancellation-free** property:
 
-    Two sublayers: ``a = relu(s·v)`` then ``count = n − Σ_i relu(1 − a_i)``.
+    - Stage 1, lane i: ``a_i = hinge(s·v_i)`` — gate row ``scale·s·v_i``,
+      degenerate up lane, output ``1/scale``. Exactly 0 for a nonpositive
+      ray at or below the saturation band and exactly ``s·v_i`` for a
+      positive ray above it; the band (|v| < 17/(scale·s) ≈ 4.2e-6) is
+      cleared ~36x by the smallest nonzero fixture ray (see the
+      ``_RAY_SHARPNESS`` note above).
+    - Stage 2, lane i: gate row ``scale·(1 − a_i)``, output ``−1/scale``,
+      summed with bias ``n``: ``count = n − Σ_i hinge(1 − a_i)``. For a
+      saturated positive ray ``a_i >= ~4.8`` so the gate argument is <=
+      ~−486 and the hinge is exactly 0 — no subtraction of two large
+      near-equal numbers anywhere (the property that motivated the
+      original min-form). For a nonpositive ray ``a_i = 0`` and
+      ``hinge(1) = Swish(128)/128 = 1.0`` exactly on every deployed kernel
+      (σ(128) = 1.0; ·128 and /128 exact), so each term is exactly 1 or 0
+      and the count — a sum of <= 1024 exact 0/1 terms, an integer far
+      below 2^24 — is exact in fp32.
+
+    The exact-integer claim is pinned at this layer by
+    ``tests/scene/test_ray_count.py`` (fixture-extreme ray magnitudes,
+    including the smallest nonzero ray).
     """
     n = len(rays)
     s = _RAY_SHARPNESS
 
-    # Stage 1: a_i = relu(s·v_i).
-    a = linear_relu_linear(
+    # Stage 1: a_i = hinge(s·v_i).
+    a = swiglu_ffn(
         rays,
-        s * torch.eye(n, dtype=torch.float32),
+        scale * s * torch.eye(n, dtype=torch.float32),
         torch.zeros(n, dtype=torch.float32),
-        torch.eye(n, dtype=torch.float32),
+        (1.0 / scale) * torch.eye(n, dtype=torch.float32),
         torch.zeros(n, dtype=torch.float32),
         name="ray_scaled",
     )
-    # Stage 2: count = n − Σ_i relu(1 − a_i). relu(1 − a_i) is 0 for a
-    # saturated ray (relu of a large negative), 1 − a_i in the ramp, 1 for a
-    # negative ray — so count adds exactly 1 per positive ray.
-    count = linear_relu_linear(
+    # Stage 2: count = n − Σ_i hinge(1 − a_i). hinge(1 − a_i) is 0 for a
+    # saturated ray (hinge of a large negative), 1 for a nonpositive ray —
+    # so count adds exactly 1 per positive ray.
+    count = swiglu_ffn(
         a,
-        -torch.eye(n, dtype=torch.float32),  # hidden_i = relu(−a_i + 1)
-        torch.ones(n, dtype=torch.float32),
-        -torch.ones((n, 1), dtype=torch.float32),  # −Σ hidden_i
+        -scale * torch.eye(n, dtype=torch.float32),  # gate_i = scale·(1 − a_i)
+        scale * torch.ones(n, dtype=torch.float32),
+        (-1.0 / scale) * torch.ones((n, 1), dtype=torch.float32),  # −Σ hinge_i
         torch.tensor([float(n)], dtype=torch.float32),  # + n
         name="ray_count",
     )
     # Pin the true [0, n] range so the downstream quadrant ``select`` sees a
-    # bounded gated input (stage 1's relu range is otherwise ~s·rays).
+    # bounded gated input (stage 1's hinge range is otherwise ~s·rays).
     return assert_matches_value_type(
         count, NodeValueType(value_range=Range(0.0, float(n)))
     )
@@ -317,17 +324,14 @@ def _ray_count(rays: Node) -> Node:
 def MUL_SCREEN(a: Node, b: Node) -> Node:
     """Product of two screen-column operands.
 
-    Grid: ``input_range=((-2, SW+2), (-2, SW+2)), breakpoints=65`` — step 1.0,
-    so integer columns land on grid lines and the product is exact there. The
-    operands (``x1-1`` / ``x2+1``) stay within ``[-2, SW+2]``; a symmetric
-    ``max_abs = SW+2`` over-covers that asymmetric range at the same step (real
-    ``multiply_2d`` extrapolates out-of-grid, so sizing to the full operand
-    range is the safe choice — same extrapolation-trap note as ``mul_side``).
+    ~2 ulp relative (<= ~1e-3 abs at products <= ~4400). One regression in
+    kind vs the relu-era grid, far inside margin: the grid was exactly 0
+    error at integer grid points, while the swiglu ± lane pair leaves both
+    lanes unsaturated for |a| < 17, so integer screen columns now carry the
+    ~2-ulp noise too. The consumers compare against half-integer thresholds
+    with the default 0.1 deadband — a >= 100x margin.
     """
-    bound = float(COLUMN_COUNT + 2)
-    return multiply_2d(
-        a, b, max_abs1=bound, max_abs2=bound, step1=1.0, step2=1.0, name="mul_screen"
-    )
+    return multiply(a, b)
 
 
 # DOOM: R_PointToAngle (r_main.c) — BAM angle of (dx, dy) via atan2 octant count.
@@ -435,17 +439,14 @@ def is_negative_cross(cross_z: Node) -> Node:
 
 
 def MUL_CROSS(a: Node, b: Node) -> Node:
-    """Cross-product term for the seg backface cull.
+    """Cross-product term for the seg backface cull; only the sign feeds
+    ``is_negative_cross``.
 
-    Grid ``input_range=((-256, 256), (-600, 600)), breakpoints=65`` — step 8.0
-    on the seg-vector axis, 18.75 on the
-    view-relative axis. e1m1 seg vectors reach |256| (a grid vertex) and
-    relative coords |308| (< 600), so the operands stay in-grid; only the sign
-    feeds ``is_negative_cross``.
+    e1m1 seg vectors reach |256| and relative coords |308|, so |product| <=
+    ~1.5e5 and the ~2-ulp error (~0.03 abs) is invisible to the sign test
+    (the old grid budgeted 37.5 of product noise there).
     """
-    return multiply_2d(
-        a, b, max_abs1=256.0, max_abs2=600.0, step1=8.0, step2=18.75, name="mul_cross"
-    )
+    return multiply(a, b)
 
 
 # ---------------------------------------------------------------------------
@@ -455,186 +456,81 @@ def MUL_CROSS(a: Node, b: Node) -> Node:
 #
 # Projection / scale constants mirror ``reference.py``. FOV_HALF_BAM =
 # ANGLE_BAM/8 = 45°, so the focal length is (SCREEN_WIDTH-1)/(2·tan 45°).
-# ``_TAN_FOV_HALF`` is canonical in vocab.py and ``_PROJ_RATIO`` (the focal
-# length normalised to the width-60 tuning, = 1.0 at 60×50) in
-# value_ranges.py — both imported above; the ranges in value_ranges and
-# this module's scale math must track the same values.
+# ``_TAN_FOV_HALF`` is canonical in vocab.py (imported above); the scale
+# ranges declared in value_ranges.py must track this module's scale math.
+# (The relu-era grids also sized their breakpoints from value_ranges'
+# ``_PROJ_RATIO``; the swiglu ``multiply`` has no grid, so that coupling is
+# gone from this file.)
 _PROJECTION = (SCREEN_WIDTH - 1) / (2.0 * _TAN_FOV_HALF)
 _MIN_SCALE = 1.0 / 256.0
 _MAX_SCALE = 64.0
 NEAR_DEN_SCALE_FACTOR = 1024.0
 
 
-def _mul_grid(
-    a: Node,
-    b: Node,
-    *,
-    lo1: float,
-    hi1: float,
-    lo2: float,
-    hi2: float,
-    n: int,
-    name: str,
-) -> Node:
-    """A ``multiply`` over ``input_range=((lo1,hi1),(lo2,hi2))`` with ``n``
-    breakpoints.
-
-    Lowers to ``multiply_2d`` with explicit (asymmetric) breakpoints. Now that
-    ``multiply_2d`` builds in O(n) (the quarter-square fast path, torchwright
-    2066416) the prior ``low_rank_2d(rank=1)`` build-cost stopgap is gone. The
-    rank-1 form was *not* more precise: its SVD truncation is lossless for a
-    product, but it then multiplies the two (exact, linear) singular-vector
-    interpolants through an inner ``multiply_2d`` on a coarse 20-step grid, so it
-    carries a larger residual (~0.1 abs on these grids) than a direct
-    ``multiply_2d`` over the full 257-bp grid (~1e-3 abs). One behavioural note:
-    ``multiply_2d`` *extrapolates* out-of-grid operands (``multiply`` and
-    ``low_rank_2d`` clamp) — fine here because every grid spans the operand
-    range and any wrong-regime product is discarded by ``select(near, …)``
-    downstream. Both validated by the projection gate.
-    """
-    bp1 = [lo1 + i * (hi1 - lo1) / (n - 1) for i in range(n)]
-    bp2 = [lo2 + i * (hi2 - lo2) / (n - 1) for i in range(n)]
-    return multiply_2d(
-        a, b, max_abs1=hi1, max_abs2=hi2, breakpoints1=bp1, breakpoints2=bp2, name=name
-    )
+# The drawseg / pixel-pass products below all lower to the swiglu
+# ``multiply`` — exact to ~2 ulp of the product at any magnitude, no grid,
+# no range limit, no extrapolation regime. The named wrappers survive the
+# cutover so each J-file call site keeps its semantic name and the operand
+# provenance notes; every relu-era grid parameter is gone (the grid builder
+# ``_mul_grid`` died with them, and with it the extrapolation trap its
+# callers had to size around).
 
 
 def mul_normal_coord(coef: Node, rel: Node) -> Node:
-    """Unit-normal coefficient × view-relative coordinate
-    (``((-1,1),(-1200,1200))``, 65 bp)."""
-    return _mul_grid(
-        coef,
-        rel,
-        lo1=-1.0,
-        hi1=1.0,
-        lo2=-1200.0,
-        hi2=1200.0,
-        n=65,
-        name="mul_normal_coord",
-    )
+    """Unit-normal coefficient × view-relative coordinate."""
+    return multiply(coef, rel)
 
 
 def MUL_UNIT(a: Node, b: Node) -> Node:
-    """Unit × unit product (``((-1,1),(-1,1))``, 33 bp)."""
-    return _mul_grid(a, b, lo1=-1.0, hi1=1.0, lo2=-1.0, hi2=1.0, n=33, name="mul_unit")
+    """Unit × unit product."""
+    return multiply(a, b)
 
 
 def MUL_FAR_DEN(distance: Node, xtova_cos: Node) -> Node:
-    """Far scale denominator: distance × view-angle cosine
-    (``((1,1500),(0.7,1.01))``, 257 bp)."""
-    return _mul_grid(
-        distance,
-        xtova_cos,
-        lo1=1.0,
-        hi1=1500.0,
-        lo2=0.7,
-        hi2=1.01,
-        n=257,
-        name="mul_far_den",
-    )
+    """Far scale denominator: distance × view-angle cosine."""
+    return multiply(distance, xtova_cos)
 
 
 def MUL_NEAR_DEN(distance: Node, xtova_cos: Node) -> Node:
-    """Near scale denominator (``((0.001,1),(0.7,1.01))``, 257 bp)."""
-    return _mul_grid(
-        distance,
-        xtova_cos,
-        lo1=0.001,
-        hi1=1.0,
-        lo2=0.7,
-        hi2=1.01,
-        n=257,
-        name="mul_near_den",
-    )
+    """Near scale denominator: distance × view-angle cosine, near regime."""
+    return multiply(distance, xtova_cos)
 
 
 def mul_far_scale(numerator: Node, inverse_denominator: Node) -> Node:
-    """Far scale = numerator × (1/denominator)
-    (``((0, 32·ratio),(0, 0.1))``, 257 bp)."""
-    return _mul_grid(
-        numerator,
-        inverse_denominator,
-        lo1=0.0,
-        hi1=32.0 * _PROJ_RATIO,
-        lo2=0.0,
-        hi2=0.1,
-        n=257,
-        name="mul_far_scale",
-    )
+    """Far scale = numerator × (1/denominator)."""
+    return multiply(numerator, inverse_denominator)
 
 
 def MUL_NEAR_FLOOR_SCALE(numerator: Node, inverse_denominator: Node) -> Node:
-    """Near-floor scale (``((0, 0.1·ratio),(0, 2))``, 257 bp)."""
-    return _mul_grid(
-        numerator,
-        inverse_denominator,
-        lo1=0.0,
-        hi1=0.1 * _PROJ_RATIO,
-        lo2=0.0,
-        hi2=2.0,
-        n=257,
-        name="mul_near_floor_scale",
-    )
+    """Near-floor scale = numerator × (1/denominator)."""
+    return multiply(numerator, inverse_denominator)
 
 
 def mul_scalestep(diff: Node, inverse_width: Node) -> Node:
-    """Per-column scale step = (scale2-scale1) × (1/width)
-    (``((-2.5·ratio, 2.5·ratio),(0, 1))``, 257 bp)."""
-    return _mul_grid(
-        diff,
-        inverse_width,
-        lo1=-2.5 * _PROJ_RATIO,
-        hi1=2.5 * _PROJ_RATIO,
-        lo2=0.0,
-        hi2=1.0,
-        n=257,
-        name="mul_scalestep",
-    )
+    """Per-column scale step = (scale2-scale1) × (1/width)."""
+    return multiply(diff, inverse_width)
 
 
 # ---------------------------------------------------------------------------
 # Wall-column rasterizer screen-y ops
 # ---------------------------------------------------------------------------
 # Per-column wall projection: ``top_y_raw = CENTER_Y − worldheight × scale``,
-# then round to an integer scanline. The ``mul_height_scale`` product feeds the
-# CEIL_Y/FLOOR_Y staircases across a ±0.4-unit deadband, so it rides a wide
-# 1024-point grid (the comparator-sensitive projection product) and the
-# staircases use ``sharpness=10000`` (a 1e-4 ramp) — narrow enough that the
-# product's piecewise-linear noise (~0.077) lands in the flat zone and rounds
-# to an exact integer instead of interpolating across a scanline boundary.
+# then round to an integer scanline. The ``mul_height_scale`` product feeds
+# the CEIL_Y/FLOOR_Y staircases across a ±0.4-unit deadband; the swiglu
+# multiply's ~2-ulp product noise (<= ~3e-3 abs at the maximal ~12800
+# screen-y offset) sits far inside it, and the staircases use
+# ``sharpness=10000`` (a 1e-4 ramp) so the floored value rounds to an exact
+# integer instead of interpolating across a scanline boundary.
 
 
-def mul_height_scale(height: Node, scale: Node) -> Node:
-    """World-relative height × wall scale → screen-y offset
-    (``((-200, 200), (0, 64))``, 1024 bp). The height axis spans the full e1m1
-    ``|sector_h − viewz|`` range (~175) so a far wall does not extrapolate off
-    the grid."""
-    return _mul_grid(
-        height,
-        scale,
-        lo1=-200.0,
-        hi1=200.0,
-        lo2=0.0,
-        hi2=_MAX_SCALE,
-        n=1024,
-        name="mul_height_scale",
-    )
+def mul_height_scale(height: Node, wall_scale: Node) -> Node:
+    """World-relative height × wall scale → screen-y offset."""
+    return multiply(height, wall_scale)
 
 
 def mul_column_scalestep(x_offset: Node, scalestep: Node) -> Node:
-    """Column offset × per-column scale step (``((0, COLUMN_COUNT), (-1, 1))``,
-    ``COLUMN_COUNT+1`` bp). The offset axis is an integer column, so
-    ``COLUMN_COUNT+1`` breakpoints land each column exactly on a grid line."""
-    return _mul_grid(
-        x_offset,
-        scalestep,
-        lo1=0.0,
-        hi1=float(COLUMN_COUNT),
-        lo2=-1.0,
-        hi2=1.0,
-        n=COLUMN_COUNT + 1,
-        name="mul_column_scalestep",
-    )
+    """Column offset × per-column scale step."""
+    return multiply(x_offset, scalestep)
 
 
 def CEIL_Y(x: Node) -> Node:
@@ -761,8 +657,8 @@ def MAX_SCALE_VALUE(_: Node) -> Node:
 # The pixel pass: per-pixel texture-coordinate products + the native
 # coordinate floor. Each is a ``multiply(...)`` / ``floor_int(...)`` from the
 # pixel pipeline (``uv_compute`` / ``pixel_dispatcher`` / ``flat_state``),
-# lowered to ``_mul_grid`` / ``floor_int`` here so the J files stay node-free at
-# import (the multiply / floor node is built only on call).
+# lowered here so the J files stay node-free at import (the multiply / floor
+# node is built only on call).
 # ---------------------------------------------------------------------------
 
 
@@ -784,110 +680,38 @@ def FLAT_DIST_INDEX_FLOOR(x: Node) -> Node:
 
 
 def mul_u_native(rw_distance: Node, tan_rel: Node) -> Node:
-    """rw_distance × per-column tangent → native wall u
-    (``((0, 800), (-10.5, 10.5))``, 1024 bp)."""
-    return _mul_grid(
-        rw_distance,
-        tan_rel,
-        lo1=0.0,
-        hi1=800.0,
-        lo2=-10.5,
-        hi2=10.5,
-        n=1024,
-        name="mul_u_native",
-    )
+    """rw_distance × per-column tangent → native wall u."""
+    return multiply(rw_distance, tan_rel)
 
 
 def mul_pixel_dc_iscale(pixel_index: Node, dc_iscale: Node) -> Node:
-    """pixel/screen-y offset × dc_iscale → native-v offset
-    (``((-32, 64), (-64, 64))``, 97 bp). Exact on the
-    pixel_index axis because that operand is always an integer (lands on a grid
-    line, step 1.0), so the dc_iscale axis cell precision does not matter."""
-    return _mul_grid(
-        pixel_index,
-        dc_iscale,
-        lo1=-32.0,
-        hi1=64.0,
-        lo2=-64.0,
-        hi2=64.0,
-        n=97,
-        name="mul_pixel_dc_iscale",
-    )
+    """pixel/screen-y offset × dc_iscale → native-v offset."""
+    return multiply(pixel_index, dc_iscale)
 
 
 def mul_k_step(pixel_index: Node, step: Node) -> Node:
-    """flat pixel index × affine cursor step → texture-coordinate delta
-    (``((-2, 320), (-16, 16))``, 512 bp)."""
-    return _mul_grid(
-        pixel_index,
-        step,
-        lo1=-2.0,
-        hi1=320.0,
-        lo2=-16.0,
-        hi2=16.0,
-        n=512,
-        name="mul_k_step",
-    )
+    """flat pixel index × affine cursor step → texture-coordinate delta."""
+    return multiply(pixel_index, step)
 
 
 def mul_ph_yslope(planeheight: Node, yslope: Node) -> Node:
-    """planeheight × per-scanline yslope → ray distance
-    (``((-2, 128), (0, 64))``, 512 bp)."""
-    return _mul_grid(
-        planeheight,
-        yslope,
-        lo1=-2.0,
-        hi1=128.0,
-        lo2=0.0,
-        hi2=64.0,
-        n=512,
-        name="mul_ph_yslope",
-    )
+    """planeheight × per-scanline yslope → ray distance."""
+    return multiply(planeheight, yslope)
 
 
 def mul_dist_distscale(distance: Node, distscale: Node) -> Node:
-    """ray distance × column distscale → ray length
-    (``((0, 1024), (0.5, 5))``, 512 bp)."""
-    return _mul_grid(
-        distance,
-        distscale,
-        lo1=0.0,
-        hi1=1024.0,
-        lo2=0.5,
-        hi2=5.0,
-        n=512,
-        name="mul_dist_distscale",
-    )
+    """ray distance × column distscale → ray length."""
+    return multiply(distance, distscale)
 
 
 def mul_len_trig(length: Node, trig: Node) -> Node:
-    """ray length × view-ray cos/sin → world-space frac offset
-    (``((-4096, 4096), (-1.5, 1.5))``, 512 bp)."""
-    return _mul_grid(
-        length,
-        trig,
-        lo1=-4096.0,
-        hi1=4096.0,
-        lo2=-1.5,
-        hi2=1.5,
-        n=512,
-        name="mul_len_trig",
-    )
+    """ray length × view-ray cos/sin → world-space frac offset."""
+    return multiply(length, trig)
 
 
 def mul_dist_base(distance: Node, basescale: Node) -> Node:
-    """ray distance × base x/y scale → per-screen-x texture step
-    (``((0, 1024), (-0.05, 0.05))``, 512 bp)."""
-    return _mul_grid(
-        distance,
-        basescale,
-        lo1=0.0,
-        hi1=1024.0,
-        lo2=-0.05,
-        hi2=0.05,
-        n=512,
-        name="mul_dist_base",
-    )
+    """ray distance × base x/y scale → per-screen-x texture step."""
+    return multiply(distance, basescale)
 
 
 # ---------------------------------------------------------------------------

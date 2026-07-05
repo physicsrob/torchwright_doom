@@ -32,7 +32,6 @@ import json
 import os
 
 import onnx
-import pytest
 
 from torchwright.compiler.export import compile_to_onnx
 from torchwright.ops.inout_nodes import create_rope_config
@@ -71,19 +70,11 @@ _D_HEAD = 64
 _D_ROT = 32
 
 
-@pytest.mark.xfail(
-    raises=RuntimeError,
-    reason="precise root cause: torchwright 726f349 (2b: linear_relu_linear "
-    "builds Block/FFN natively) replaced splittable L->ReLU->L chains with "
-    "atomic FFN placement; at d=4096 the optimize=0 static schedule pins the "
-    "residual at 4096/4096 from layer ~7 and deadlocks ('No progress: 2095 "
-    "nodes remaining, 0 free columns') — green at a3c243c (89 layers), wedged "
-    "at 2b and ever since (scripts/compile_gate_probe.py reproduces with the "
-    "per-layer trace); will be fixed by the block-arc packing work "
-    "(block-ir-2a), after which this strict xfail flips to XPASS — remove the "
-    "marker then",
-    strict=True,
-)
+# The d=4096 atomic-FFN-placement deadlock (torchwright 726f349; xfail'd here
+# 2026-07-03) dissolved with the swiglu machine flip: multiply lanes replaced
+# the relu-era grid banks, dropping the residual pressure the optimize=0
+# static schedule wedged on. The strict xfail XPASSed at the D2 cutover gate
+# and was removed per its own instruction.
 def test_forward_compiles_to_onnx(tmp_path) -> None:
     emb = build_doom_embedding("token_ids")
     rope = create_rope_config(d_head=_D_HEAD, max_positions=65536, d_rot=_D_ROT)
