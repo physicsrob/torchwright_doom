@@ -528,3 +528,99 @@ SHA.
 - **Walkthrough wall-time**: 4 certified renders (~30 min each on
   Modal) across D2+D3. Lowres-first ordering front-loads failure
   detection.
+
+## Execution record (2026-07-04) — the reference
+
+Everything below happened in one execution day. This section is the
+consolidated record; the status block at the top is its summary. The
+torchwright-side prerequisite work has its own record in torchwright's
+`docs/swiglu_d0_handoff.md` (the D0 punch list, executed by the
+torchwright agent).
+
+### Commit trail
+
+Doom (`torchwright_doom`), in landing order:
+
+| SHA | What |
+|---|---|
+| `97f60bd` | This plan lands (D0 already complete torchwright-side) |
+| `a02ed57` | D1 — ORT-CUDA kernel pins import the machine constants; no-bias lane pin (5/5 on the deployed A100 + onnxruntime-gpu pair) |
+| `28bd1f8` | Emit hardening — digit-quad high byte snapped to an integer (find #3 below) |
+| `4f83840` | **D2 — the atomic machine flip** (11 files + 1 test; `multiply_2d`→`multiply`, `_ray_count` on `swiglu_ffn` + `tests/scene/test_ray_count.py`, comment/audit sweep, d=4096 xfail removed on XPASS) |
+| `aa0b13a` | **D3 — `bias=False`** (`ModelConfig.bias`, threaded + key-visible; both configs in lockstep) |
+| `2838cf2` | `load_debug_session` mirrors compile-side linear fusion (find #4); `scripts/d3_debug_gate.py` |
+| `0d9be09` | D3 gate results + the two open items recorded |
+
+Torchwright: `eefb34f` (D0a relocation), `6bf8af9` (D0b obligation
+retraction + lane pins), `c6f097a` (freeze note), `c5db214` (find #1),
+`2fb6bd6` (find #2). Umbrella pointer bumped after each torchwright
+landing.
+
+### What the gates caught (five finds, all root-caused)
+
+1. **`broadcast_select` with BOTH branches all-zero literals built a
+   zero-lane FFN** that crashed the affine rules (`torch.tensor([])`
+   is float32, `torch.where` rejects it). Doom hits it via
+   `assets._snap_index` over a missing-texture bank's zero rows.
+   Fixed torchwright-side (`c5db214`): the op collapses to the zero
+   literal — exact semantics, plus a dtype hardening. Caught by: the
+   first D2 `make test`.
+2. **`floor_int`'s residual-resident intermediates carried the affine
+   relaxation's ~1e16 declared ranges**, blowing the RMS-norm energy
+   certifier past the fp32-feasible q=63 budget. Fixed torchwright-side
+   (`2fb6bd6`): both stages pinned to their universal hinge bounds
+   (sound for any input) plus the fp32 ulp class W absorbs. Side
+   effect: the d=4096 compile gate's strict xfail XPASSed — the flip's
+   lane reduction had dissolved the static-schedule deadlock — and the
+   marker is removed. Caught by: `test_forward_compiles_to_onnx`.
+3. **A carrier value straddling a byte boundary produced a fractional
+   digit-quad high byte**, and the low-byte recovery amplified it
+   ×BASE (192 emitted rows ≈ 5.9e-3, over the 5e-3 carrier bar).
+   Machine-independent, pre-existing; the flip's sub-noise shifts
+   re-rolled the dice onto it. Fixed doom-side (`28bd1f8`): the high
+   byte is snapped to the nearest integer before the low byte reads
+   it, making the documented ±1-step contract actually true (residual
+   hazard ~1e-9). Pinned by
+   `test_two_digit_boundary_sliver_snaps_to_one_step`. Caught by: the
+   flat-pixel oracle (`segDcTmidMid`, pos 7780).
+4. **`load_debug_session` rebuilt the graph without the
+   `fuse_consecutive_linears` pre-pass** the compile always applies —
+   fingerprint mismatch on every post-fusion artifact (656 fused pairs
+   at production). Fixed doom-side (`2838cf2`). Caught by: the D3
+   debug gate's first run.
+5. **A `bias=True` swish artifact has no production runtime path** —
+   torchwright's HF conversion routes swish exclusively to stock
+   `Phi3ForCausalLM`, which requires the biasless normed emission
+   (deliberate, phi3 plan P1). Resolution: the walkthrough stages
+   merged (the deviation block above); the machine flip is certified
+   at `bias=True` by the non-runtime gates instead.
+
+### Final gate state
+
+- `make test`: green, both repos, over the final tree.
+- Flat-pixel oracle + compiled AR rollout (token-exact) + d=4096
+  compile gate: green.
+- D3 debug gate (80×50 `bias=False` variant; the production artifact's
+  3.3 GB `embed_table` exceeds ORT's 2 GB embedded-initializer limit):
+  self-consistency PASS, `probe_compiled` vs oracle PASS on BOTH bias
+  modes (atol=500, no divergent node).
+- **Lowres walkthrough (160×100, swish+`bias=False`): CERTIFIED —
+  100.0% coverage, 100.0% within-option, 91.6% exact, 17,336 tokens
+  to terminal DONE.**
+- Production walkthrough (320×200): compile green (49 layers — better
+  than the relu 51), render **blocked by the KV ceiling** (open item
+  2 in the status block).
+- Layer count: 51 → 49; the config headers' certified-numbers lines
+  refresh when the production walkthrough re-certifies.
+
+### Open items (also in the status block)
+
+1. `OnnxDebugSession.step()` × `bias=False` global-position plateau —
+   torchwright debug-surface follow-up; production unaffected.
+   Instruments: `scripts/d3_debug_gate.py` (`--debug-first-chunk`,
+   the global-position dump).
+2. Production 320×200 certification blocked on stock-Phi3 uniform KV
+   (~221 GB unbounded-cache demand vs 178 GiB B200) — options parked
+   in the status block, Rob's call.
+3. D4 (optional, unstarted): pre-pick clamp audit, `table_lookup_2d`
+   axis rebalance, `scripts/audit_relu.py` disposition.
