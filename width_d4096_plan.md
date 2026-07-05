@@ -117,6 +117,28 @@ Work items:
 Payoff for THIS plan: the step-chunk residents shrink ~10×. (The
 ~41k-lane saving is the same work's other dividend.)
 
+**PROGRESS + a measured correction (2026-07-05).**
+
+- Landed: torchwright `radix_floor_int` (branch `width-d4096`,
+  commit 4dd0bbe) with tests + noise entries — the divisor-boundary
+  sliver measures exactly 0 (the snap + extended-lo compensation is
+  exact, not just ±1). Landed: the four `pix/R_DrawSpan` N=2046 floors
+  (doom f7f19d1, flat-pixel oracle green; DAG floor stays 49; d=8192
+  heuristic 65→64).
+- **The "~4 sublayers" cost estimate was wrong: a composed
+  `radix_floor_int` costs ~8 *layers* on its own chain** (3 floors ×
+  2 sublayers + the affine glue the fusion pre-pass can't fold into
+  FFN gates), and an emit digit-quad converts TWO chained floors
+  (hi + snap) — ~16 layers. Converting `_digit_quad_payload`
+  unconditionally regressed the DAG floor 49 → 55; the witness chain
+  ran through `pix/emit emit_dq_setCursorX` L33–L49. Reverted.
+- Digit-quad radix therefore needs per-site opt-in at slack ≥ ~16 (a
+  `radix` flag threaded `make_token_head → emit_token →
+  _digit_quad_payload`), deferred: W2 may make it unnecessary for
+  d=4096 feasibility — re-probe the oracle after W2 and only build the
+  plumbing if the deadlock persists and the census still names emit
+  step chunks as top residents.
+
 ## W2 — two-level ray count (mandatory: 2,048 → ~64 columns)
 
 Replace each 1,024-threshold thermometer with a two-level count:
