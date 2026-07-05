@@ -35,7 +35,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from torchwright.ops.swiglu.arithmetic_ops import compare
+from torchwright.ops.swiglu.arithmetic_ops import thermometer_floor_div
 
 from torchwright.graph import annotated
 
@@ -382,9 +382,16 @@ class FlatPassState:
         )
 
         # One recency head per row-chunk: chunk k recovers x1 if row y is in chunk
-        # k (its query one-hots y - k*CHUNK, zero outside the chunk), then a select
-        # on y's chunk index keeps the head that actually contains y. The highest
-        # chunk threshold y >= k*CHUNK that holds wins, which is exactly y // CHUNK.
+        # k (its query one-hots y - k*CHUNK, zero elsewhere). The K heads run in
+        # parallel; one pick_by_one_hot on one_hot(y // CHUNK) keeps the head that
+        # actually contains y — ONE sublayer after the reads instead of the K-1
+        # chained selects that put this fold on the compiled depth floor
+        # (visplane_cascade_plan.md). The chunk mask is off-chain: span_row_y is
+        # an integer input slot, so thermometer_floor_div/one_hot give a clean
+        # 0/1 mask (pick_by_one_hot's contract). Junk rows (non-SPAN_ROW: the
+        # typed extract yields y = 0) take chunk 0's pick — bit-identical to the
+        # old fold's junk collapse — and the published value is only ever read
+        # back through the is_span_row marker pick, never on junk rows.
         flat_span_x1_per_chunk = [
             past.pick_most_recent(
                 one_hot(
@@ -397,13 +404,14 @@ class FlatPassState:
             )
             for k, key in enumerate(make_spans_opening_keys)
         ]
-        flat_span_x1_value = flat_span_x1_per_chunk[0]
-        for k in range(1, _N_FLAT_SPAN_CHUNKS):
-            flat_span_x1_value = select(
-                compare(inp.span_row_y, k * _FLAT_SPAN_CHUNK - 0.5),
-                flat_span_x1_per_chunk[k],
-                flat_span_x1_value,
-            )
+        flat_span_chunk_oh = one_hot(
+            thermometer_floor_div(inp.span_row_y, _FLAT_SPAN_CHUNK, SCREEN_HEIGHT),
+            _N_FLAT_SPAN_CHUNKS,
+        )
+        flat_span_x1_value = pick_by_one_hot(
+            flat_span_chunk_oh,
+            concat(*flat_span_x1_per_chunk),
+        )
         flat_span_row = RecentMarkerHandle.publish(
             past,
             "flat_span_row",

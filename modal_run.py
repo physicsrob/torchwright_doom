@@ -87,7 +87,9 @@ def run_gpu(module: str, script: str, args: str, env: dict[str, str]) -> int:
     CACHE_VOLUME.reload()
     cmd = _build_cmd(module, script, args)
     if env:
-        print(f"[remote/gpu] env {' '.join(f'{k}={v}' for k, v in sorted(env.items()))}")
+        print(
+            f"[remote/gpu] env {' '.join(f'{k}={v}' for k, v in sorted(env.items()))}"
+        )
     print(f"[remote/gpu] {' '.join(cmd)}")
     t0 = time.time()
     rc = subprocess.run(cmd, env={**os.environ, **env}).returncode
@@ -107,7 +109,9 @@ def run_gpu(module: str, script: str, args: str, env: dict[str, str]) -> int:
 def run_cpu(module: str, script: str, args: str, env: dict[str, str]) -> int:
     cmd = _build_cmd(module, script, args)
     if env:
-        print(f"[remote/cpu] env {' '.join(f'{k}={v}' for k, v in sorted(env.items()))}")
+        print(
+            f"[remote/cpu] env {' '.join(f'{k}={v}' for k, v in sorted(env.items()))}"
+        )
     print(f"[remote/cpu] {' '.join(cmd)}")
     t0 = time.time()
     rc = subprocess.run(cmd, env={**os.environ, **env}).returncode

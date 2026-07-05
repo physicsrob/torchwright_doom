@@ -340,9 +340,26 @@ design targets, in expected-value order:
    read, and build `_lifted_instance_query` linearly (2q fuses into
    the Q projection) — kills L11–L12, moving the L13 read up −2.
 
+### Measurement integrity — pin torchwright (2026-07-05)
+
+Mid-session, a Modal probe returned `fused=1209 floor=38` against
+local `fused=722 floor=39` on identical doom code. Root cause: the
+shared torchwright checkout carries the width session's UNCOMMITTED
+`graph/optimize.py` (fusion pass) WIP, picked up by both the local
+editable install and Modal's `add_local_python_source` — at different
+moments. Every ledger number below was re-verified against **pinned
+torchwright main @ 15053eb** (scratchpad worktree + `PYTHONPATH=`,
+which wins module resolution locally AND at Modal image build):
+consolidation 734/41 ✓, step 1 722/39 ✓ (local and Modal agree
+exactly). Two probe-infrastructure fixes landed with step 1:
+`modal_run.py` env-var forwarding (screen-env trap on the remote) and
+the PYTHONPATH pinning procedure (memory: shared-torchwright-pinning).
+Side observation: the width WIP's extra fusion cuts the floor to 38
+on its own — the tracks interact constructively.
+
 ### P2/P3 — change → floor ledger
 
-Baseline 41 (post-consolidation).
+Baseline 41 (post-consolidation), torchwright pinned @ 15053eb.
 
 1. **41 → 39.** `render_ops.mod_sawtooth(scalar, base, max_value)` —
    the col_mod sawtooth generalized (grid extended to −1.45 holding
@@ -363,3 +380,20 @@ Baseline 41 (post-consolidation).
    `pix/R_DrawColumn` 86, `proj/plan`+`pmrk` 68) over a shared
    `proj/paint` prefix (L0–L19). Steps 2–4 (the plan-suffix cuts)
    can no longer move the floor alone.
+2. **39 → 39 (hardening, kept).** Chunk fold → `pick_by_one_hot`
+   (design/step 2): the K−1 chained selects at the old
+   `flat_state.py:401-406` replaced by one pick on
+   `one_hot(thermometer_floor_div(span_row_y, CHUNK))` — the mask is
+   off-chain (integer input slot → clean 0/1 one-hot), junk rows
+   collapse to chunk 0's pick bit-identically to the old fold, and
+   the published value is only read through the `is_span_row` marker
+   pick. Floor stays 39 as predicted, but the verification shows the
+   point: `proj/plan` and `proj/pmrk` VANISH from the zero-slack set
+   (222 of 6510 nodes: stor 86, pix/R_DrawColumn 86, proj/paint 30,
+   scene 9, dispatch 8). The visplane/plan chain now has ~5 layers of
+   anti-re-bind margin; the floor is held by the wall texel twins
+   over the shared `proj/paint` prefix — outside this work order's
+   scope (depth-track D2/D4 territory: D4 documented NO-GO, D2
+   measured +1). Steps 3–4 are NOT implemented: they would cut the
+   same already-slack chain deeper at real coordination cost in the
+   width-owned `flat_state.py`.
