@@ -194,3 +194,37 @@ certified-numbers lines refresh only at re-certification.
 - **The joint finish**: production CP-SAT at d=4096 with both tracks
   merged; the wins multiply (e.g. 45 layers × 4096 ≈ 85 GB of KV at
   57.4k positions vs today's 184).
+
+## Execution record
+
+- **2026-07-04, D1 landed** (`b35d250`): oracle 49 → 47 (fused 686 →
+  695), exactly the R2 prototype numbers. `make test` green (275
+  passed, 0 failed — includes the flat-pixel oracle, the AR rollout,
+  and the d=4096 compile gate, which now passes outright). Lowres
+  CP-SAT compile solved at 47 layers (floor met).
+- **2026-07-04, D2 measured +1 layer — runtime swap NOT landed.**
+  Implemented `apply_colormap_row` as
+  `table_lookup_2d(cmap_row, raw_palette_index, COLORMAP_ROWS,
+  sharpness=1000)`; the exact-match oracle
+  (`test_texture_oracle.py::test_apply_colormap_row_matches_reference`)
+  passes, and both verification caveats hold (the light row is
+  integer-valued at source on both spines — derived embedding column
+  on the wall side, constant integer tables on the flat side — and
+  reaches the lookup only through attention recovery, so it never
+  sits in a half-integer transition band). But the DAG floor measured
+  **48, not 47**: `table_lookup_2d` spends one sublayer
+  (`_upper_clamp` on the j axis) range-guarding its late-arriving
+  input, which the old PWL-then-pick form never paid — old chain from
+  `raw_palette_index` is 2 sublayers (PWL → gated pick, sum fuses),
+  new is 3 (`clamp_j → col_step → col_gate`). Witness: the
+  `stor/R_StoreWallRange` spine, colormap at L39–41 of 48. The
+  transposed orientation pays the same +1 on the i axis (`clamp_i →
+  row_step → row_deltas` = 3 to the live row vector). The
+  depth-neutral premise in the findings doc is falsified; the
+  ~17.6k-lane win is real but belongs to a width budget, not this
+  track. **Consequence: skip the D2 runtime swap; go straight to D4**
+  (composing the colormap into the texel tables deletes the whole
+  stage from both spines and leaves `apply_colormap_row` with no
+  callers — D2's swap would be churn). D2's verification work
+  (integrality at all call sites, per-column/per-span light
+  constancy) carries into D4 and is recorded above.
