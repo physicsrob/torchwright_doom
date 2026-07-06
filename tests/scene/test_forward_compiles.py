@@ -65,7 +65,15 @@ from torchwright_doom.render_main import forward
 # point, with d=4096 holding the production 64 head-slots.  (Production export uses
 # d_head=128/d_rot=64/d=8192; this gate validates the structural compile at the
 # lighter pair.)
-_D = 4096
+# 2026-07-06, univariate collapse (torchwright docs/univariate_collapse_plan.md):
+# a collapsed subgraph materializes ALL its boundary members one sublayer above
+# the source instead of progressively along the chain, so outputs whose
+# consumers sit far downstream stay live longer — higher simultaneous residual
+# pressure. The optimize=0 static schedule deadlocked at the old d=4096
+# cramming point with the pass on ("No progress: 321 nodes remaining");
+# d=4608 schedules with the pass on and off. (The production CP-SAT compile
+# at d=8192 / optimize=3 is unaffected: 37 layers, status OPTIMAL, both ways.)
+_D = 4608
 _D_HEAD = 64
 _D_ROT = 32
 
@@ -89,11 +97,12 @@ def test_forward_compiles_to_onnx(tmp_path) -> None:
         d_head=_D_HEAD,
         max_layers=400,
         verbose=False,
-        # RMSNorm is on by default at this power-of-two d.  The doom forward's
-        # fixed-point coordinates push the residual energy bound to ~2^99.6, so
-        # the identity needs the largest fp32-feasible pinned constant: q=63
-        # (budget 2^102, ~5x margin).  See compile_to_onnx_path's docstring.
-        rms_norm_const_exp=63,
+        # d=4608 is not a power of two, so the pinned-constant identity
+        # RMSNorm cannot be emitted — export without the norm (the examples'
+        # convention for odd widths).  The production export (d=8192, power
+        # of two) keeps the norm with q=63; this gate validates the
+        # structural compile, not the norm.
+        rms_norm=False,
     )
 
     assert os.path.exists(onnx_path), "compile_to_onnx wrote no ONNX file"
