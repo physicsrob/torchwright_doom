@@ -52,6 +52,13 @@ def main() -> None:
         default=40,
         help="rows in the per-source table (chain >= 2, deepest first)",
     )
+    ap.add_argument(
+        "--v2",
+        action="store_true",
+        help="run the v2 continuous-source analysis (report-only): "
+        "composed-PL certificates, S1/S2 shape models, modeled layer "
+        "floor, S2 residual-column liveness (Phase A of the v2 plan)",
+    )
     args = ap.parse_args()
 
     # Screen env BEFORE any graph-module import, or this silently
@@ -99,6 +106,29 @@ def main() -> None:
             f"-> {report.n_collapsed} collapsed, "
             f"{len(report.outcomes) - report.n_collapsed} declined"
         )
+
+    if args.v2:
+        # Phase A of the v2 plan: certify the composed PL of every
+        # subgraph v1 leaves (the texel chains), model S1/S2 shapes,
+        # the layer floor, and the S2 stage-1 residual-column liveness.
+        # Report-only; the lowered copy is throwaway (the floor model
+        # rewires it in place).
+        from torchwright.compiler.collapse_analysis import analyze_collapse_v2
+
+        print("\n=== v2 analysis (continuous-source collapse, Phase A) ===")
+        v2 = analyze_collapse_v2(lowered.output_node, lane_cap=lane_cap, verbose=True)
+        print(v2.format())
+        print(
+            f"liveness check: {v2.total_stage1_cols} strict / "
+            f"{v2.total_stage1_cols_banded} banded S2 stage-1 columns "
+            f"on top of the existing residual peak at d={m.d} "
+            f"(structural gate re-bracketed at d=4608 in the v1 rollout)"
+        )
+        detailed = [s for s in v2.subgraphs if s.members]
+        if detailed:
+            print("--- member detail (subgraphs with synthesized members) ---")
+            for s in detailed:
+                print(s.format_detail())
 
     # Per-source table on the PRE-collapse lowering (the sites where an
     # assert_integer would go live in the source graph).
