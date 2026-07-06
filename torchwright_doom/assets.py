@@ -33,7 +33,7 @@ from .std import (
     table_lookup_2d,
 )
 from .asset_banks import DEFAULT_ASSET_BANKS, AssetBanks
-from .pwl_banks import build_sawtooth_bank
+from .pwl_banks import build_v_mod_bank
 from .render_ops import add_const
 
 # Width of the per-texture height-index one-hot ``h_idx_oh`` returns
@@ -129,8 +129,20 @@ class WallAssets:
             d_fill=len(self.banks.wall_height_bank),
         )
 
+    def _v_mod_for_bank(self, bank, v_mods: tuple) -> Node:
+        """The bank's own-height ``floor(v) mod H`` entry.
+
+        Banks are single-height, so no ``h_idx_oh`` pick sits on the
+        row-address path.  A bank whose height is not in
+        ``wall_height_bank`` (the 1x1 missing-texture bank) gets entry 0:
+        its table has a single row, so any bounded input addresses it.
+        """
+        heights = self.banks.wall_height_bank
+        idx = heights.index(bank.height) if bank.height in heights else 0
+        return v_mods[idx]
+
     @annotated("tex")
-    def palette_index(self, tex_id: Node, u_native: Node, v_mod_h: Node) -> Node:
+    def palette_index(self, tex_id: Node, u_native: Node, v_mods: tuple) -> Node:
         bank_id = self.bank_id(tex_id)
         local_id = self.local_id(tex_id)
         bank_mask = one_hot(bank_id, len(self.banks.wall_banks))
@@ -144,7 +156,7 @@ class WallAssets:
                                 len(bank.global_ids),
                                 self.banks.wall_local_id_values_by_bank[bank.bank_id],
                             ),
-                            v_mod_h,
+                            self._v_mod_for_bank(bank, v_mods),
                         ),
                         self.banks.wall_bank_row_addr[bank.bank_id],
                     ),
@@ -240,7 +252,7 @@ class AssetIndex:
     flats: FlatAssets = field(init=False)
     weapon: WeaponAssets = field(init=False)
     hud: HudAssets = field(init=False)
-    sawtooth_bank: tuple = field(init=False)
+    v_mod_bank: tuple = field(init=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "walls", WallAssets(self.banks))
@@ -248,5 +260,5 @@ class AssetIndex:
         object.__setattr__(self, "weapon", WeaponAssets(self.banks))
         object.__setattr__(self, "hud", HudAssets(self.banks))
         object.__setattr__(
-            self, "sawtooth_bank", build_sawtooth_bank(self.banks.wall_height_bank)
+            self, "v_mod_bank", build_v_mod_bank(self.banks.wall_height_bank)
         )

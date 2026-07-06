@@ -41,28 +41,35 @@ def _scalar(node) -> float:
     return float(_vec(node)[0])
 
 
+def _v_mods(v: float) -> tuple:
+    """Teacher-forced per-height v_mod tuple: the same already-wrapped value
+    in every WALL_HEIGHT_BANK slot (each bank reads its own height's entry,
+    so a uniform tuple reproduces the old single-scalar semantics)."""
+    return tuple(constant(v) for _ in ab.WALL_HEIGHT_BANK)
+
+
 def test_wall_palette_index_matches_wad():
     walls = WallAssets()
     # tex 1 = BROWN1 (native 128 wide); u=128 wraps to native column 0 via the
     # per-bank floor-mod sawtooth.
     brown1 = BOOK.wall_textures[0]
     assert _scalar(
-        walls.palette_index(constant(1.0), constant(128.0), constant(0.0))
+        walls.palette_index(constant(1.0), constant(128.0), _v_mods(0.0))
     ) == float(brown1.pixels[0][0])
     assert _scalar(
-        walls.palette_index(constant(1.0), constant(128.0), constant(10.0))
+        walls.palette_index(constant(1.0), constant(128.0), _v_mods(10.0))
     ) == float(brown1.pixels[0][10])
     # u in range (no wrap), and a wrap past one period (u = 133 -> column 5).
     assert _scalar(
-        walls.palette_index(constant(1.0), constant(5.0), constant(3.0))
+        walls.palette_index(constant(1.0), constant(5.0), _v_mods(3.0))
     ) == float(brown1.pixels[5][3])
     assert _scalar(
-        walls.palette_index(constant(1.0), constant(133.0), constant(3.0))
+        walls.palette_index(constant(1.0), constant(133.0), _v_mods(3.0))
     ) == float(brown1.pixels[5][3])
     # tex 3 = COMPUTE2, a different (256x56) bank, to exercise the bank_mask.
     comp = BOOK.wall_textures[2]
     assert _scalar(
-        walls.palette_index(constant(3.0), constant(10.0), constant(4.0))
+        walls.palette_index(constant(3.0), constant(10.0), _v_mods(4.0))
     ) == float(comp.pixels[10][4])
 
 
@@ -70,7 +77,7 @@ def test_wall_missing_texture_returns_zero():
     # tex 0 = MISSING_TEXTURE_ID routes to bank 0 (the 1x1x1 zero bank).
     walls = WallAssets()
     assert (
-        abs(_scalar(walls.palette_index(constant(0.0), constant(7.0), constant(2.0))))
+        abs(_scalar(walls.palette_index(constant(0.0), constant(7.0), _v_mods(2.0))))
         < ATOL
     )
 
@@ -126,7 +133,7 @@ def test_assets_exposed_through_scene_index():
     # the surface is callable and matches the WAD through SceneIndex's field type.
     brown1 = BOOK.wall_textures[0]
     assert _scalar(
-        index.walls.palette_index(constant(1.0), constant(0.0), constant(0.0))
+        index.walls.palette_index(constant(1.0), constant(0.0), _v_mods(0.0))
     ) == float(brown1.pixels[0][0])
 
 

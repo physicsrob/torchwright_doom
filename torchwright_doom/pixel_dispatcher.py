@@ -29,7 +29,7 @@ from .flat_pass_renderer import FlatPassRenderer
 from .lighting import apply_colormap_row
 from .psprite_renderer import PspriteRenderer
 from .statusbar_renderer import StatusBarRenderer
-from .pwl_banks import MOD64_PWL
+from .pwl_banks import FLOOR_MOD64
 from .render_ops import (
     FLOOR_NATIVE,
     add_const,
@@ -51,7 +51,7 @@ from .std import (
     type_switch,
 )
 from .std import sum as vec_sum
-from .uv_compute import compute_v_at_pixel, compute_v_native_at_screen_y
+from .uv_compute import compute_v_mods_at_pixel, compute_v_native_at_screen_y
 from .value_ranges import ValueRange
 from .vocab import PIXEL, SET_CURSOR_X, WALL_COL_U, make_value
 from .wall_column_renderer import WallColumnRenderer
@@ -233,17 +233,16 @@ class PixelDispatcher:
         projection = self.projection
         span = projection.wall.wall_span_runtime.span_start_values(projection.core.past)
         span_v0 = projection.wall.wall_span_runtime.span_v0_values(projection.core.past)
-        v_scaled_mod_H = compute_v_at_pixel(
+        v_mods = compute_v_mods_at_pixel(
             pixel_index_vec=pixel_index_vec,
             dc_iscale=span.dc_iscale,
             v_0_at_top=span_v0.v0_at_top,
-            h_idx_oh=span.h_idx_oh,
-            sawtooth_bank=projection.core.scene.assets.sawtooth_bank,
+            v_mod_bank=projection.core.scene.assets.v_mod_bank,
         )
         raw_palette_index = projection.core.scene.assets.walls.palette_index(
             span.tex_id,
             span.u_native,
-            v_scaled_mod_H,
+            v_mods,
         )
         return apply_colormap_row(raw_palette_index, span.cmap_row)
 
@@ -277,8 +276,8 @@ class PixelDispatcher:
         k_ystep = mul_k_step(pixel_index_vec, cursor.ystep)
         xfrac_k = vec_sum(cursor.xfrac0, k_xstep)
         yfrac_k = vec_sum(cursor.yfrac0, k_ystep)
-        u = MOD64_PWL(FLOOR_NATIVE(xfrac_k))
-        v = MOD64_PWL(FLOOR_NATIVE(yfrac_k))
+        u = FLOOR_MOD64(xfrac_k)
+        v = FLOOR_MOD64(yfrac_k)
         raw_palette = projection.core.scene.assets.flats.palette_index(
             cursor.flat_id,
             u,

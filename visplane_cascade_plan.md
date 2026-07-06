@@ -560,3 +560,46 @@ Baseline 41 (post-consolidation), torchwright pinned @ 15053eb.
    measured +1). Steps 3–4 are NOT implemented: they would cut the
    same already-slack chain deeper at real coordination cost in the
    width-owned `flat_state.py`.
+3. **38 → 37 (tier 1 of the depth-handoff follow-through; measured
+   on torchwright @ 7d71884 where the fusion-in-lower re-baseline is
+   38).** Landed as two changes on the wall-texel spine:
+   - **Per-bank v_mod, pick off the row path** (the −1 that stuck):
+     wall banks are single-height, so `WallAssets.palette_index` now
+     takes the per-height mod tuple and feeds each bank its own
+     entry directly — the `h_idx_oh` pick (broadcast_select + pick)
+     leaves the row-address path. Junk-row story: unselected banks
+     see their own-height mod of possibly-junk `v_native` — bounded
+     junk, discarded by `bank_mask` exactly as their junk u/row
+     candidates were before. `span.h_idx_oh` is left published but
+     now has no pixel-side reader (vestigial payload width; protocol
+     change deferred).
+   - **`floor_int(output_map=…)` adoption where it is width-free**:
+     `pwl_banks.FLOOR_MOD64` folds the flat-tile `mod 64` into the
+     floor's saturating stage at both flat sites
+     (`pixel_dispatcher.flat_pixel_atlas_color`) — a 1:1 swap for
+     the old floor→PWL pair.
+   **Width-gate catch (recorded so nobody retries it naively):** the
+   full form — per-height `floor_int(output_map=mod H)` at the
+   wall-v site too — measured **36**, but `floor_int`'s bounded-step
+   stage materializes ~2046 RESIDUAL columns and four of them live
+   at once (~8.2k) blow the d=4096 compile gate
+   (`test_forward_compiles_to_onnx`: "No progress: 330 nodes
+   remaining, 0 free columns"). The CP-SAT depth oracle does not
+   model column capacity; the gate does. Reverted to one shared
+   floor + per-height single-FFN mod PWLs (no residual
+   intermediate). The lost −1 comes back if torchwright grows a
+   multi-`output_map` floor_int sharing the step stage across the K
+   wraps (stage 2 is hidden lanes, not residual columns) — added to
+   the torchwright follow-ups.
+   Witness at 37/36: the v chain is OFF the spine; `clamp_i` still
+   binds — `scripts/clamp_range_probe.py` measured 40/40 clamps
+   kept, blocked by (a) `pick_by_one_hot`'s affine rule not modeling
+   one-hot exclusivity (mitigated by the per-bank feed) and (b) the
+   skip condition demanding exactly `[0, top]` while doom's mod
+   outputs carry ±ε PWL slack. (b) is escalated to torchwright
+   (`torchwright_ops_depth_handoff.md`, status header): relaxing the
+   condition by the identity band (~0.37 index units past the last
+   boundary per `083813a`'s own message) is worth −1 immediately.
+   The dispatch tail (`cond_gate → Linear → cond_gate → Linear`) is
+   the item-3 (multi-condition cond_gate) target, also
+   torchwright-side.

@@ -3,11 +3,17 @@
 The chain mirrors DOOM ``R_DrawColumn`` texture stepping (r_draw.c:132-145)::
 
     v_native = dc_texturemid + (y - centery) * dc_iscale
-    v_floor  = floor(v_native)
-    v_mod_h  = v_floor % texture_height
+    v_floor  = floor(v_native)                       (ONE shared floor)
+    v_mod_h  = v_floor % texture_height              (one PWL per bank height)
 
-``SAWTOOTH_BANK`` is one ``mod H`` PWL per ``WALL_HEIGHT_BANK`` height;
-``h_idx_oh`` selects which mod to return via ``pick_by_one_hot``.
+``build_v_mod_bank`` gives one ``v_floor mod H`` PWL per ``WALL_HEIGHT_BANK``
+height; this module floors once and evaluates ALL of them, returning the
+tuple.  Each wall bank is single-height, so ``assets.WallAssets.palette_index``
+feeds each bank its own height's entry directly — no ``h_idx_oh`` pick on the
+row-address path (unselected banks see their own-height mod of a possibly-junk
+``v_native``: bounded junk, discarded by the bank mask exactly like their
+junk u/row candidates today).  The floor is shared, not folded per-height —
+see ``pwl_banks`` for the width story.
 
 Changes from the original: ``Vec`` -> ``Node``; the module-level ``multiply`` /
 ``floor_int`` / ``constant(CENTER_Y)`` nodes become the ``render_ops`` shims
@@ -26,28 +32,25 @@ from torchwright.graph import Node
 from torchwright.graph import annotated
 
 from .constants import CENTER_Y
-from .pwl_banks import SAWTOOTH_BANK
+from .pwl_banks import V_MOD_BANK
 from .render_ops import FLOOR_NATIVE, add_const, mul_pixel_dc_iscale
-from .std import concat, pick_by_one_hot
 from .std import sum as vec_sum
 
 
 @annotated("paint")
-def compute_v_at_pixel(
+def compute_v_mods_at_pixel(
     *,
     pixel_index_vec: Node,
     dc_iscale: Node,
     v_0_at_top: Node,
-    h_idx_oh: Node,
-    sawtooth_bank: tuple | None = None,
-) -> Node:
-    """Return ``v_scaled_mod_H`` for one pixel."""
-    sawtooth_bank = SAWTOOTH_BANK if sawtooth_bank is None else sawtooth_bank
+    v_mod_bank: tuple | None = None,
+) -> tuple[Node, ...]:
+    """Return ``floor(v) mod H`` for one pixel, one entry per bank height."""
+    v_mod_bank = V_MOD_BANK if v_mod_bank is None else v_mod_bank
     v_offset = mul_pixel_dc_iscale(pixel_index_vec, dc_iscale)
     v_native = vec_sum(v_offset, v_0_at_top)
-    v_scaled = FLOOR_NATIVE(v_native)
-    bank = concat(*[pwl(v_scaled) for pwl in sawtooth_bank])
-    return pick_by_one_hot(h_idx_oh, bank)
+    v_floor = FLOOR_NATIVE(v_native)
+    return tuple(mod_h(v_floor) for mod_h in v_mod_bank)
 
 
 @annotated("paint")
