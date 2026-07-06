@@ -28,6 +28,7 @@ from dataclasses import dataclass
 
 from torchwright.graph import Node
 from torchwright.graph import annotated
+from torchwright.graph.asserts import assert_integer
 
 from .attention_handles import RecentMarkerHandle
 from .constants import HUD_ENABLED
@@ -399,7 +400,18 @@ class SegProjection:
         # setCursorX.x carries the SCREEN coordinate; convert it back to a column
         # (// PIXEL_WIDTH) here so every downstream clip/visplane read is column-
         # space (identity in high-detail).
-        cursor_x_scalar = column_from_screen_x(cursor_x_row.pick(past, input_x_or_zero))
+        #
+        # Integer claim on the pick: setCursorX.x is an integer screen
+        # coordinate by protocol; before the first SET_CURSOR_X row the
+        # value channel is all zeros (the _or_zero convention), so the
+        # unanchored blend is exactly 0; after it, the pick carries the
+        # ~0.02 recovery leak (see render_ops.radix_col_key) — atol 0.05
+        # is the collapse pass's plateau band, which that leak sits well
+        # inside.  The claim lets the univariate collapse rebuild the
+        # downstream radix-key/emit chains as single staircase FFNs.
+        cursor_x_scalar = column_from_screen_x(
+            assert_integer(cursor_x_row.pick(past, input_x_or_zero), atol=0.05)
+        )
         cursor_x_scalar_pub = past.publish("cursor_x_scalar_value", cursor_x_scalar)
         # Late input sidecar (emitted after cursor_x in protocol order).
         input_xtova_cos_or_zero = past.publish(

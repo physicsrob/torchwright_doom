@@ -13,23 +13,22 @@ from typing import Iterator
 
 @contextmanager
 def silenced_graph_asserts() -> Iterator[None]:
-    """Disable ``torchwright`` Assert predicate checks for the duration.
+    """Disable ``torchwright`` attached-check predicates for the duration.
 
     The renderer builds every dispatch branch's candidate at every position
     and masks by token type, so a ``select`` / ``cond_gate`` cond on a
     *discarded* branch can land inside a comparator ramp (e.g. ``gt_height``
     of two garbage recovered heights) and trip the gated ops' shared ±1
-    Assert during ``reference_eval``.  At the active row the cond is clean
-    (DOOM heights are integers).  The oracle gates and the Plan-K diagnostics validate via
-    next-token agreement, not the debug Asserts — and Asserts are stripped on
-    the compiled path anyway (re-checked only under ``debug=True``) — so
-    exact-math passes silence the predicates instead.
-    """
-    import torchwright.graph.misc as _misc
+    assert during ``reference_eval``.  At the active row the cond is clean
+    (DOOM heights are integers).  The oracle gates and the Plan-K diagnostics
+    validate via next-token agreement, not the debug asserts — so exact-math
+    passes silence the predicates instead.
 
-    orig = _misc.Assert._check
-    _misc.Assert._check = lambda self, x: None
-    try:
+    Checks are node metadata since the assert-metadata migration
+    (torchwright docs/assert_metadata_plan.md — no wrapper nodes), so this
+    delegates to torchwright's own ``suppress_checks`` switch.
+    """
+    from torchwright.graph.node import suppress_checks
+
+    with suppress_checks():
         yield
-    finally:
-        _misc.Assert._check = orig

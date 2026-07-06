@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from torchwright.graph import Node
 from torchwright.graph import annotated
+from torchwright.graph.asserts import assert_integer
 
 from .assets import _H_IDX_OH_WIDTH
 from .attention_handles import RecentMarkerHandle
@@ -630,8 +631,14 @@ class WallColumnState:
 
     @annotated("paint")
     def span_values(self, past: PastHandleScope) -> WallColumnSpanValues:
+        # Integer claims on all nine components: the ±1 visibility gates
+        # and the per-tier pixel rows are integers up to the pick's
+        # softmax leak (atol 0.05 = the collapse pass's plateau band).
+        # The claims let the univariate collapse rebuild each split
+        # output's downstream texture chain as one staircase FFN
+        # (docs/univariate_collapse_plan.md — the split_7 winner).
         values = split(self.pick(past, self.span_state), [1] * 9)
-        return WallColumnSpanValues(*values)
+        return WallColumnSpanValues(*(assert_integer(v, atol=0.05) for v in values))
 
     @annotated("paint")
     def clip_range_values(self, past: PastHandleScope) -> tuple[Node, Node]:
@@ -709,7 +716,33 @@ class WallSpanRuntimeState:
                 1,
             ],
         )
-        return SpanStartValues(*values)
+        sv = SpanStartValues(*values)
+
+        # Integer claims on the integer-valued components — pixel rows,
+        # counts, ids, the ±1 has_next gate — up to the pick's softmax
+        # leak (atol 0.05 = the collapse pass's plateau band).  The
+        # fixed-point fractions (dc_iscale, dc_texturemid, u_native) and
+        # the one-hot stay unclaimed.  tex_id's claim is what lets the
+        # univariate collapse rebuild the per-texture
+        # onehot_lookup_select chains as single staircase FFNs
+        # (docs/univariate_collapse_plan.md — the split_7 winner).
+        def _int(v: Node) -> Node:
+            return assert_integer(v, atol=0.05)
+
+        return SpanStartValues(
+            y_start=_int(sv.y_start),
+            height=_int(sv.height),
+            dc_iscale=sv.dc_iscale,
+            dc_texturemid=sv.dc_texturemid,
+            h_idx_oh=sv.h_idx_oh,
+            u_native=sv.u_native,
+            cmap_row=_int(sv.cmap_row),
+            tex_id=_int(sv.tex_id),
+            ordinal=_int(sv.ordinal),
+            has_next=_int(sv.has_next),
+            next_y=_int(sv.next_y),
+            next_ordinal=_int(sv.next_ordinal),
+        )
 
     @annotated("paint")
     def span_v0_values(self, past: PastHandleScope) -> SpanV0Values:
