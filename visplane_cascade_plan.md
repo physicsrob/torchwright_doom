@@ -603,3 +603,8 @@ Baseline 41 (post-consolidation), torchwright pinned @ 15053eb.
    The dispatch tail (`cond_gate → Linear → cond_gate → Linear`) is
    the item-3 (multi-condition cond_gate) target, also
    torchwright-side.
+   **Gates, all green**: production-width compile 37 layers at
+   d=8192 (cache key `d628bf0a…`, real compile — the width fix holds
+   beyond the d=4096 gate); `make test` 275 passed; lowres
+   `COMPARE=1` coverage 100.0% / within-option 100.0% (exact color
+   91.5%, the usual lighting-option class).
