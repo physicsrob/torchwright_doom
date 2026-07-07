@@ -54,6 +54,7 @@ from .std import (
     AngleInputEmit,
     ScalarEmit,
     angle_scalar,
+    bool_and,
     bool_or,
     bool_to_01,
     clamp,
@@ -182,7 +183,9 @@ def dispatch_next_token(
     # (each head is ~19 cols + its inputs; +~3% peak from 2→8). 8 captures most of
     # the depth win at a residual that still fits a modest d. The reassociation is
     # output-identical (scripts/check_fanout_equivalence.py: 0 next-token diffs).
-    head = type_switch(*_distinct_head_pairs(inp, branches), max_fanout=8)
+    # 16 keeps the sum single-level after the shared pixel branches' arms are
+    # flattened into this switch (~15 distinct heads); 8 would re-add a level.
+    head = type_switch(*_distinct_head_pairs(inp, branches), max_fanout=16)
     return concat(head, emit_derived_zero())
 
 
@@ -219,11 +222,26 @@ def _distinct_head_pairs(
 ) -> tuple[tuple[Node, Node], ...]:
     """Group transitions by the head node they select, OR-ing the predicates of
     transitions that share a head. Returns one ``(predicate, head)`` pair per
-    distinct head, in first-seen order — the input to ``type_switch``."""
+    distinct head, in first-seen order — the input to ``type_switch``.
+
+    A branch whose value is a *tuple* of ``(mask, arm)`` pairs (the shared
+    pixel branches' exclusive-mask priority forks) is flattened here instead
+    of switching inside the branch: each arm joins the dispatch switch with
+    ``bool_and(transition_pred, mask)``. The masks and transition predicates
+    all derive from the input token and early latch flags, so the joint conds
+    are ready long before the arms — the fork costs no gate+sum level of its
+    own. Exactly one joint cond is +1 overall (one transition pred is +1; the
+    masks within a branch are exclusive)."""
     pairs = [
         (branches[t.branch], getattr(inp, t.predicate)) for t in DISPATCH_TRANSITIONS
     ]
-    return tuple((pred, head) for head, pred in _group_by_value(pairs))
+    flat: list[tuple[Node, Node]] = []
+    for value, pred in _group_by_value(pairs):
+        if isinstance(value, tuple):
+            flat.extend((arm, bool_and(pred, mask)) for mask, arm in value)
+        else:
+            flat.append((value, pred))
+    return tuple((pred, head) for head, pred in _group_by_value(flat))
 
 
 # DOOM: R_RenderPlayerView (r_main.c) — top-level per-frame render dispatch

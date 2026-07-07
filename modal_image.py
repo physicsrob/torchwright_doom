@@ -7,12 +7,18 @@ of torchwright_doom can't run Modal entrypoints without the sibling
 torchwright checkout — Modal is workspace-mode-only.
 """
 
+import importlib.util
 from pathlib import Path
 
 import modal
 
 _HERE = Path(__file__).resolve().parent
-_TORCHWRIGHT = _HERE.parent / "torchwright"
+# Resolve the sibling torchwright checkout through the installed (editable)
+# package rather than directory layout — the layout guess breaks in git
+# worktrees, where this file is not directly under the umbrella.
+_TORCHWRIGHT = Path(
+    importlib.util.find_spec("torchwright").origin  # type: ignore[arg-type]
+).resolve().parents[1]
 
 IMAGE = (
     modal.Image.debian_slim(python_version="3.12")

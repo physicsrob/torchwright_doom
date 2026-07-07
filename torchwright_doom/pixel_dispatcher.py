@@ -98,8 +98,14 @@ class PixelDispatcher:
         flat_arm: "Node",
         wall_arm: "Node",
         hud_arm: "Node | None",
-    ) -> "Node":
-        """One-layer exclusive-mask form of hud > weapon > flat > wall."""
+    ) -> tuple[tuple["Node", "Node"], ...]:
+        """Exclusive-mask (cond, arm) pairs for hud > weapon > flat > wall.
+
+        Returns the pairs instead of switching here: the dispatch folds them
+        into its own flat ``type_switch`` (each cond AND-ed with the branch's
+        transition predicate), so the branch pays no gate+sum level of its
+        own. Exactly one cond is +1 (same exclusive-mask argument as before).
+        """
         flats = self.projection.flats
         weapon_seen = flats.weapon.weapon_seen
         flat_seen = flats.flat_pass.flat_span_seen
@@ -107,7 +113,7 @@ class PixelDispatcher:
         not_flat = bool_not(flat_seen)
         # HUD off: no HUD arm built at all (bit-identical to pre-HUD).
         if hud_arm is None:
-            return type_switch(
+            return (
                 (weapon_seen, weapon_arm),
                 (bool_and(flat_seen, not_weapon), flat_arm),
                 (bool_and(not_flat, not_weapon), wall_arm),
@@ -115,7 +121,7 @@ class PixelDispatcher:
         hud = flats.hud
         assert hud is not None  # built on the HUD_ENABLED path (guarded above)
         not_hud = bool_not(hud.hud_seen)
-        return type_switch(
+        return (
             (hud.hud_seen, hud_arm),
             (bool_and(weapon_seen, not_hud), weapon_arm),
             (bool_and(flat_seen, not_weapon, not_hud), flat_arm),
