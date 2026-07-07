@@ -97,6 +97,21 @@ experiments spent it. Next depth work attacks THIS chain (provenance
 trace first — the old visplane_cascade_plan's unimplemented steps 3–4
 targeted it and may now bind).
 
+## Validation (2026-07-06, at 3553201 — everything except the production render)
+
+- lint: green (black, mypy, ruff) after the cleanup commit.
+- `make test`: 5/5 shards PASS, 0 failures.
+- d=4608 structural compile gate (`test_forward_compiles_to_onnx`):
+  **PASS**, real 115s run — the transpose's wider row vectors and the
+  fanout-16 dispatch fit the column budget.
+- lowres COMPARE (160×100, fresh production-width compile, 17,336
+  tokens, stopped=terminal): **coverage 100.0%** (15,854/15,854, zero
+  missing/extra), **within-option 100.0%** — matches the recorded
+  "lowres cert 100/100" gate. Exact color match 91.6%; exact-match is
+  not a gate metric and no same-scene baseline was captured this
+  session — diff against a main-checkout run if it matters.
+- NOT run: production 320×200 COMPARE (explicitly excluded).
+
 ## Open next candidates (in rough value order)
 
 - Early bank pick / shared column stage (candidate −1): bank mask is
