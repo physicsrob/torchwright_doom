@@ -40,6 +40,17 @@ This also explains the old D2 "+1" measurement — same rewrite class,
 same mechanism. Corollary rule: **on the depth track, keep value maps on
 the late operand and gate construction on the early operand.**
 
+## 4. 35 → 34 — CEIL_Y via floor_int(output_map=−k) (a88583c)
+
+Fresh-eyes provenance trace of the current cascade (chain_provenance on
+Modal) showed spine layer L10 was entirely ceil_int's output affine
+(add_const + negate after the saturate stage). Rebuilt CEIL_Y /
+CEIL_Y_WIDE doom-side as floor_int(−x, output_map=−k): the per-step
+output constants fold into the saturate weights (FLOOR_MOD64
+precedent) — zero width delta, exact-math equivalent (14-point check
+incl. saturation edges). The parallel FLOOR_Y_WIDE path already ended a
+layer earlier, so the ceil tail was the sole binder. `fused=1215`.
+
 ## Open next candidates (in rough value order)
 
 - Early bank pick / shared column stage (candidate −1): bank mask is
