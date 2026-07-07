@@ -45,6 +45,7 @@ from .render_ops import (
     sub,
 )
 from .std import (
+    bool_and,
     compare,
     concat,
     constant,
@@ -394,11 +395,25 @@ class WallColumnState:
         # each clip variant is one conjunction over compares available at
         # the clip pick itself, resolved once on clip.present — instead of
         # chaining behind the resolved yh select.
-        lower_ok_shared = le_span_y(lower_mid, yh_unclipped)
+        # le(lower_mid, c) with lower_mid = max(low_y_ceil, lower_min)
+        # expands exactly to and(le(low_y_ceil, c), le(lower_min, c)) —
+        # the pairwise les skip lower_mid's own layer, so each variant arm
+        # is one bool_and over les available at the ceil itself (same
+        # flat-arm + end-select shape as middle/upper below).
         lower_span_ok_value = select(
             clip.present,
-            and_(lower_ok_shared, le_span_y(lower_mid, rec_floor_max)),
-            and_(lower_ok_shared, le_span_y(lower_mid, screen_height_m1)),
+            bool_and(
+                le_span_y(low_y_ceil, yh_unclipped),
+                le_span_y(lower_min, yh_unclipped),
+                le_span_y(low_y_ceil, rec_floor_max),
+                le_span_y(lower_min, rec_floor_max),
+            ),
+            bool_and(
+                le_span_y(low_y_ceil, yh_unclipped),
+                le_span_y(lower_min, yh_unclipped),
+                le_span_y(low_y_ceil, screen_height_m1),
+                le_span_y(lower_min, screen_height_m1),
+            ),
         )
         lower_texture = scene.segs.lower_texture(seg_i)
         lower_textured = and_(lower_geom, lower_texture)
@@ -521,27 +536,32 @@ class WallColumnState:
         # compares available at the clip pick, resolved once on
         # clip.present. All values are integers, so the half-integer
         # le thresholds are untouched.
+        # Each variant arm is ONE bool_and layer over the pairwise les (the
+        # nested two-input and_ form spent a second compare layer per arm).
+        # The end-select on present stays: present's own chain is depth-
+        # comparable to the geometry, so resolving at the END keeps the les
+        # running in parallel with it (operand-level picks were measured +1
+        # — they serialize present in front of every le).
         mid_ok_shared = le_span_y(yl_unclipped, yh_unclipped)
         middle_span_ok_value = select(
             clip.present,
-            and_(
-                and_(mid_ok_shared, le_span_y(yl_unclipped, rec_floor_max)),
-                and_(
-                    le_span_y(rec_ceiling_min, yh_unclipped),
-                    le_span_y(rec_ceiling_min, rec_floor_max),
-                ),
+            bool_and(
+                mid_ok_shared,
+                le_span_y(yl_unclipped, rec_floor_max),
+                le_span_y(rec_ceiling_min, yh_unclipped),
+                le_span_y(rec_ceiling_min, rec_floor_max),
             ),
             and_(mid_ok_shared, le_span_y(open_ceiling_min, yh_unclipped)),
         )
         up_ok_shared = le_span_y(yl_unclipped, upper_mid_unclipped)
+        # Same flat-arm form as middle above.
         upper_span_ok_value = select(
             clip.present,
-            and_(
-                and_(up_ok_shared, le_span_y(yl_unclipped, rec_floor_max)),
-                and_(
-                    le_span_y(rec_ceiling_min, upper_mid_unclipped),
-                    le_span_y(rec_ceiling_min, rec_floor_max),
-                ),
+            bool_and(
+                up_ok_shared,
+                le_span_y(yl_unclipped, rec_floor_max),
+                le_span_y(rec_ceiling_min, upper_mid_unclipped),
+                le_span_y(rec_ceiling_min, rec_floor_max),
             ),
             and_(up_ok_shared, le_span_y(open_ceiling_min, upper_mid_unclipped)),
         )
@@ -556,21 +576,19 @@ class WallColumnState:
         cl_um_u = SPAN_Y_CLAMP(upper_mid_unclipped)
         cl_rec_c1 = SPAN_Y_CLAMP(rec_ceiling_min)
         cl_rec_f1 = SPAN_Y_CLAMP(rec_floor_max)
+        # select(and(present, gt(a,b)), a, b) == select(present, max(a,b), b)
+        # (tie: gt false picks b == a). max/min are one FFN sublayer (the
+        # abs form), and the select cond is bare present — the gt→and_
+        # chain in the cond spent two layers behind the clamps.
         middle_y1 = select(
-            and_(clip.present, gt_screen(cl_rec_c1, cl_yl_u)),
-            cl_rec_c1,
-            cl_yl_u,
+            clip.present, max_screen(cl_yl_u, cl_rec_c1), cl_yl_u
         )
         middle_y2 = select(
-            and_(clip.present, gt_screen(cl_yh_u, cl_rec_f1)),
-            cl_rec_f1,
-            cl_yh_u,
+            clip.present, min_screen(cl_yh_u, cl_rec_f1), cl_yh_u
         )
         upper_y1_published = middle_y1  # upper_y1 is yl; same clamped bound
         upper_y2_published = select(
-            and_(clip.present, gt_screen(cl_um_u, cl_rec_f1)),
-            cl_rec_f1,
-            cl_um_u,
+            clip.present, min_screen(cl_um_u, cl_rec_f1), cl_um_u
         )
         lower_y1_published = SPAN_Y_CLAMP(lower_y1)
         lower_y2_published = middle_y2  # lower_y2 is yh; same clamped bound
