@@ -46,7 +46,8 @@ from torchwright.compiler.forward.cpsat_scheduler import (
     CONSTRAINT_FAMILIES,
     build_cpsat_model,
 )
-from torchwright.compiler.forward.graph_analysis import GraphAnalyzer
+from torchwright.compiler.lower import lower
+from torchwright.graph.optimize import fuse_consecutive_linears
 from torchwright.ops.inout_nodes import create_rope_config
 from torchwright_doom.embedding import build_doom_embedding
 from torchwright_doom.past import GraphPast
@@ -90,9 +91,14 @@ def main() -> None:
     emb = build_doom_embedding("token_ids")
     rope = create_rope_config(d_head=D_HEAD, max_positions=65536, d_rot=D_HEAD // 2)
     nt = forward(emb, GraphPast(input_vec=emb, rope=rope))
-    graph = GraphAnalyzer(nt)
-    output_node = graph.get_output_node()
-    print(f"graph: {len(graph.get_all_nodes())} nodes in {time.perf_counter() - t0:.1f}s")
+    # FUSE + LOWER before modeling — the production compile schedules the
+    # fused graph, and the DAG floor (33) is a fused-graph number. Round-2
+    # lesson (measured): probing the RAW graph reproduces the un-fused
+    # dependency floor (38) and says nothing about production; the June
+    # harness's lb=38 was exactly that artifact.
+    n_fused = fuse_consecutive_linears({nt}, verbose=False)
+    output_node = lower(nt).output_node
+    print(f"fused={n_fused} in {time.perf_counter() - t0:.1f}s")
 
     cum = frozenset(_CUMULATIVE_FAMILIES)
     cancels = frozenset({"cancel_consumer_lb", "cancel_slack"})
@@ -100,13 +106,15 @@ def main() -> None:
     # in seconds — no single cumulative binds alone. Peel in combinations,
     # ending at dependency-only (must admit the DAG floor 33 — sanity).
     configs: list[tuple[str, frozenset]] = [
+        # Sanity FIRST: dependency-only must admit the fused DAG floor (33);
+        # if not, the harness diverges from the oracle and nothing below
+        # can be trusted.
+        ("dependency-only", frozenset(CONSTRAINT_FAMILIES) - {"dependency"}),
         ("all-on", frozenset()),
         ("minus-all-cumulatives", cum),
         ("minus-cancel_slack", frozenset({"cancel_slack"})),
         ("minus-cancels", cancels),
-        ("minus-cum-minus-cancel_slack", cum | frozenset({"cancel_slack"})),
         ("minus-cum-minus-cancels", cum | cancels),
-        ("dependency-only", frozenset(CONSTRAINT_FAMILIES) - {"dependency"}),
     ]
 
     for name, disabled in configs:
