@@ -8,14 +8,17 @@
 # faster 160x100 low-detail preview).  Everything else is a /tmp variant.
 #
 # State: scale 1 = 320x200 low-detail, d=8192 / decoupled 16k MLP,
-# CP-SAT schedule (optimize: 3), 51 compiled layers.  Position is RoPE (rotary
+# CP-SAT schedule (optimize: 2 — the 180s budget is a deliberate cap, do
+# not raise it back to 3; a solver-validated schedule can be pre-seeded
+# into the schedule cache instead, see depth_experiments_log.md).
+# Position is RoPE (rotary
 # attention, d_rot=64 partial); recency reads use the gain-8 global-position
 # tiebreak (RECENCY_GAIN, render_constants.py).  Rendered by the native
 # HuggingFace model (the production runtime) with an unbounded KV cache.
 # Certified against the pydoom reference at 320x200: 100% pixel coverage,
 # ~99.99% within-option color (96.5% exact), ~53,748-token rollout.
 wad: doom1.wad
-model: {d: 8192, d_head: 128, d_rot: 64, scale: 1, detail: low, hud: true, d_hidden: 16384, optimize: 3, bias: false}
+model: {d: 8192, d_head: 128, d_rot: 64, scale: 1, detail: low, hud: true, d_hidden: 16384, optimize: 2, bias: false}
 region: {x1: 627.2, y1: -3760.0, x2: 1395.2, y2: -2800.0}
 textures:
   wall: [BROWN1, BROWN144, COMPUTE2, DOOR3, DOORSTOP, LITE3, STARTAN3, STEP6, SUPPORT2]

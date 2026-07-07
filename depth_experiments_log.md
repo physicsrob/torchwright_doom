@@ -196,6 +196,125 @@ triggered by the very first flatten, not a resource cost of any
 specific change; and the shipped number is currently whichever lottery
 draw happens to be cached.
 
+## Audit campaign (2026-07-07): production-exact re-measurement — most retrace claims revised
+
+Instrument: `scripts/cpsat_prod_harness.py` — replicates the production
+solve's model construction bit-for-bit and PROVES it by fingerprint
+equality with the production compile's own prints (HEAD `5d86ed63ded1`,
+baseline `89aa36948a5f` — both matched exactly) plus behavioral
+replication (baseline 37 OPTIMAL @60s vs prod 59s; HEAD floor probe
+UNKNOWN @153s vs prod 154s; n_vars 46,504 exact). torchwright pinned
+clean at `9cbc2a3` for every run. Every earlier probe in this worktree
+(cpsat_space_experiments, cpsat_lb_attribution) was NOT production-exact
+— see the fidelity caveats in those files.
+
+Corrections to the retrace section above (kept in place for the record):
+
+1. **The lowered DAG floor at HEAD is 32, not 33.** Every "floor" here
+   was measured without the production collapse passes; production
+   lowering shortens the spine by one more. Per-commit production
+   floors: base 37, exp1 36, exp2 35, exp4 34, exp5 33, HEAD 32.
+2. **"Baseline proves OPTIMAL, post-cliff never proves" is wrong in
+   both directions** (5 seeds x 180s, production-exact): base
+   37/37/37/38F/38F; exp2 proved 35 OPTIMAL on one seed. The real law
+   (exact across all ~40 solves of this campaign): **a proof happens
+   iff the found schedule's depth equals the commit's dependency
+   floor.** CP-SAT's only working lower bound on this model is the
+   dependency longest-path (free, from propagation); it NEVER moved
+   above the floor in any run (up to 3600s, any portfolio). Proofs are
+   floor-coincidences, not solver health.
+3. **"Budget-insensitive" only held for [180s, 300s].** HEAD medians:
+   40 @180s, 39 @300s, 35 @1800s (n=5/6/3). The 180s draw is
+   descent-rate-limited (see mechanism below), so more budget = more
+   rungs.
+4. **The hint-transmission anomaly is resolved — transmission is
+   faithful.** The "repaired first incumbent 48" IS the no-eager
+   warm-start hint accepted verbatim (measured: first incumbent 48
+   tagged [hint] at 13s); the "heuristic's own 44" is the EAGER
+   fallback schedule, which is deliberately un-hintable
+   (model-inexpressible in-layer column reuse). Nothing lossy.
+5. **"Width theory is dead" is REVERSED at the frontier — and refined.**
+   Family isolation at K=32 (production-exact, 64 CPU): dependency-only
+   SAT/OPTIMAL in 1s; +cancel machinery 5s; +heads+MLP (only
+   residual_cumulative off) 31s; ALL families on = UNKNOWN at 3600s x2.
+   **Residual-column capacity is single-handedly what makes near-floor
+   construction intractable.** But see the two-bottleneck mechanism:
+   width governs the frontier (~33-34), NOT the 180s draw (~38).
+6. **"The flattens freed the schedule variables" is dead.** Domain
+   stats (scripts/cpsat_domain_stats.py) at the production horizon:
+   0% of nodes pinned at ALL six commits, mean layer-domain width
+   31-33 everywhere. Freedom was always maximal; nothing changed at
+   the cliff.
+
+**The mechanism, in full (replaces the phase-transition story):** the
+depth experiments removed serialization without removing work, so the
+packing density required at the floor rose monotonically (baseline's
+optimal 37 already peaks at exactly 100.0% of column capacity, mean
+66%). Two separate bottlenecks emerged:
+
+- **The frontier (~33-34):** feasible packings become rare. A
+  capacity-blind 32-layer schedule needs 177% of capacity at its worst
+  layer (mean 93.7%). Construction there fails cold (all fixed-K
+  probes UNKNOWN) and the bound side is blind (relaxations of the
+  cumulative cannot see fragmentation), so [32, achievable] stays
+  formally open. A 33-layer schedule for the PRE-W2 HEAD graph was
+  CONSTRUCTED by iterated descent (48 -> 35 -> 34 -> 33, each rung a
+  fresh solve hinted with the previous best at horizon best+1; hard
+  K-ceilings kill the hint — measured 3x — only objective descent
+  works). Two 1800s attempts at 32 both held: 32 unresolved. That
+  schedule is orphaned by the W2 merge (fingerprint change) and by the
+  no->300s-strategies decision; recorded here as an existence proof.
+- **The 180s draw (~38):** the production solve descends from the
+  48-layer warm start and runs out of budget mid-descent, far above
+  the frontier. Rungs are slow everywhere (~100s+ each even at loose
+  depths) because a single layer-drop relocates ~600 of 5,362 nodes
+  (measured by schedule diff; only ~40 nodes live in the top-3
+  layers) — local repair rarely finds such moves. Width relief cannot
+  help this regime, and measurably didn't (below).
+
+**Width-reducer merge (from width-d4096):** W2 two-level ray count
+merged (ray residents 2x1024 -> 2x31; floor stays 32; new fingerprint
+`b4240c2dcf67`). Result at 180s, n=15 vs n=15: **median 38 -> 38 — no
+detectable depth effect** (the relieved columns were not in the
+pressure band, and 180s never reaches the width-limited frontier).
+Kept: costs nothing, serves the d=4096 track. W1 radix floors measured
+at +7 floor layers on this branch (32 -> 39: the flat-span chain is
+now the zero-slack spine; the width branch had slack 9 there) —
+excluded; would need torchwright `radix_floor_int` to learn the
+`output_map` fold, and even fused stays spine-hostile. Dispatch
+fanout 8->3 excluded (reverses exp1).
+
+**Pressure attribution** (scripts/cpsat_occupancy.py, band = layers at
+>=95% capacity): the band is dominated by `floor_int_step` FFN
+intermediates — 512-wide, in GANGS (8x pix/R_DrawSpan co-resident, 4x
+pix/R_DrawColumn, 4x stor/paint) — ~50% of the feasible 36-layer
+schedule's band. Depth-safe width targets = the WALL-side floor sites
+(R_DrawColumn/stor: slack-rich post-flatten); the R_DrawSpan sites are
+spine-locked. Caveat learned: capacity-blind schedules overstate
+immovable pressure (lazy placement) — `emit_derived_zero` (1,390-col
+zero tail) looked like the #1 occupant but real schedules defer it to
+the tail layers (verified: born L27 in the feasible 36); sanity-check
+every target against a feasible schedule.
+
+**Decision (2026-07-07, Rob): the target is <=35 layers from a plain
+<=180s compile; no compiler strategies over 300s.** Configs flipped to
+`optimize: 2` (both, lockstep) — this is a deliberate cap. Status
+against that bar: NOT met (180s median 38, min 36 at n=15). The
+evidence-ranked path to it:
+
+1. **Better warm start (torchwright, targeted):** the 180s budget is
+   spent descending 48 -> ~38; the eager heuristic already builds 44
+   but is model-inexpressible as a hint. Closing the hint gap starts
+   the descent 4-5 rungs lower — the single highest-leverage item.
+2. **Cache pre-seeding (zero solve time):** the schedule cache replays
+   a stored schedule at 0s. Best-known post-W2 schedule: 36 layers
+   (fingerprint `b4240c2dcf67`, scratchpad-held; injectable via
+   `modal volume put torchwright-doom-schedule-cache`). The
+   store_assignment ratchet keeps improvements monotone.
+3. **Fused-radix wall-side floors (torchwright):** moves the frontier,
+   not the 180s draw; relevant only after (1), or for a future 33/32
+   push.
+
 ## Open next candidates (in rough value order)
 
 - Early bank pick / shared column stage (candidate −1): bank mask is
