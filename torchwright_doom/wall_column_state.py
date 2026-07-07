@@ -384,11 +384,7 @@ class WallColumnState:
         # SCREEN_HEIGHT-1 and lose the "lower region below screen
         # -> invisible" signal needed by `le_span_y(lower_mid, yh)`.
         low_y_ceil = CEIL_Y_WIDE(low_y_raw)
-        lower_mid = select(
-            gt_screen(low_y_ceil, lower_min),
-            low_y_ceil,
-            lower_min,
-        )
+        lower_mid = max_screen(low_y_ceil, lower_min)
         lower_y1 = lower_mid
         # (lower tier: y2 is yh; the flag and published bound below consume
         # the unclipped values directly.)

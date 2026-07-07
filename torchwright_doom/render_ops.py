@@ -51,7 +51,7 @@ from torchwright.ops.swiglu.logic_ops import bool_all_true, bool_any_true, bool_
 from torchwright.ops.swiglu.swiglu_ffn import swiglu_ffn
 
 from .constants import COLUMN_COUNT, PIXEL_WIDTH, SCREEN_WIDTH, VIEW_HEIGHT
-from .std import concat, constant, linear, one_hot, select
+from .std import concat, constant, linear, one_hot, pwl_def, select
 from .vocab import _TAN_FOV_HALF, ANGLE_BAM, N_NODES_MAX
 
 
@@ -401,14 +401,38 @@ def gt_screen(a: Node, b: Node) -> Node:
     return compare(sub(a, b), 0.5)
 
 
+# |a-b| for the min/max identities below: 3 breakpoints put the single
+# kink at 0 with slope ±1 on both sides, so the PWL *is* |x| across the
+# range. The PWL SATURATES outside its range (measured — no slope
+# extension), so the range must cover every real caller's diff: screen
+# x/y magnitudes are <= ~530 (WIDE floors reach -128, spans ~+330), so
+# real diffs sit well inside ±4096; junk-row inputs beyond it produce
+# bounded-wrong output, which the discarded-junk contract permits.
+# Integer inputs sit >= 1 from the kink except d == 0, which lands on a
+# breakpoint; the swish fillet there is the measured ~1e-2 class, two
+# orders under every consumer's half-integer margin.
+_ABS_DIFF = pwl_def(abs, breakpoints=3, input_range=(-4096.0, 4096.0), name="abs_diff")
+
+_HALF_SUM_PLUS = [[0.5], [0.5], [0.5]]  # (a + b + |a-b|) / 2 = max(a, b)
+_HALF_SUM_MINUS = [[0.5], [0.5], [-0.5]]  # (a + b - |a-b|) / 2 = min(a, b)
+
+
 def min_screen(a: Node, b: Node) -> Node:
-    """Smaller of two screen columns."""
-    return select(gt_screen(a, b), b, a)
+    """Smaller of two screen columns.
+
+    ``(a + b - |a-b|) / 2`` — one FFN sublayer (the |a-b| PWL; the sub
+    fuses into its input, the half-sum Linear into its consumer) instead
+    of the compare+select pair, which held two scheduled layers on the
+    paint spine per call."""
+    return linear(concat(a, b, _ABS_DIFF(sub(a, b))), _HALF_SUM_MINUS)
 
 
 def max_screen(a: Node, b: Node) -> Node:
-    """Larger of two screen columns."""
-    return select(gt_screen(a, b), a, b)
+    """Larger of two screen columns.
+
+    ``(a + b + |a-b|) / 2`` — same one-sublayer form as
+    :func:`min_screen`."""
+    return linear(concat(a, b, _ABS_DIFF(sub(a, b))), _HALF_SUM_PLUS)
 
 
 def same_int(a: Node, b: Node) -> Node:
