@@ -1,5 +1,12 @@
 """Diagnose the CP-SAT "INFEASIBLE under width pressure" bug on doom forward().
 
+STALE (2026-07-07): pre-RoPE — builds the graph without a RopeConfig and
+imports symbols current torchwright no longer exposes; it fails against
+current torchwright and its measurements predate the RoPE port.  Do not
+build on it.  For solver probes use ``scripts/cpsat_prod_harness.py``
+(production-exact, fingerprint-gated); for family bisection its
+``probe-k --disable-families`` covers the localize mode.
+
 Schedule-only (no weights, ~1.3-2 GB): replicates ``forward_compile``'s CP-SAT
 path — heuristic warm-start, then ``solve_schedule`` with
 ``solver_max_layers = hint_n_layers + 1`` — and reports the solver STATUS, so a

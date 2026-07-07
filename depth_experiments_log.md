@@ -168,12 +168,19 @@ Findings:
    scripts/cpsat_lb_attribution.py); fused-graph probes never proved
    any capacity bind.
 4. **Schedule-cache mechanics amplify the lottery**: keyed by graph
-   fingerprint only (ignores optimize/budget), never re-solves on a
-   hit, last-writer-wins on writes. A FEASIBLE draw gets PINNED until
-   manually deleted (observed: HEAD pinned at 40, then re-pinned at a
-   worse 42 by a later draw; entry deleted at session end so HEAD is
-   unpinned). The good 36-layer exp2 schedule was found and then
-   orphaned by exactly this mechanism.
+   fingerprint only (ignores optimize/budget) and never re-solves on a
+   hit. A FEASIBLE draw gets PINNED until manually deleted (observed:
+   HEAD pinned at 40; entry deleted at session end so HEAD is
+   unpinned). The good 36-layer exp2 schedule was found under exp2's
+   own fingerprint — a different key than HEAD's, so it never applied
+   to HEAD; "orphaned" here means the win stayed keyed to a graph we
+   moved past. CORRECTION (2026-07-07): the original entry here claimed
+   writes are last-writer-wins; that is wrong — `store_assignment`
+   (torchwright `schedule_cache.py`) refuses any equal-or-worse entry,
+   a one-way min-ratchet. The "re-pinned at a worse 42" observation was
+   confounded by this session's own manual cache deletes between draws.
+   Repeated re-solves therefore already ratchet monotonically; what's
+   missing upstream is only the re-solve-on-hit trigger.
 5. **The remedy that follows from the data** (torchwright-side, out of
    this series' scope): make the schedule cache a RATCHET — re-solve on
    hit when budget allows and keep the better schedule. Every compile

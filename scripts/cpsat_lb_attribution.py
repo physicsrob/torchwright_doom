@@ -1,5 +1,19 @@
 """Attribute the CP-SAT lower bound to a constraint family (depth exp 7).
 
+FIDELITY CAVEAT (2026-07-07, applies to ALL THREE ROUNDS): none of these
+probes were production-exact, so their verdicts and family attributions
+carry construction risk beyond the round-2 note below.  Divergences from
+the production compile: d_head=64 (production 128); no
+``reserve_residual`` (production reserves 2 pinned RMSNorm columns);
+``bias`` defaulted True so the solver saw d_hidden=16384 (production
+bias=False solves at 16383); ``lower()`` run WITHOUT the production
+collapse passes (``collapse_univariate/collapse_pl`` + lane cap) — the
+production lowered graph is shorter (its DAG floor is 32, not the 33
+measured here); and the graph was built bare (no WAD/AssetIndex, default
+screen env).  Use ``scripts/cpsat_prod_harness.py`` (fingerprint-gated
+production-exact construction) for any number that has to transfer to
+the shipped compile.
+
 Context (depth_experiments_log.md): at HEAD the DAG floor is 33 but every
 solver configuration in ``cpsat_space_experiments`` proves lb=38 — the
 lower bound left the critical path, so a per-layer RESOURCE family now
