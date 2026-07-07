@@ -73,6 +73,30 @@ recovered position — the front block taxes all reads from the K side.
 The remaining multi-layer play is making pick_most_recent's monotone
 score positional-native (past.py machinery, doom-side).
 
+## 6. 33 stays — clip-variant arm flatten (6a negative, 6b hardening)
+
+6a (operand-level clip resolve — pick effective bounds once at the clip
+pick) measured **+1, reverted**: present's chain is depth-comparable to
+the geometry, so the early pick serializes present in front of every
+le. **Rule: an end-of-chain resolve whose condition computes in
+parallel with the arms is load-bearing parallelism — don't hoist the
+condition into the operands.** 6b kept the end-resolve and flattened
+the arms (bool_and per variant, le-through-max expansion,
+select(present, max/min, plain) bounds): floor stays 33 (fused=1213),
+kept as anti-re-bind hardening per the paint-plan precedent.
+
+## SPINE FLIP at 33 (the wall-track payout)
+
+After exp 6b the wall texel twins are GONE from the zero-slack set.
+New binder: the flat-span / visplane spine — pix/R_DrawSpan (55
+zero-slack nodes) + proj/plan (16). Witness: PLANE_MARK input gating
+(L0–L2) → pmrk radix key (L3–L6) → THREE chained plan reads (L7, L8,
+L11) → multiply → floor (L13–L15) → in_range/broadcast_select →
+R_DrawSpan. This chain had 5–40 layers of slack at 37; the six wall
+experiments spent it. Next depth work attacks THIS chain (provenance
+trace first — the old visplane_cascade_plan's unimplemented steps 3–4
+targeted it and may now bind).
+
 ## Open next candidates (in rough value order)
 
 - Early bank pick / shared column stage (candidate −1): bank mask is
