@@ -68,7 +68,10 @@ from .std import (
 from .vocab import ANGLE_VALUE, DONE, NO_OP, SET_CURSOR_DIRECTION_Y
 from .wall_range_builder import WallRangeBuilder
 
-BranchOutputs = Mapping[str, Node]
+# A branch value is an emit head Node, or — for the shared pixel branches —
+# a tuple of (mask, arm) pairs that _distinct_head_pairs flattens into the
+# dispatch type_switch with the transition predicate AND-ed in.
+BranchOutputs = Mapping[str, "Node | tuple[tuple[Node, Node], ...]"]
 
 
 def _dispatch_head(token_type) -> Node:
@@ -325,7 +328,10 @@ def build_branch_outputs(
     statusbar = StatusBarRenderer(projection)
     visplanes = VisplaneMarker(projection)
     ranges = RangeDispatcher(projection)
-    branches: dict[str, "Node | ScalarEmit | AngleInputEmit"] = {
+    branches: dict[
+        str,
+        "Node | ScalarEmit | AngleInputEmit | tuple[tuple[Node, Node], ...]",
+    ] = {
         # Inert / begin (dispatch-owned, registry owner "main").
         "no_op": no_op_out,
         "done": _dispatch_head(DONE),

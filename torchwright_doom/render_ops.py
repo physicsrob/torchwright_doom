@@ -39,7 +39,6 @@ from torchwright.graph.asserts import assert_matches_value_type
 from torchwright.graph.value_type import NodeValueType, Range
 from torchwright.ops.const import scale
 from torchwright.ops.swiglu.arithmetic_ops import (
-    ceil_int,
     clamp,
     compare,
     floor_int,

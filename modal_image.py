@@ -16,9 +16,13 @@ _HERE = Path(__file__).resolve().parent
 # Resolve the sibling torchwright checkout through the installed (editable)
 # package rather than directory layout — the layout guess breaks in git
 # worktrees, where this file is not directly under the umbrella.
-_TORCHWRIGHT = Path(
-    importlib.util.find_spec("torchwright").origin  # type: ignore[arg-type]
-).resolve().parents[1]
+_TW_SPEC = importlib.util.find_spec("torchwright")
+if _TW_SPEC is None or _TW_SPEC.origin is None:
+    raise ImportError(
+        "torchwright is not importable — Modal entrypoints need the umbrella "
+        "workspace venv (see the module docstring)"
+    )
+_TORCHWRIGHT = Path(_TW_SPEC.origin).resolve().parents[1]
 
 IMAGE = (
     modal.Image.debian_slim(python_version="3.12")

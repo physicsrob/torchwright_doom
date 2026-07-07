@@ -580,12 +580,8 @@ class WallColumnState:
         # (tie: gt false picks b == a). max/min are one FFN sublayer (the
         # abs form), and the select cond is bare present — the gt→and_
         # chain in the cond spent two layers behind the clamps.
-        middle_y1 = select(
-            clip.present, max_screen(cl_yl_u, cl_rec_c1), cl_yl_u
-        )
-        middle_y2 = select(
-            clip.present, min_screen(cl_yh_u, cl_rec_f1), cl_yh_u
-        )
+        middle_y1 = select(clip.present, max_screen(cl_yl_u, cl_rec_c1), cl_yl_u)
+        middle_y2 = select(clip.present, min_screen(cl_yh_u, cl_rec_f1), cl_yh_u)
         upper_y1_published = middle_y1  # upper_y1 is yl; same clamped bound
         upper_y2_published = select(
             clip.present, min_screen(cl_um_u, cl_rec_f1), cl_um_u

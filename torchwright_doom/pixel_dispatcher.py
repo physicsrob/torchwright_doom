@@ -49,7 +49,6 @@ from .std import (
     make_token_head,
     pick_by_index,
     select,
-    type_switch,
 )
 from .std import sum as vec_sum
 from .uv_compute import compute_v_mods_at_pixel, compute_v_native_at_screen_y
@@ -129,7 +128,7 @@ class PixelDispatcher:
         )
 
     @annotated("pix")
-    def after_wall_column(self) -> "Node":
+    def after_wall_column(self) -> tuple[tuple["Node", "Node"], ...]:
         projection = self.projection
         flat_first_pixel = make_token_head(
             PIXEL,
@@ -154,7 +153,7 @@ class PixelDispatcher:
         )
 
     @annotated("pix")
-    def after_set_cursor_y(self) -> "Node":
+    def after_set_cursor_y(self) -> tuple[tuple["Node", "Node"], ...]:
         projection = self.projection
         flat_span = projection.flats.flat_pass.flat_span_values(projection.core.past)
         return self._pixel_priority_switch(
@@ -167,7 +166,7 @@ class PixelDispatcher:
         )
 
     @annotated("pix")
-    def after_pixel_color(self) -> "Node":
+    def after_pixel_color(self) -> tuple[tuple["Node", "Node"], ...]:
         projection = self.projection
         return self._pixel_priority_switch(
             weapon_arm=PspriteRenderer(projection).decision(),
