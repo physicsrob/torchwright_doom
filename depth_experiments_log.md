@@ -136,6 +136,59 @@ scope): raise the optimize=3 budget / add a budget knob, and/or feed a
 denser hint (the heuristic scheduler's full assignment). The true
 constrained optimum lies somewhere in [33, 40] — unproven either way.
 
+## Retrace (2026-07-07): per-commit production compiles — the cliff is at exp 1, and it's a lottery, not a resource
+
+Two independent production compiles per commit (opt3/300s + opt2/180s,
+fresh solves — schedule-cache entries deleted where they blocked
+re-solving):
+
+| commit | floor | solves |
+|---|---|---|
+| baseline 93bb98e | 37 | **37 OPTIMAL (92s), 37 OPTIMAL (59s)** |
+| exp1 flatten     | 36 | 40 F, 39 F |
+| exp2 transpose   | 35 | **36 F**, 38 F |
+| exp4 ceil        | 34 | 41 F, 39 F |
+| exp5 max/min     | 33 | 42 F, 43 F |
+| exp6b (HEAD)     | 33 | 40 F, 42 F |
+
+Findings:
+1. **The cliff is binary and at exp 1**: baseline proves OPTIMAL twice
+   with time to spare; from the first flatten on, NO solve ever proves
+   anything again. Serial chains pin schedule variables; the flattens
+   freed them, and CP-SAT's proof machinery never recovers.
+2. **Post-cliff outputs are lottery draws** (±1–2 per graph, range
+   36–43 across the series). Non-monotone across nested commits
+   (exp2 ⊃ exp1 yet drew 36 vs 40). Budget is a non-factor in
+   [180s, 300s] (exp4: 41@300s vs 39@180s). Weak trend: later commits
+   center ~2 higher — accumulating search hostility, thin evidence.
+3. **The width theory is dead**: the heaviest width spender (transpose)
+   produced the best draws in the series (36, 38); the width-neutral
+   algebra commits produced the worst (41–43). Earlier "lb=38 width
+   bind" was retracted (un-fused-graph artifact, see round-2 note in
+   scripts/cpsat_lb_attribution.py); fused-graph probes never proved
+   any capacity bind.
+4. **Schedule-cache mechanics amplify the lottery**: keyed by graph
+   fingerprint only (ignores optimize/budget), never re-solves on a
+   hit, last-writer-wins on writes. A FEASIBLE draw gets PINNED until
+   manually deleted (observed: HEAD pinned at 40, then re-pinned at a
+   worse 42 by a later draw; entry deleted at session end so HEAD is
+   unpinned). The good 36-layer exp2 schedule was found and then
+   orphaned by exactly this mechanism.
+5. **The remedy that follows from the data** (torchwright-side, out of
+   this series' scope): make the schedule cache a RATCHET — re-solve on
+   hit when budget allows and keep the better schedule. Every compile
+   becomes a lottery ticket; the pin becomes monotone improvement. Six
+   graphs × 2 draws already produced a 36 (< baseline 37) once. Plus:
+   denser hints (production hint covers 12,552/46,504 vars; first
+   incumbent 48 is WORSE than the heuristic's own 44 — hint
+   transmission is demonstrably lossy) and seed variation.
+
+Bottom line: the floor wins (37 → 33) are real and correctness-
+validated; the artifact regression is a solver-search phenomenon
+triggered by the very first flatten, not a resource cost of any
+specific change; and the shipped number is currently whichever lottery
+draw happens to be cached.
+
 ## Open next candidates (in rough value order)
 
 - Early bank pick / shared column stage (candidate −1): bank mask is
