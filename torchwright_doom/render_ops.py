@@ -559,8 +559,23 @@ def mul_column_scalestep(x_offset: Node, scalestep: Node) -> Node:
 def CEIL_Y(x: Node) -> Node:
     """Integer ceil over the 3D-view y range ``[0, VIEW_HEIGHT-1]``;
     ``sharpness=10000`` → 1e-4 ramp. (VIEW_HEIGHT == SCREEN_HEIGHT when the
-    status bar is off.)"""
-    return ceil_int(x, 0, VIEW_HEIGHT - 1, sharpness=10_000.0)
+    status bar is off.)
+
+    Built as ``-floor(-x)`` via ``floor_int(output_map=-k)`` instead of
+    ``ceil_int``: ceil_int's output affine (add_const + negate after the
+    saturate stage) occupies a scheduled layer on the paint spine, while
+    ``output_map`` folds the same per-step constants into the saturate
+    stage's weights (the FLOOR_MOD64 precedent) — one layer shallower,
+    identical step count and lane/column cost, same saturation clamp at
+    the range edges."""
+    neg = linear(x, [[-1.0]])
+    return floor_int(
+        neg,
+        -(VIEW_HEIGHT - 1),
+        0,
+        sharpness=10_000.0,
+        output_map=lambda k: float(-k),
+    )
 
 
 def FLOOR_Y(x: Node) -> Node:
@@ -580,8 +595,18 @@ def CEIL_Y_WIDE(x: Node) -> Node:
     """Integer ceil over ``[0, 128]``. Keeps the large
     positive result for a below-screen lower region so ``le_span_y`` treats the
     lower-empty case correctly (narrow ``CEIL_Y`` would clamp to SCREEN_HEIGHT-1
-    and read visible)."""
-    return ceil_int(x, 0, 128, sharpness=10_000.0)
+    and read visible).
+
+    Same ``floor_int(output_map=-k)`` form as :func:`CEIL_Y` (see there) —
+    deletes ceil_int's scheduled output-affine layer from the paint spine."""
+    neg = linear(x, [[-1.0]])
+    return floor_int(
+        neg,
+        -128,
+        0,
+        sharpness=10_000.0,
+        output_map=lambda k: float(-k),
+    )
 
 
 def gt_y_ceil_boundary(raw_y: Node, boundary: Node) -> Node:
