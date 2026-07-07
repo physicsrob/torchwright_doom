@@ -51,6 +51,28 @@ precedent) — zero width delta, exact-math equivalent (14-point check
 incl. saturation edges). The parallel FLOOR_Y_WIDE path already ended a
 layer earlier, so the ceil tail was the sole binder. `fused=1215`.
 
+## 5. 34 → 33 — max/min_screen as (a+b±|a−b|)/2 (8a22eab)
+
+The witness's gt→select pairs (max_screen/min_screen, 2 scheduled
+layers each) replaced by the exact algebraic form: |a−b| is a
+3-breakpoint PWL (kink at 0), sub fuses in, half-sum Linear fuses out —
+ONE FFN sublayer. Caught in testing: the PWL saturates outside its
+input range (no slope extension) — range set to ±4096 to cover all real
+diffs; junk beyond is bounded-wrong (permitted). All call sites upgrade
+via the shared defs. `fused=1218`.
+
+**Conservation law (from the L17–L19 analysis):** publish→read relay
+chains are incompressible by moving work across the read — both spine
+reads are value-bound, so publisher-side precompute deepens V exactly
+as much as it saves the reader. Only algebra compression (exps 4, 5) or
+key-side/front-end changes move the floor.
+
+**Key-side position pin (provenance-measured):** recency queries are
+already position-free (Q@L0), but every read's KEY embeds the L0–L3
+recovered position — the front block taxes all reads from the K side.
+The remaining multi-layer play is making pick_most_recent's monotone
+score positional-native (past.py machinery, doom-side).
+
 ## Open next candidates (in rough value order)
 
 - Early bank pick / shared column stage (candidate −1): bank mask is
