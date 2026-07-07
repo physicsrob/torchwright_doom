@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from torchwright.graph import Node
 from torchwright.graph import annotated
+from torchwright.graph.asserts import assert_in_range
 
 from .constants import CENTER_Y
 from .pwl_banks import V_MOD_BANK
@@ -48,7 +49,13 @@ def compute_v_mods_at_pixel(
     """Return ``floor(v) mod H`` for one pixel, one entry per bank height."""
     v_mod_bank = V_MOD_BANK if v_mod_bank is None else v_mod_bank
     v_offset = mul_pixel_dc_iscale(pixel_index_vec, dc_iscale)
-    v_native = vec_sum(v_offset, v_0_at_top)
+    # Range claim: FLOOR_NATIVE's own input contract (render_ops /
+    # pwl_banks: raw native coordinate in [-1023, 1023]).  Interval
+    # arithmetic alone puts this Linear at ±9.5e8 — slack that outside
+    # the contract means nothing (the floor saturates and downstream is
+    # discarded junk), but that poisons any range-driven analysis of
+    # the texel chain.
+    v_native = assert_in_range(vec_sum(v_offset, v_0_at_top), -1023.0, 1023.0)
     v_floor = FLOOR_NATIVE(v_native)
     return tuple(mod_h(v_floor) for mod_h in v_mod_bank)
 

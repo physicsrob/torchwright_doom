@@ -721,11 +721,19 @@ class WallSpanRuntimeState:
         # Integer claims on the integer-valued components — pixel rows,
         # counts, ids, the ±1 has_next gate — up to the pick's softmax
         # leak (atol 0.05 = the collapse pass's plateau band).  The
-        # fixed-point fractions (dc_iscale, dc_texturemid, u_native) and
-        # the one-hot stay unclaimed.  tex_id's claim is what lets the
-        # univariate collapse rebuild the per-texture
-        # onehot_lookup_select chains as single staircase FFNs
-        # (docs/univariate_collapse_plan.md — the split_7 winner).
+        # fixed-point fractions (dc_iscale, dc_texturemid) and the
+        # one-hot stay unclaimed.  u_native IS integer-valued: the
+        # published u is already floored (pwl_banks — the wall u_mod
+        # PWLs assume it), and its claim is load-bearing for collapse:
+        # between-integer inputs sit in the col-step hinges' fp32
+        # flicker zones (~0.15 wide before each column boundary, value
+        # flipping by half-steps at isolated fp32 points) that no PL
+        # certificate can cover — the claim scopes them out as
+        # non-inputs (v2 plan pre-round forensics, 2026-07-06).
+        # tex_id's claim is what lets the univariate collapse rebuild
+        # the per-texture onehot_lookup_select chains as single
+        # staircase FFNs (docs/univariate_collapse_plan.md — the
+        # split_7 winner).
         def _int(v: Node) -> Node:
             return assert_integer(v, atol=0.05)
 
@@ -735,7 +743,7 @@ class WallSpanRuntimeState:
             dc_iscale=sv.dc_iscale,
             dc_texturemid=sv.dc_texturemid,
             h_idx_oh=sv.h_idx_oh,
-            u_native=sv.u_native,
+            u_native=_int(sv.u_native),
             cmap_row=_int(sv.cmap_row),
             tex_id=_int(sv.tex_id),
             ordinal=_int(sv.ordinal),

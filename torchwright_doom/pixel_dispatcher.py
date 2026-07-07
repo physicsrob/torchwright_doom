@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from torchwright.graph import annotated
+from torchwright.graph.asserts import assert_in_range
 
 from .constants import COLUMN_COUNT, HUD_ENABLED, PIXEL_WIDTH
 from .flat_pass_renderer import FlatPassRenderer
@@ -274,8 +275,13 @@ class PixelDispatcher:
         cursor = projection.flats.flat_pass.flat_cursor_values(projection.core.past)
         k_xstep = mul_k_step(pixel_index_vec, cursor.xstep)
         k_ystep = mul_k_step(pixel_index_vec, cursor.ystep)
-        xfrac_k = vec_sum(cursor.xfrac0, k_xstep)
-        yfrac_k = vec_sum(cursor.yfrac0, k_ystep)
+        # Range claims: FLOOR_MOD64's input contract (pwl_banks: raw
+        # native coordinate in [-1023, 1023]).  Interval arithmetic puts
+        # these Linears at ±1.4e9 — outside the contract the floor
+        # saturates and the pixel is discarded junk, but the slack
+        # poisons any range-driven analysis of the flat texel chain.
+        xfrac_k = assert_in_range(vec_sum(cursor.xfrac0, k_xstep), -1023.0, 1023.0)
+        yfrac_k = assert_in_range(vec_sum(cursor.yfrac0, k_ystep), -1023.0, 1023.0)
         u = FLOOR_MOD64(xfrac_k)
         v = FLOOR_MOD64(yfrac_k)
         raw_palette = projection.core.scene.assets.flats.palette_index(
