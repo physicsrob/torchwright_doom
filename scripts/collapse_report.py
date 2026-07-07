@@ -67,6 +67,12 @@ def main() -> None:
         "(default: the production 1e-3).  Report-only — the floor-vs-"
         "budget sweep behind the Phase B budget-policy decision.",
     )
+    ap.add_argument(
+        "--s1-only",
+        action="store_true",
+        help="restrict v2 verdicts to the S1 shape — the modeled floor "
+        "the descoped Phase B emitter can reach before S2 exists.",
+    )
     args = ap.parse_args()
 
     # Screen env BEFORE any graph-module import, or this silently
@@ -126,10 +132,13 @@ def main() -> None:
         kwargs = {}
         if args.budget is not None:
             kwargs["budget"] = args.budget
+        if args.s1_only:
+            kwargs["s1_only"] = True
         print(
             f"\n=== v2 analysis (continuous-source collapse, Phase A) "
             f"[budget {args.budget if args.budget is not None else 'default 1e-3'}, "
-            f"lane cap {lane_cap}] ==="
+            f"lane cap {lane_cap}"
+            f"{', S1 only' if args.s1_only else ''}] ==="
         )
         v2 = analyze_collapse_v2(
             lowered.output_node, lane_cap=lane_cap, verbose=True, **kwargs
