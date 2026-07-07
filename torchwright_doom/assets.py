@@ -146,9 +146,18 @@ class WallAssets:
         bank_id = self.bank_id(tex_id)
         local_id = self.local_id(tex_id)
         bank_mask = one_hot(bank_id, len(self.banks.wall_banks))
+        # Axis order is TIMING, not semantics: the op consumes the row index
+        # at its first internal stage and the column index only at the last
+        # (col_gate), so the later-ready operand belongs on the column axis.
+        # u_mod is ready one layer after the span read, while the texture-row
+        # address (local_id·H + v_mod) waits for the floor+mod chain — so the
+        # table is fed TRANSPOSED (W, n·H): u drives the row staircase early
+        # and the late row address is absorbed by the column stage. Lane
+        # count is symmetric in (rows + cols); unchanged by the swap.
         candidates = concat(
             *(
                 table_lookup_2d(
+                    self.u_mod_by_bank[bank.bank_id](u_native),
                     linear(
                         concat(
                             _snap_index(
@@ -160,8 +169,7 @@ class WallAssets:
                         ),
                         self.banks.wall_bank_row_addr[bank.bank_id],
                     ),
-                    self.u_mod_by_bank[bank.bank_id](u_native),
-                    self.banks.wall_bank_table_2d[bank.bank_id],
+                    self.banks.wall_bank_table_2d[bank.bank_id].T,
                     sharpness=1000.0,
                 )
                 for bank in self.banks.wall_banks
