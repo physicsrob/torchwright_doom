@@ -112,6 +112,30 @@ targeted it and may now bind).
   session — diff against a main-checkout run if it matters.
 - NOT run: production 320×200 COMPARE (explicitly excluded).
 
+## Production compile check (2026-07-06): floor 33, artifact 40 — SOLVER-limited
+
+`make compile CONFIG=configs/e1m1.yaml` (d=8192, optimize=3):
+**n_layers=40, status FEASIBLE** (not OPTIMAL). The CP-SAT floor probe
+returned UNKNOWN at 154s; warm-start descent (heuristic seed 44)
+reached 40 when the 300s budget expired with the solver's own bound
+window still [32, 47]. The lowres compile (the COMPARE artifact) is the
+same story: 36 FEASIBLE. Baseline compiled 37 OPTIMAL in the same
+budget — the flattens made the schedule space harder to SEARCH (more
+parallel freedom = wider branching), not infeasible.
+
+Mechanics: the budget is `_OPTIMIZE_BUDGETS = {1:60, 2:180, 3:300}` in
+torchwright `compiler/forward/compile.py:890` — no env/config knob;
+`solve_schedule(solver_params=...)` is an escape hatch not threaded
+through the doom compile path. The warm-start hint covered only
+12,552/46,504 free variables.
+
+Consequence: the depth wins are floor-real and gate-validated, but the
+SHIPPED artifact currently regressed 37 → 40 until the solver can
+close the gap. Follow-ups (torchwright-side, out of this series'
+scope): raise the optimize=3 budget / add a budget knob, and/or feed a
+denser hint (the heuristic scheduler's full assignment). The true
+constrained optimum lies somewhere in [33, 40] — unproven either way.
+
 ## Open next candidates (in rough value order)
 
 - Early bank pick / shared column stage (candidate −1): bank mask is
