@@ -59,6 +59,14 @@ def main() -> None:
         "composed-PL certificates, S1/S2 shape models, modeled layer "
         "floor, S2 residual-column liveness (Phase A of the v2 plan)",
     )
+    ap.add_argument(
+        "--budget",
+        type=float,
+        default=None,
+        help="what-if synthesized-claim budget for the v2 analysis "
+        "(default: the production 1e-3).  Report-only — the floor-vs-"
+        "budget sweep behind the Phase B budget-policy decision.",
+    )
     args = ap.parse_args()
 
     # Screen env BEFORE any graph-module import, or this silently
@@ -115,8 +123,17 @@ def main() -> None:
         # rewires it in place).
         from torchwright.compiler.collapse_analysis import analyze_collapse_v2
 
-        print("\n=== v2 analysis (continuous-source collapse, Phase A) ===")
-        v2 = analyze_collapse_v2(lowered.output_node, lane_cap=lane_cap, verbose=True)
+        kwargs = {}
+        if args.budget is not None:
+            kwargs["budget"] = args.budget
+        print(
+            f"\n=== v2 analysis (continuous-source collapse, Phase A) "
+            f"[budget {args.budget if args.budget is not None else 'default 1e-3'}, "
+            f"lane cap {lane_cap}] ==="
+        )
+        v2 = analyze_collapse_v2(
+            lowered.output_node, lane_cap=lane_cap, verbose=True, **kwargs
+        )
         print(v2.format())
         print(
             f"liveness check: {v2.total_stage1_cols} strict / "
