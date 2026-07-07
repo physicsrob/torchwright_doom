@@ -94,29 +94,45 @@ def main() -> None:
     output_node = graph.get_output_node()
     print(f"graph: {len(graph.get_all_nodes())} nodes in {time.perf_counter() - t0:.1f}s")
 
-    configs: list[tuple[str, frozenset]] = [("all-on", frozenset())]
-    configs += [(f"minus-{fam}", frozenset({fam})) for fam in _CUMULATIVE_FAMILIES]
+    cum = frozenset(_CUMULATIVE_FAMILIES)
+    cancels = frozenset({"cancel_consumer_lb", "cancel_slack"})
+    # Round 1 (single-family drops) measured: ALL still INFEASIBLE at K=37
+    # in seconds — no single cumulative binds alone. Peel in combinations,
+    # ending at dependency-only (must admit the DAG floor 33 — sanity).
+    configs: list[tuple[str, frozenset]] = [
+        ("all-on", frozenset()),
+        ("minus-all-cumulatives", cum),
+        ("minus-cancel_slack", frozenset({"cancel_slack"})),
+        ("minus-cancels", cancels),
+        ("minus-cum-minus-cancel_slack", cum | frozenset({"cancel_slack"})),
+        ("minus-cum-minus-cancels", cum | cancels),
+        ("dependency-only", frozenset(CONSTRAINT_FAMILIES) - {"dependency"}),
+    ]
 
-    flipped: list[tuple[str, frozenset]] = []
     for name, disabled in configs:
         unknown = disabled - CONSTRAINT_FAMILIES
         assert not unknown, unknown
-        t0 = time.perf_counter()
-        st = _probe(output_node, disabled, k=37)
-        print(
-            f"--> K=37 [{name}]: {st}  ({time.perf_counter() - t0:.0f}s)",
-            flush=True,
-        )
-        if name != "all-on" and st != "INFEASIBLE":
-            flipped.append((name, disabled))
+        for k in (37, 33):
+            t0 = time.perf_counter()
+            st = _probe(output_node, disabled, k=k)
+            print(
+                f"--> K={k} [{name}]: {st}  ({time.perf_counter() - t0:.0f}s)",
+                flush=True,
+            )
+            if st == "INFEASIBLE":
+                break  # K=33 is a fortiori infeasible; skip it
 
-    for name, disabled in flipped:
+    # Bracket the all-on threshold at this geometry: first K that is not
+    # proven infeasible locates the model's true lower bound.
+    for k in (38, 39, 40, 41, 42):
         t0 = time.perf_counter()
-        st = _probe(output_node, disabled, k=33)
+        st = _probe(output_node, frozenset(), k=k)
         print(
-            f"--> K=33 [{name}]: {st}  ({time.perf_counter() - t0:.0f}s)",
+            f"--> K={k} [all-on bracket]: {st}  ({time.perf_counter() - t0:.0f}s)",
             flush=True,
         )
+        if st != "INFEASIBLE":
+            break
 
 
 if __name__ == "__main__":
