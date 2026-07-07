@@ -160,9 +160,7 @@ def _flat_signed_world_angle(dx, dy):
     abs_pair = _concat(abs_dy, abs_dx)
     low = _ray_count(_linear(abs_pair, _LOW_RAY_MATRIX))
     high = _ray_count(_linear(abs_pair, _HIGH_RAY_MATRIX))
-    base = _Linear(
-        _concat(low, high), _t.tensor([[1.0], [1.0]], dtype=_t.float32)
-    )
+    base = _Linear(_concat(low, high), _t.tensor([[1.0], [1.0]], dtype=_t.float32))
     one = _constant(1.0)
     q2 = _linear(_concat(base, one), [[-1.0], [float(ANGLE_BAM // 2)]])
     q3 = _linear(_concat(base, one), [[1.0], [-float(ANGLE_BAM // 2)]])
@@ -178,14 +176,31 @@ def _angle_cases() -> list[tuple[float, float]]:
     """(dx, dy) fixtures spanning both halves, all quadrants, segment
     boundaries, and the fixture-extreme radii."""
     angles = [
-        1.0, 2.0, 30.0, 31.0, 32.0, 33.0,  # around the first coarse boundary
-        511.0, 512.0, 513.0,               # mid-low-half boundary
-        1022.0, 1023.0, 1024.0, 1025.0,    # the low/high half seam
-        1055.0, 1056.0, 1057.0,            # first high-half coarse boundary
-        1536.0, 2046.0, 2047.0,            # deep high half
+        1.0,
+        2.0,
+        30.0,
+        31.0,
+        32.0,
+        33.0,  # around the first coarse boundary
+        511.0,
+        512.0,
+        513.0,  # mid-low-half boundary
+        1022.0,
+        1023.0,
+        1024.0,
+        1025.0,  # the low/high half seam
+        1055.0,
+        1056.0,
+        1057.0,  # first high-half coarse boundary
+        1536.0,
+        2046.0,
+        2047.0,  # deep high half
         # segment-boundary-adjacent (0.25 BAM off a 32j - 0.5 coarse
         # threshold — inside a segment, outside every ramp/band):
-        31.25, 31.75, 1055.25, 1055.75,
+        31.25,
+        31.75,
+        1055.25,
+        1055.75,
     ]
     # Radii keep dx, dy clear of the quadrant compare(·, 0) deadband (0.1
     # at default sharpness) even at the 1-BAM extreme (sin(1u) ≈ 7.7e-4):
@@ -228,8 +243,7 @@ def test_two_level_equals_flat_thermometer():
     for i, (cdx, cdy) in enumerate(cases):
         got, want = new_vals[i, 0].item(), old_vals[i, 0].item()
         assert got == want, (
-            f"case {i} (dx={cdx:.4f}, dy={cdy:.4f}): two-level {got} != "
-            f"flat {want}"
+            f"case {i} (dx={cdx:.4f}, dy={cdy:.4f}): two-level {got} != " f"flat {want}"
         )
 
 

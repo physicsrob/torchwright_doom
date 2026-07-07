@@ -482,9 +482,7 @@ def _two_level_half_count(
     fine_matrix[0, :] = 1.0
     for i in range(_SEG):
         fine_matrix[1 + i, i] = 1.0
-    fine_rays = Linear(
-        concat(v_base, prods), fine_matrix, name=f"{name}_fine_rays"
-    )
+    fine_rays = Linear(concat(v_base, prods), fine_matrix, name=f"{name}_fine_rays")
     fine = _ray_count(fine_rays)
     return vec_sum(base_c, fine)
 

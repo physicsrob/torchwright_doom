@@ -195,13 +195,9 @@ def main():
         li = layers.get(node.node_id)
         return f"L{li}" if li is not None else "?"
 
-    final_live = sorted(
-        fmap._node_to_indices.items(), key=lambda kv: -len(kv[1])
-    )
+    final_live = sorted(fmap._node_to_indices.items(), key=lambda kv: -len(kv[1]))
     perm_cols = sum(len(cols) for _, cols in final_live)
-    seed_cols = sum(
-        len(cols) for node, cols in final_live if node.node_id in seed_ids
-    )
+    seed_cols = sum(len(cols) for node, cols in final_live if node.node_id in seed_ids)
     out_cols = sum(
         len(cols) for node, cols in final_live if node.node_id == output_node.node_id
     )
@@ -262,14 +258,11 @@ def main():
     # The three residency windows are disjoint in time; none of them adds to
     # the mid-schedule peak except the whole-pass columns.  The go/no-go
     # question is whether any single window crowds 4,096 on its own.
-    whole_pass = (
-        sum(len(cols) for node, cols in final_live if node.node_id in seed_ids)
-        + len(fmap._reserved)
-    )
+    whole_pass = sum(
+        len(cols) for node, cols in final_live if node.node_id in seed_ids
+    ) + len(fmap._reserved)
     input_row = sum(len(n) for n in input_nodes)
-    input_freed = max(
-        (cancel.get(n.node_id, n_layers) for n in input_nodes), default=0
-    )
+    input_freed = max((cancel.get(n.node_id, n_layers) for n in input_nodes), default=0)
     late_births = sorted(
         (layers.get(node.node_id, -1) for node, _ in final_live), reverse=True
     )
