@@ -438,6 +438,42 @@ def _schedule_meta(pm: ProdModel, stats) -> dict:
 # Subcommands
 
 
+def set_hint_from_embedded(pm: ProdModel) -> None:
+    """Replace the heuristic warm-start hint with the best-known schedule
+    embedded in scripts/_hint_payload.py (ratchet-descend mode).
+
+    The payload is store_assignment-format (canonical-id keys); remap onto
+    the current graph exactly as schedule_cache.load_assignment does.  A
+    fingerprint mismatch means the embedded schedule belongs to a different
+    graph — refuse loudly rather than hint garbage.
+    """
+    from scripts import _hint_payload
+
+    if _hint_payload.FINGERPRINT != pm.fingerprint:
+        raise SystemExit(
+            f"--hint-embedded: payload fingerprint "
+            f"{_hint_payload.FINGERPRINT[:12]} != graph {pm.fingerprint[:12]}"
+        )
+    payload = json.loads(gzip.decompress(base64.b64decode(_hint_payload.PAYLOAD_B64)))
+    current_by_canon = {c: nid for nid, c in canonical_ids(pm.output_node).items()}
+    pm.hint_layers = {
+        current_by_canon[int(k)]: v for k, v in payload["node_to_layer"].items()
+    }
+    pm.hint_cancel = {
+        current_by_canon[int(k)]: v for k, v in payload["node_to_cancel_layer"].items()
+    }
+    pm.hint_routing = {
+        current_by_canon[int(k)]: v for k, v in payload["node_to_routing"].items()
+    }
+    pm.hint_n_layers = payload["n_layers"]
+    print(
+        f"embedded hint: n_layers={pm.hint_n_layers}, "
+        f"{len(pm.hint_layers)} layer / {len(pm.hint_routing)} routing / "
+        f"{len(pm.hint_cancel)} cancel; solver horizon {pm.solver_max_layers}",
+        flush=True,
+    )
+
+
 def _solver_params(args) -> dict | None:
     params: dict = {}
     if getattr(args, "lns_heavy", False):
@@ -465,7 +501,10 @@ def cmd_fingerprint(args) -> None:
 
 def cmd_solve(args) -> None:
     pm = build_production_model(args.config, verbose=args.verbose)
-    pm.run_warm_start()
+    if args.hint_embedded:
+        set_hint_from_embedded(pm)
+    else:
+        pm.run_warm_start()
     params = _solver_params(args)
 
     # ---- Seed sweep: one build + warm start, N main solves (statistical
@@ -594,8 +633,10 @@ def cmd_solve(args) -> None:
 
 def cmd_probe_k(args) -> None:
     pm = build_production_model(args.config, verbose=args.verbose)
-    use_hint = args.hint
-    if use_hint:
+    use_hint = args.hint or args.hint_embedded
+    if args.hint_embedded:
+        set_hint_from_embedded(pm)
+    elif use_hint:
         pm.run_warm_start()
 
     k = args.k
@@ -785,6 +826,12 @@ def main() -> None:
         default="auto",
         help="auto = production flow; off = skip the cold cp+1 probe",
     )
+    p.add_argument(
+        "--hint-embedded",
+        action="store_true",
+        help="hint with scripts/_hint_payload.py's best-known schedule "
+        "instead of the heuristic warm start (ratchet-descend)",
+    )
     p.add_argument("--no-emit", action="store_true")
     p.set_defaults(fn=cmd_solve)
 
@@ -792,6 +839,11 @@ def main() -> None:
     p.add_argument("--k", type=int, required=True)
     p.add_argument("--mode", choices=["squeeze", "wide"], default="squeeze")
     p.add_argument("--hint", action="store_true")
+    p.add_argument(
+        "--hint-embedded",
+        action="store_true",
+        help="hint with scripts/_hint_payload.py's best-known schedule",
+    )
     p.add_argument("--budget", type=float, default=1800.0)
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--params", default=None, help="JSON CpSolver param overrides")
