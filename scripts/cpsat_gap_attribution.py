@@ -75,6 +75,7 @@ def main() -> None:
     from torchwright.compiler.forward.compile import forward_compile
     from torchwright.compiler.forward.cpsat_scheduler import critical_path_layers
     from torchwright.compiler.forward.scheduling_policy import SchedulingPolicy
+    from torchwright.compiler.lower import lower
     from torchwright_doom.inference.compile_cache import resolve_wad_path
     from torchwright_doom.inference.compiled_model import build_graph
 
@@ -98,10 +99,25 @@ def main() -> None:
     # Graph-identity gate: critical path is topology-only; the fingerprint is
     # printed by forward_compile (verbose) on the first cell.  Both must match
     # a plain `make compile` of this config on the same torchwright commit.
-    cp = critical_path_layers(
+    # forward_compile computes the critical path on the LOWERED graph (after
+    # the collapse passes cut depth), so lower here with the identical kwargs
+    # (compile.py: collapse_univariate/collapse_pl on, lane_cap=d_hidden//4)
+    # before measuring — the raw-graph critical path is several layers higher
+    # and would not match production's print.
+    cp_raw = critical_path_layers(
         next_token, None, policy=SchedulingPolicy(), flex_routing=True
     )
-    print(f"[gate] critical_path_layers={cp}", flush=True)
+    lowered = lower(
+        next_token,
+        verbose=False,
+        collapse_univariate=True,
+        collapse_pl=True,
+        collapse_lane_cap=(m.d_hidden if m.d_hidden else m.d) // 4,
+    )
+    cp = critical_path_layers(
+        lowered.output_node, None, policy=SchedulingPolicy(), flex_routing=True
+    )
+    print(f"[gate] critical_path_layers(lowered)={cp} (raw={cp_raw})", flush=True)
 
     # Mirror compile_cache -> compile_to_onnx geometry.  rms_norm is on for the
     # production power-of-two d (compile_to_onnx's rms_norm=None default);
