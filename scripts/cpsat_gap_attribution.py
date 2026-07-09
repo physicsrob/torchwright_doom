@@ -59,6 +59,14 @@ def main() -> None:
     )
     ap.add_argument("--workers", type=int, default=64)
     ap.add_argument("--optimize", type=int, default=2, help="production is 2")
+    ap.add_argument(
+        "--descent-budget",
+        type=float,
+        default=None,
+        help="optimize=3 only: measurement override of the total descent "
+        "budget in seconds (production default is 600). e.g. 3600 for the "
+        "1-hour frontier re-verification.",
+    )
     args = ap.parse_args()
 
     # Must be set BEFORE the solver runs; the modal-run env allowlist drops it.
@@ -152,6 +160,8 @@ def main() -> None:
                 kw["_disabled_families"] = disabled
             else:
                 kw["_solve_only"] = True
+            if args.descent_budget is not None:
+                kw["_descent_budget_s"] = args.descent_budget
             try:
                 net = forward_compile(
                     output_node=next_token,
