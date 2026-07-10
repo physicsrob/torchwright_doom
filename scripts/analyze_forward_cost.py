@@ -335,10 +335,8 @@ def schedule_only_capture(
     reserve_node_id_above(graph.get_all_nodes())
     const_one = LiteralValue(torch.ones(1), name="rope_self_match_const_one")
     rmap.allocate(const_one)
-    rmap.mark_clean(rmap.get_indices(const_one))
     for n in input_nodes:
         rmap.allocate(n)
-        rmap.mark_clean(rmap.get_indices(n))
     computed = set(input_nodes)
     policy = SchedulingPolicy()
 

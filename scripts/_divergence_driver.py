@@ -19,7 +19,7 @@ The build/compile/run steps are identical for both; only the imported
 ``skip_relu_ejecting=True`` under a ``try/except TypeError`` so the same code
 works against the 2a signature (kwarg present) and HEAD (kwarg deleted).  The
 compile settings mirror the earlier Gate-C divergence run exactly
-(``optimize=0``, ``assume_zero_init=True``, ``rms_norm_const_exp=63``) and the
+(``optimize=0``, ``rms_norm_const_exp=63``) and the
 prefill uses the same deterministic fallback, so the two logit tensors are
 directly comparable.
 
@@ -138,7 +138,6 @@ def main() -> None:
         d_hidden=d_hidden,
         max_seq_len=max_seq_len,
         optimize=0,
-        assume_zero_init=True,
         rms_norm_const_exp=63,
         verbose=False,
     )

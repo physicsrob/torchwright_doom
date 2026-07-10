@@ -24,8 +24,10 @@ subprocess via :mod:`scripts._divergence_driver`:
 
 Subprocessing also keeps only one ~d=8192 model resident at a time (the driver
 saves its logits to disk; this orchestrator loads both and diffs).  Runs the
-original Gate-C compile settings (optimize=0, assume_zero_init=True,
-rms_norm_const_exp=63) and the same deterministic prefill fallback on both
+original Gate-C compile settings (optimize=0, rms_norm_const_exp=63; the
+assume_zero_init flag was retired 2026-07 — zero-init is unconditional,
+matching the flag=True the original run used) and the same deterministic
+prefill fallback on both
 sides, so the numbers are comparable to the earlier 1.22e-04 / 9-of-9 run.
 
 Why not onnxruntime: at d=8192 the folded ``embed_table`` initializer is

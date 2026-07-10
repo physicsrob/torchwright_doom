@@ -198,8 +198,8 @@ draw happens to be cached.
 
 ## Audit campaign (2026-07-07): production-exact re-measurement — most retrace claims revised
 
-Instrument: `scripts/cpsat_prod_harness.py` — replicates the production
-solve's model construction bit-for-bit and PROVES it by fingerprint
+Instrument: `scripts/cpsat_prod_harness.py` — replicated the production
+solve's model construction bit-for-bit and PROVED it by fingerprint
 equality with the production compile's own prints (HEAD `5d86ed63ded1`,
 baseline `89aa36948a5f` — both matched exactly) plus behavioral
 replication (baseline 37 OPTIMAL @60s vs prod 59s; HEAD floor probe
@@ -207,6 +207,17 @@ UNKNOWN @153s vs prod 154s; n_vars 46,504 exact). torchwright pinned
 clean at `9cbc2a3` for every run. Every earlier probe in this worktree
 (cpsat_space_experiments, cpsat_lb_attribution) was NOT production-exact
 — see the fidelity caveats in those files.
+
+**DELETED (2026-07-09)** along with `cpsat_domain_stats.py` /
+`cpsat_occupancy.py`: the replica rotted against two torchwright
+API changes in one day (the `mark_clean` removal, the 5-tuple
+warm-start return) — a standalone copy of production construction
+re-diverges on every compiler change, the exact defect it was built
+to fix. Production-exact measurement now goes through the real
+`forward_compile` (`scripts/cpsat_gap_attribution.py`, solve-only,
+same fingerprint gate) or the CP-SAT fixture layer
+(`modal_cpsat_fixture.py`), which snapshots the problem from inside
+the real compile.
 
 Corrections to the retrace section above (kept in place for the record):
 
@@ -306,11 +317,17 @@ evidence-ranked path to it:
    spent descending 48 -> ~38; the eager heuristic already builds 44
    but is model-inexpressible as a hint. Closing the hint gap starts
    the descent 4-5 rungs lower — the single highest-leverage item.
-2. **Cache pre-seeding (zero solve time):** the schedule cache replays
-   a stored schedule at 0s. Best-known post-W2 schedule: 36 layers
-   (fingerprint `b4240c2dcf67`, scratchpad-held; injectable via
-   `modal volume put torchwright-doom-schedule-cache`). The
-   store_assignment ratchet keeps improvements monotone.
+2. **Cache pre-seeding — mechanism replaced (2026-07-09):** manual
+   injection (`modal volume put torchwright-doom-schedule-cache`) is
+   closed; it was a side-channel around the compile, and the scratchpad
+   36 it would have injected keyed to a topology that no longer exists.
+   The schedule-cache fingerprint now includes the torchwright source
+   hash (any compiler change invalidates and re-solves) and entries are
+   gated on the optimize level they were validated at. Schedules enter
+   the cache exactly one way: a real `make compile` solve, which
+   ratchet-stores its own win. Pre-seeding is therefore "run `make
+   compile` once after the code settles" — the win replays for every
+   later compile of the same code + topology.
 3. **Fused-radix wall-side floors (torchwright):** moves the frontier,
    not the 180s draw; relevant only after (1), or for a future 33/32
    push.

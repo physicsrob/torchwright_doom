@@ -364,10 +364,8 @@ def main() -> None:
     reserve_node_id_above(graph.get_all_nodes())
     const_one = LiteralValue(torch.ones(1), name="rope_self_match_const_one")
     rmap.allocate(const_one)
-    rmap.mark_clean(rmap.get_indices(const_one))
     for n in input_nodes:
         rmap.allocate(n)
-        rmap.mark_clean(rmap.get_indices(n))
     computed = set(input_nodes)
     policy = SchedulingPolicy()
 
@@ -445,7 +443,6 @@ def main() -> None:
             time_budget_s=BUDGET_S,
             max_layers=solver_max_layers,
             policy=policy,
-            assume_zero_init=True,
             hint_layers=hint_layers,
             hint_routing=hint_routing,
             hint_cancel=hint_cancel,

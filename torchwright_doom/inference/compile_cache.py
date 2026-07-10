@@ -61,7 +61,6 @@ def compile_cached(
         cache_stride=config.model.cache_stride,
         trim_heads=config.model.trim_heads,
         optimize=config.model.optimize,
-        assume_zero_init=config.model.assume_zero_init,
         bias=config.model.bias,
         verbose=verbose,
         asset_config=config.asset_config(),
@@ -86,10 +85,19 @@ def compile_cached(
     # from the meta just written so the number is the artifact's, not a
     # build-info guess.
     meta = json.loads(meta_path.read_text())
+    # Schedule provenance next to the optimize level, unconditionally: a
+    # CACHED replay or a heuristic fallback prints a depth that the
+    # configured optimize level had no part in producing, and without the
+    # status that number reads as the level's result (it has).  Values per
+    # torchwright's _schedule_provenance: OPTIMAL / FEASIBLE = a real solve
+    # at this level, CACHED = schedule-cache replay, UNKNOWN / INFEASIBLE =
+    # heuristic fallback, heuristic = solver never ran (optimize=0).
+    sched_status = (meta.get("schedule") or {}).get("status") or "heuristic"
     print(
         f"[compile] {meta.get('n_layers')} layers "
         f"(d={config.model.d}, d_hidden={config.model.d_hidden or config.model.d}, "
-        f"optimize={config.model.optimize}, scale={config.model.scale}, "
+        f"optimize={config.model.optimize}, schedule={sched_status}, "
+        f"scale={config.model.scale}, "
         f"d_embed={meta.get('d_embed')}, vocab_rows={meta.get('n_vocab_rows')}) "
         f"-> {cache_dir}",
         flush=True,

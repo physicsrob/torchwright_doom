@@ -208,6 +208,32 @@ would reintroduce the need for a bounded cache. The earlier windowed
 cache has been removed, so that would be a from-scratch re-add, not a
 dormant switch — record the trade-off if you revisit it.
 
+# Schedule cache and CP-SAT measurement
+
+`make compile` embeds a CP-SAT solve whose winning schedule is cached
+durably (the Modal schedule volume), keyed on the lowered topology +
+geometry + the **torchwright source hash** + the optimize level it was
+validated at. Consequences:
+
+- Any torchwright change invalidates cached schedules — the next
+  compile re-solves. Raising `optimize` in a config re-solves once at
+  the bigger budget instead of silently replaying the smaller one.
+- The `[compile] N layers (...)` headline prints `schedule=` provenance
+  (OPTIMAL / FEASIBLE = a real solve, CACHED = cache replay,
+  UNKNOWN / INFEASIBLE = heuristic fallback, heuristic = optimize 0).
+  Never report a depth without its provenance.
+- Schedules enter the cache exactly one way: a `make compile` solve.
+  Never inject entries into the volume by hand, and measurement runs
+  never write (they lack `TW_SCHEDULE_CACHE_DIR`).
+- NEVER write a standalone replica of the production model
+  construction to measure the solver — replicas rot on every compiler
+  change (`cpsat_prod_harness.py` died this way, deleted 2026-07-09).
+  Measure through the real path: `scripts/cpsat_gap_attribution.py`
+  (the real `forward_compile`, solve-only, cache-bypassing,
+  fingerprint-gated) or the CP-SAT fixture layer
+  (`modal_cpsat_fixture.py`), which snapshots the problem from inside
+  the real compile.
+
 # Testing
 
 Tests live under `tests/` (`tests/embedding/`, `tests/scene/`,

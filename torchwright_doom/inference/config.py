@@ -49,7 +49,6 @@ class ModelConfig:
     d_hidden: int | None = None
     max_layers: int = 200
     trim_heads: bool = True
-    assume_zero_init: bool = True
     max_seq_len: int = 65536
     optimize: int = 0
     # Fold every bias into its matmul against the pinned constant-1 column
@@ -236,7 +235,6 @@ def load_render_config(path: str | Path) -> RenderConfig:
             d_hidden=_optional_int(model.get("d_hidden")),
             max_layers=int(model.get("max_layers", 200)),
             trim_heads=bool(model.get("trim_heads", True)),
-            assume_zero_init=bool(model.get("assume_zero_init", True)),
             max_seq_len=int(model.get("max_seq_len", 65536)),
             optimize=int(model.get("optimize", 0)),
             bias=bool(model.get("bias", True)),

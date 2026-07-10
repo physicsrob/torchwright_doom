@@ -10,9 +10,9 @@ bias=False solves at 16383); ``lower()`` run WITHOUT the production
 collapse passes (``collapse_univariate/collapse_pl`` + lane cap) — the
 production lowered graph is shorter (its DAG floor is 32, not the 33
 measured here); and the graph was built bare (no WAD/AssetIndex, default
-screen env).  Use ``scripts/cpsat_prod_harness.py`` (fingerprint-gated
-production-exact construction) for any number that has to transfer to
-the shipped compile.
+screen env).  Use ``scripts/cpsat_gap_attribution.py`` (the real
+``forward_compile``, solve-only, fingerprint-gated) for any number that
+has to transfer to the shipped compile.
 
 Context (depth_experiments_log.md): at HEAD the DAG floor is 33 but every
 solver configuration in ``cpsat_space_experiments`` proves lb=38 — the
@@ -88,7 +88,6 @@ def _probe(output_node, disabled: frozenset, k: int) -> str:
         d_head=D_HEAD,
         d_hidden=D_HIDDEN,
         max_layers=MAX_LAYERS,
-        assume_zero_init=True,
         _disabled_families=disabled,
     )
     built.model.Add(built.n_layers_var <= k)
