@@ -8,6 +8,9 @@ is to shorten the *longest mode-aware path* through the post-fusion graph.
 This tool reconstructs that exact path so we can see WHICH ops/subsystems make
 up the floor and where the reduction opportunities are.
 
+It also reports scheduling slack for the expensive operation families: how
+many layers each site can move before it would extend the depth floor.
+
 It is faithful to production: it builds the graph through
 ``inference.compiled_model.build_graph`` (which passes ``asset_index``, unlike
 ``analyze_forward_cost``) and applies the same width-safe linear-fusion gate
@@ -57,6 +60,16 @@ from torchwright.compiler.forward.cpsat_scheduler import (  # noqa: E402
     routing,
 )
 from torchwright.compiler.forward.scheduling_policy import LEGACY_POLICY  # noqa: E402
+
+
+_SLACK_FAMILIES = (
+    "floor_int",
+    "table_lookup_2d",
+    "colormap_row",
+    "in_range",
+    "sawtooth",
+    "ray_",
+)
 
 
 def _modes(n, gm, flex_routing=True, usable_slots=None):
@@ -379,6 +392,28 @@ def main():
     print("--- critical-set node count per es level (parallelism of the floor) ---")
     width_line = " ".join(f"{lvl}:{crit_level[lvl]}" for lvl in sorted(crit_level))
     print(f"  {width_line}")
+
+    # Per-source slack for the wide operations most often considered for
+    # rewrites. A site with slack >= k can grow by k layers without moving the
+    # graph's dependency floor.
+    def annotation_site(n):
+        annotation = getattr(n, "annotation", "") or "<none>"
+        return "/".join(annotation.split("/")[:2])
+
+    slack_by_site = defaultdict(list)
+    for nid, earliest in es_min.items():
+        n = id2node[nid]
+        label = _node_label(n)
+        if any(pattern in label for pattern in _SLACK_FAMILIES):
+            slack_by_site[annotation_site(n)].append(ls_min[nid] - earliest)
+
+    print("\n--- slack for wide operation families, by source site ---")
+    for site in sorted(slack_by_site, key=lambda s: min(slack_by_site[s])):
+        values = sorted(slack_by_site[site])
+        print(
+            f"  min={values[0]:>3} p50={values[len(values) // 2]:>3} "
+            f"max={values[-1]:>3} n={len(values):>4}  {site}"
+        )
 
 
 if __name__ == "__main__":

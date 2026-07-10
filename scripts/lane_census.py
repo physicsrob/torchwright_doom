@@ -17,8 +17,7 @@ production-topology numbers run with:
     TORCHWRIGHT_DOOM_SCREEN_HEIGHT=200 TORCHWRIGHT_DOOM_DETAIL=low \\
     TORCHWRIGHT_DOOM_HUD=1 python -m scripts.lane_census
 
-Baseline numbers (production env, 2026-07-04) live in
-``swiglu_opportunities_findings.md``.
+Run the command above to produce current production-topology numbers.
 """
 
 from __future__ import annotations

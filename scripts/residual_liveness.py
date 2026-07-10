@@ -3,7 +3,7 @@
 Answers "what is alive on the residual stream at each compiled layer, and how
 wide is it?" — the transparency behind the residual-bound / min-d question. The
 residual width (``d`` / d_model) carries node *outputs* between layers; this is
-distinct from the MLP-hidden ReLU width (see ``audit_relu.py``).
+distinct from the transient MLP hidden width.
 
 Mechanism (memory-safe, no weights): runs the heuristic scheduler's schedule-only
 warm-start (same path ``analyze_forward_cost`` uses). The scheduler advances one

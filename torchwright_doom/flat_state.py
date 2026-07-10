@@ -386,7 +386,7 @@ class FlatPassState:
         # parallel; one pick_by_one_hot on one_hot(y // CHUNK) keeps the head that
         # actually contains y — ONE sublayer after the reads instead of the K-1
         # chained selects that put this fold on the compiled depth floor
-        # (visplane_cascade_plan.md). The chunk mask is off-chain: span_row_y is
+        # in the old fold. The chunk mask is off-chain: span_row_y is
         # an integer input slot, so thermometer_floor_div/one_hot give a clean
         # 0/1 mask (pick_by_one_hot's contract). Junk rows (non-SPAN_ROW: the
         # typed extract yields y = 0) take chunk 0's pick — bit-identical to the

@@ -848,8 +848,7 @@ class WallSpanRuntimeDraft:
         k1_y1_value = y_start_for_part(part_oh_1)
         k2_y1_value = y_start_for_part(part_oh_2)
 
-        # --- Flat candidate-visibility masks (paint-cascade flatten; see
-        # paint_cascade_plan.md, execution record) ---
+        # --- Flat candidate-visibility masks (paint-cascade flatten) ---
         # A candidate k_j is visible iff it exists (k_part_j != PART_NONE)
         # and its part's span is ok. The old per-part has_* conjunction is
         # structural here: vocab._K_PART_TABLES only lists parts whose

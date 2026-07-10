@@ -138,8 +138,8 @@ __all__ = [
 # ~255-wide ``floor_int`` digit-quad (see :func:`_digit_quad_payload`). Each
 # branch that emits one used to build its OWN ``make_token_head`` head eagerly,
 # so ~24 of these 255-wide staircases sat live on the residual at once — the
-# measured residual-width peak (``scripts/COST_NOTES.md``: ~39% of the d=6400
-# peak is digit-quad emit, all collapsible).
+# measured residual-width peak: digit-quad emit occupied ~39% of the d=6400
+# peak, and all of those copies were collapsible.
 #
 # Instead, an owner ``after_*`` returns just its 1-wide scalar wrapped in a
 # :class:`ScalarEmit`. The dispatch (``render_main._collapse_scalar_emits``)

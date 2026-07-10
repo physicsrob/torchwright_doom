@@ -457,7 +457,7 @@ procedure status_bar_pass():                  # ST_Drawer
 `ST_Drawer.item(item=i)` indexes the baked draw-list tables (patch id +
 screen origin/size); each patch is its own masked lump, composited one at
 a time. The bar is *not* the weapon's path — it is the unscaled
-`V_DrawPatch` blitter (`FINDINGS_status_bar.md`).
+`V_DrawPatch` blitter.
 
 ## Terminal
 

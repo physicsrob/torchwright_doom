@@ -612,7 +612,7 @@ def same_int(a: Node, b: Node) -> Node:
     where ``|a-b| >= 0.6``, linear ramp between. The ``sub`` fuses into the
     PWL's input projection, so integer equality costs one sublayer instead
     of the previous abs -> compare -> not three (it sat on the compiled
-    depth floor via the clip-presence check; paint_cascade_plan.md).
+    depth floor via the clip-presence check).
     Integer inputs land squarely in the flats; the 0.4 flat margin covers
     the recovered-value noise the old compare-threshold-at-0.5 form
     absorbed (attention recoveries here carry ~0.02). Differences beyond
@@ -821,7 +821,7 @@ def le_span_y(y1: Node, y2: Node) -> Node:
 
     One fused sub+compare sublayer (the old ``not (y1 - y2 > 0.5)`` form
     spent a second sublayer on the negation, and sat on the compiled depth
-    floor via the span-ok flags; paint_cascade_plan.md). Same half-integer
+    floor via the span-ok flags). Same half-integer
     threshold contract on integer y values."""
     return compare(sub(y2, y1), -0.5)
 
@@ -1021,7 +1021,7 @@ def radix_col_key(col_scalar: Node) -> Node:
     0.45 away from any integer, far beyond the leak), so a leaked value
     stays on the right (bucket, digit) pair, and ``one_hot`` rounds it to
     a clean integer one-hot — no pre-snap is needed and a matched key's
-    dot is exactly 2 (paint_cascade_plan.md, step 5)."""
+    dot is exactly 2."""
     b = COL_RADIX_BASE
     hi = thermometer_floor_div(col_scalar, b, COLUMN_COUNT)
     lo = mod_sawtooth(col_scalar, b, COLUMN_COUNT)

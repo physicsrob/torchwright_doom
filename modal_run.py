@@ -21,7 +21,8 @@ The CPU-only container is sized via env vars read at (local) import time —
 they must be in the environment, not make variables:
 
     MODAL_RUN_CPU=64 MODAL_RUN_MEMORY=65536 MODAL_RUN_TIMEOUT=7200 \\
-        make modal-run MODULE=scripts.cpsat_space_experiments CPU_ONLY=1
+        make modal-run MODULE=scripts.cpsat_gap_attribution CPU_ONLY=1 \
+            ARGS="--config configs/e1m1.yaml --sound --seeds 0"
 """
 
 import os
@@ -55,7 +56,7 @@ def _build_cmd(module: str, script: str, args: str) -> list[str]:
 # Local env vars forwarded verbatim into the remote process. The screen/graph
 # shape vars are load-bearing for every probe that rebuilds the production
 # graph (the screen-env trap: without them a probe silently measures the
-# 60x50 hud-off graph — see scripts/critical_chain.py).
+# 60x50 hud-off graph — see scripts/critical_path_extract.py).
 _FORWARD_ENV_PREFIXES = ("TORCHWRIGHT_DOOM_",)
 _FORWARD_ENV_NAMES = ("CRIT_PATH", "OPT_GRAPH", "FUSE_FILTER")
 

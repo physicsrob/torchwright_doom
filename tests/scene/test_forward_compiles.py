@@ -20,8 +20,8 @@ It is also the regression guard for the dispatch output head: the literal
 the head-gated ``max_fanout`` reduction here compiles at a modest ``d``.
 
 NOT validated here: running the compiled model (compiled-value / PL-noise fidelity).
-The doom transformer's weights densify to >26 GB, so onnxruntime ``bad_alloc``s
-just loading it on a 30 GB box (see ``scripts/probe_onnx_inference.py``) — inference
+The doom transformer's weights densify to >26 GB, so ONNX Runtime exhausts a
+30 GB box just loading it — inference
 validation belongs on a larger machine. The in-process free-run on a tiny scene
 (``test_forward_ar_rollout``) is the one compiled-behavior check that fits locally.
 """

@@ -1,9 +1,8 @@
 """Pin every witness-chain node to a torchwright_doom source line, and
 decompose each witness attention read into Q/K/V binding depths.
 
-Productized merge of the paint-cascade session's P0/P1 scratch probes
-(``paint_cascade_plan.md``, execution record). Runs
-``scripts/critical_chain.py``'s exact pipeline (forward -> always-on
+Productized merge of the paint-cascade session's P0/P1 scratch probes. Runs
+the depth-floor pipeline (forward -> always-on
 fusion -> lower -> ``build_graph_model`` -> layer bounds), plus:
 
 * a ``Node.__init__`` patch recording each node's creation stack, with
@@ -116,7 +115,7 @@ def main():
         return "<no source mapping>"
 
     # Witness chain: from a deepest node, greedily follow the deepest
-    # predecessor (same walk as critical_chain.py).
+    # predecessor on the deepest dependency walk.
     cur = max(es, key=lambda i: es[i])
     chain = [cur]
     while preds[cur]:

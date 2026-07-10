@@ -185,7 +185,7 @@ def dispatch_next_token(
     # shallow tree ~22 (44 total), flat ~10 (32 total). The width cost is small
     # (each head is ~19 cols + its inputs; +~3% peak from 2→8). 8 captures most of
     # the depth win at a residual that still fits a modest d. The reassociation is
-    # output-identical (scripts/check_fanout_equivalence.py: 0 next-token diffs).
+    # output-identical in the tiny-scene fanout equivalence measurement.
     # 16 keeps the sum single-level after the shared pixel branches' arms are
     # flattened into this switch (~15 distinct heads); 8 would re-add a level.
     head = type_switch(*_distinct_head_pairs(inp, branches), max_fanout=16)
@@ -543,7 +543,7 @@ def _collapse_scalar_emits(
     branches: Mapping[str, "Node | ScalarEmit"],
 ) -> dict[str, Node]:
     """Collapse every numeric-carrier branch into ONE shared digit-quad head per
-    carrier — the residual-width keystone (see ``scripts/COST_NOTES.md``).
+    carrier, avoiding simultaneous wide emit heads on the residual stream.
 
     Each numeric-carrier branch (``VALUE`` / ``ANGLE_VALUE``) returns a
     :class:`ScalarEmit` carrying only its 1-wide scalar, not a full
