@@ -70,6 +70,7 @@ def run_fixture(
     config_text: str,
     fingerprint_hint: str,
     budget: float,
+    seeds: tuple = (),
 ) -> dict:
     import os
     import sys
@@ -86,7 +87,104 @@ def run_fixture(
         return result
     if mode == "load":
         return _load_and_prove(fingerprint_hint, budget)
-    raise ValueError(f"unknown mode {mode!r} (expected generate|load)")
+    if mode == "feascheck":
+        return _feascheck(fingerprint_hint, int(seeds[0]) if seeds else 1, budget)
+    raise ValueError(f"unknown mode {mode!r} (expected generate|load|feascheck)")
+
+
+def _feascheck(fingerprint_hint: str, off_seed: int, budget: float) -> dict:
+    """C5 soundness-at-scale: hard-fix a real rows-OFF assignment into a
+    rows-ON model and confirm FEASIBLE — proves the redundant rows are slow,
+    not wrong (they can't cut a schedule the cumulative admits)."""
+    from ortools.sat.python import cp_model
+
+    from torchwright.compiler.forward.cpsat_scheduler import (
+        ATTN,
+        MLP,
+        build_model_from_snapshot,
+        solve_schedule_from_snapshot,
+    )
+    from torchwright.compiler.forward.cpsat_snapshot import SchedulingProblem
+    from torchwright.compiler.forward.scheduling_policy import SchedulingPolicy
+
+    fixture_dir = Path(_MOUNT) / _FIXTURE_SUBDIR
+    path = (
+        fixture_dir / f"{fingerprint_hint}.json"
+        if fingerprint_hint
+        else sorted(fixture_dir.glob("*.json"), key=lambda p: p.stat().st_mtime)[-1]
+    )
+    problem = SchedulingProblem.load(
+        path, expected_fingerprint=fingerprint_hint or path.stem
+    )
+    geom = problem.identity.geometry
+    policy = SchedulingPolicy(**geom["policy"]) if geom.get("policy") else None
+    hint = problem.hint
+    build_kw = dict(
+        d=geom["d"],
+        d_head=geom["d_head"],
+        d_hidden=geom["d_hidden"],
+        flex_routing=geom["flex_routing"],
+        cancel_slack=geom["cancel_slack"],
+        policy=policy,
+        reserve_residual=geom["reserve_residual"],
+        reserve_heads=geom["reserve_heads"],
+        max_layers=geom["max_layers"],
+        tighten_domains=True,
+    )
+
+    # 1. A real rows-OFF solve → a genuine cumulative-feasible assignment.
+    asg, stats = solve_schedule_from_snapshot(
+        problem,
+        time_budget_s=budget,
+        solver_params={"random_seed": off_seed},
+        hint_layers=hint.layers if hint else None,
+        hint_routing=hint.routing if hint else None,
+        hint_cancel=hint.cancel if hint else None,
+        hint_cancel_mech=hint.cancel_mech if hint else None,
+        _residual_capacity_rows=False,
+        **build_kw,
+    )
+    if asg is None:
+        raise RuntimeError("rows-OFF solve found no assignment to hard-fix")
+    print(
+        f"[feascheck] rows-OFF seed={off_seed} draw={asg.n_layers} "
+        f"status={stats.status_name}",
+        flush=True,
+    )
+
+    # 2. Hard-fix that assignment into a rows-ON model; feasibility is the test.
+    built = build_model_from_snapshot(problem, _residual_capacity_rows=True, **build_kw)
+    model = built.model
+    for nid, L in asg.node_to_layer.items():
+        if nid in built.layer_var:
+            model.Add(built.layer_var[nid] == L)
+    for nid, L in asg.node_to_cancel_layer.items():
+        if nid in built.cancel_layer:
+            model.Add(built.cancel_layer[nid] == L)
+        elif nid in built.input_cancel_layer:
+            model.Add(built.input_cancel_layer[nid] == L)
+    for nid, r in asg.node_to_routing.items():
+        if nid in built.is_attn:
+            model.Add(built.is_attn[nid] == (1 if r == ATTN else 0))
+    for nid, mech in asg.node_to_cancel_mech.items():
+        if nid in built.cancel_in_mlp:
+            model.Add(built.cancel_in_mlp[nid] == (1 if mech == MLP else 0))
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = 120.0
+    solver.parameters.num_search_workers = _CPUS
+    status = solver.StatusName(solver.Solve(model))
+    print(
+        f"[feascheck] rows-ON hard-fixed to off's {asg.n_layers}-layer "
+        f"assignment: status={status} (FEASIBLE/OPTIMAL == rows are sound) "
+        f"literals={built.residual_capacity_literals}",
+        flush=True,
+    )
+    return {
+        "off_draw": asg.n_layers,
+        "off_status": stats.status_name,
+        "fixed_status": status,
+        "literals": built.residual_capacity_literals,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -420,6 +518,18 @@ def main(
     config_path = Path(config)
     config_text = config_path.read_text() if config_path.exists() else ""
     config_name = config_path.name
+
+    if mode == "feascheck":
+        res = run_fixture.remote(
+            mode="feascheck",
+            config_name=config_name,
+            config_text=config_text,
+            fingerprint_hint=fingerprint,
+            budget=budget,
+            seeds=(1,),
+        )
+        print("[local] feascheck:", res, flush=True)
+        return
 
     if mode in ("generate", "both"):
         gen = run_fixture.remote(

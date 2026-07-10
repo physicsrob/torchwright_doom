@@ -3,9 +3,12 @@
 STALE (2026-07-07): pre-RoPE — builds the graph without a RopeConfig and
 imports symbols current torchwright no longer exposes; it fails against
 current torchwright and its measurements predate the RoPE port.  Do not
-build on it.  For solver probes use ``scripts/cpsat_prod_harness.py``
-(production-exact, fingerprint-gated); for family bisection its
-``probe-k --disable-families`` covers the localize mode.
+build on it.  For solver probes use ``scripts/cpsat_gap_attribution.py``
+(drives the real ``forward_compile`` solve-only, fingerprint-gated); its
+``--families`` covers family bisection.  Solver experiments beyond that
+load the CP-SAT fixture (``modal_cpsat_fixture.py``) instead of
+rebuilding the model — standalone replicas of production construction
+are the failure mode this note exists to prevent.
 
 Schedule-only (no weights, ~1.3-2 GB): replicates ``forward_compile``'s CP-SAT
 path — heuristic warm-start, then ``solve_schedule`` with
@@ -67,26 +70,22 @@ def _build_graph():
     return nt, pos
 
 
-def _setup(output_node, pos, d, assume_zero_init=True):
+def _setup(output_node, pos, d):
     """Replicate forward_compile's pre-loop init (schedule-only).
 
-    ``assume_zero_init`` defaults to True to match ``compile_to_onnx`` (the
-    ONNX runtime always zero-inits the residual stream): the initially-free
-    pool is marked clean so the heuristic warm-start skips BIRTH-dirty cancels.
+    Zero-init is a runtime contract (the assume_zero_init flag and the
+    map-side clean-tracking were retired 2026-07), so the seed is just
+    the allocations.
     """
     graph = GraphAnalyzer(output_node)
     output_node = graph.get_output_node()
     input_nodes = [n for n in graph.get_all_nodes() if graph.is_input_node(n)]
     rmap = ResidualStreamMap(d)
     rmap.allocate(pos)
-    rmap.mark_clean(rmap.get_indices(pos))
     for n in input_nodes:
         if n is pos:
             continue
         rmap.allocate(n)
-        rmap.mark_clean(rmap.get_indices(n))
-    if assume_zero_init:
-        rmap.mark_clean(set(rmap._free))
     computed = set(input_nodes)
     return graph, output_node, rmap, computed
 
@@ -134,7 +133,6 @@ def mode_status(
         hint_routing=hint_routing if hint_routing else None,
         hint_cancel=hint_cancel if hint_cancel else None,
         log_search_progress=solver_log,
-        assume_zero_init=True,
     )
     t_solve = time.perf_counter() - t1
 
@@ -236,9 +234,9 @@ def localize(output_node, pos, d, d_head, time_budget_s):
         f"[all families ON]                 -> {st2}"
     )
 
-    # Confirmation: drop the BIRTH-dirty intervals (assume_zero_init=True) and
-    # keep ONLY the attention cumulative.  If this flips INFEASIBLE->feasible,
-    # the BIRTH-dirty over-count is the culprit.
+    # Confirmation: drop the BIRTH-dirty intervals (zero-init) and keep ONLY
+    # the attention cumulative.  If this flips INFEASIBLE->feasible, the
+    # BIRTH-dirty over-count is the culprit.
     all_fams_no_attn = frozenset(CONSTRAINT_FAMILIES) - {"attn_cumulative"}
     bz = build_cpsat_model(
         output_node,
@@ -248,11 +246,10 @@ def localize(output_node, pos, d, d_head, time_budget_s):
         d_hidden=d,
         max_layers=solver_max_layers,
         _disabled_families=all_fams_no_attn,
-        assume_zero_init=True,
     )
     _fix_schedule(bz, hint_layers, hint_routing, None)
     stz = _solve_status(bz.model, time_budget_s)
-    print(f"  [only attn_cumulative, assume_zero_init=True (no BIRTH-dirty)] -> {stz}")
+    print(f"  [only attn_cumulative, zero-init (no BIRTH-dirty)] -> {stz}")
 
     # Sanity baseline: disable ALL toggleable families.  With layers+routing
     # fixed and cancel free and no capacity/ordering family, only definitional
@@ -349,7 +346,6 @@ def noeager(output_node, pos, d, d_head, time_budget_s):
             d_head=d_head,
             d_hidden=d,
             max_layers=solver_max_layers,
-            assume_zero_init=True,
             _disabled_families=disabled,
         )
 
@@ -391,7 +387,6 @@ def noeager(output_node, pos, d, d_head, time_budget_s):
         hint_layers=hint_layers,
         hint_routing=hint_routing,
         hint_cancel=hint_cancel,
-        assume_zero_init=True,
     )
     cp = getattr(assignment, "n_layers", None)
     tag = ">>> SOLVED <<<" if assignment is not None else ">>> still no incumbent <<<"
@@ -452,12 +447,18 @@ def measure(output_node, pos, d, d_head):
                 cmax = max(cmax, layer_of[c.node_id] + 1)
         return cmax
 
+    # Every model build in this script uses d_hidden=d with bias=True, so the
+    # layer's usable hidden-slot pool is d — what the routing rule needs to
+    # decide whether a Linear's MLP bypass (2 * d_output slots) fits at all.
+    usable_slots = d
+
     def attn_routed(n):
         if isinstance(n, (Add, Attn)):
             return True
         if is_flex(n, gm):
-            return hint_routing.get(n.node_id, routing(n, gm, LEGACY_POLICY)) == ATTN
-        return routing(n, gm, LEGACY_POLICY) == ATTN
+            pinned = routing(n, gm, LEGACY_POLICY, usable_slots)
+            return hint_routing.get(n.node_id, pinned) == ATTN
+        return routing(n, gm, LEGACY_POLICY, usable_slots) == ATTN
 
     def free_add(A):
         for E in A.inputs:

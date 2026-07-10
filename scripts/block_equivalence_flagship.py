@@ -10,8 +10,9 @@ compile-metrics tuple for each.  Any cost regression (layers/heads/hidden) is a
 Gate-C stop-and-report.
 
 Schedule-only (no d*d weight tensors) so it runs on CPU at d=8192.  Both paths
-use identical seeding (the same const-1 self-match column + inputs, same
-``assume_zero_init``), so the chain-vs-block delta is what the report measures
+use identical seeding (the same const-1 self-match column + inputs, the
+same unconditional zero-init), so the chain-vs-block delta is what the
+report measures
 — RMSNorm's 1-2 reserved columns are omitted here because they cost both paths
 the same and cancel in the delta.  The scheduler is the eager heuristic, which
 is what production's optimize=2 CP-SAT falls back to at flagship scale (cold
@@ -93,6 +94,7 @@ def main() -> None:
     import torch  # noqa: F401  (imported for side-effect parity with the builder)
 
     from torchwright.compiler.lower import lower
+    from torchwright.compiler.realization import usable_hidden_slots
 
     # The reusable harness lives in torchwright/scripts/, whose package name
     # ("scripts") collides with torchwright_doom/scripts/ on sys.path — load it
@@ -125,15 +127,14 @@ def main() -> None:
     t0 = time.perf_counter()
     out = build_flagship(config_name, d_head, d_rot, max_seq_len)
     lowered = lower(out, verbose=True)  # certification: raises on raw chains
-    print(
-        f"  pre-schedule demand: {lowered.cost_summary(d_head=d_head).format_short()}"
+    demand = lowered.cost_summary(
+        d_head=d_head, usable_slots=usable_hidden_slots(d_hidden, bias=True)
     )
+    print(f"  pre-schedule demand: {demand.format_short()}")
     print(f"  built block-native graph in {time.perf_counter() - t0:.1f}s")
 
     t0 = time.perf_counter()
-    metrics = schedule_metrics(
-        out, d=d, d_head=d_head, d_hidden=d_hidden, assume_zero_init=True
-    )
+    metrics = schedule_metrics(out, d=d, d_head=d_head, d_hidden=d_hidden)
     print(f"  scheduled in {time.perf_counter() - t0:.1f}s")
 
     got = {

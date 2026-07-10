@@ -146,7 +146,7 @@ def main() -> None:
     families = [f.strip() for f in args.families.split(",") if f.strip()]
     seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
 
-    cells = []
+    cells: list[tuple[str, frozenset]] = []
     if args.sound:
         cells.append(("sound", frozenset()))
     for fam in families:
@@ -155,7 +155,7 @@ def main() -> None:
     for label, disabled in cells:
         for i, seed in enumerate(seeds):
             t0 = time.perf_counter()
-            kw = dict(_solver_seed=seed, _force_resolve=True)
+            kw: dict = dict(_solver_seed=seed, _force_resolve=True)
             if disabled:
                 kw["_disabled_families"] = disabled
             else:
@@ -181,7 +181,9 @@ def main() -> None:
                     f"wall_s={time.perf_counter() - t0:.1f}",
                     flush=True,
                 )
-            except Exception as exc:  # noqa: BLE001 - one bad cell shouldn't kill the sweep
+            except (
+                Exception
+            ) as exc:  # noqa: BLE001 - one bad cell shouldn't kill the sweep
                 print(
                     f"[cell] config={args.config} family={label} seed={seed} "
                     f"ERROR {type(exc).__name__}: {str(exc)[:300]} "

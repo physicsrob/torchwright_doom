@@ -108,7 +108,6 @@ def _audit(output_node, pos_encoding, kw, fix_budget_s: float, core_budget_s: fl
         policy=kw.get("policy"),
         reserve_heads=kw.get("reserve_heads", 0),
         reserve_residual=kw.get("reserve_residual", 0),
-        assume_zero_init=kw.get("assume_zero_init", False),
         tighten_domains=kw.get("tighten_domains", False),
         # The production model is hint-aware: the captured hints size the
         # per-node cancel windows (hint-aware widening), so the audit must
@@ -152,6 +151,10 @@ def _audit(output_node, pos_encoding, kw, fix_budget_s: float, core_budget_s: fl
             build_kw["policy"] or SchedulingPolicy(),
             build_kw["flex_routing"],
             max_layers,
+            # build_cpsat_model's own `d_hidden` is already the usable
+            # hidden-slot count; the static routing rule reads it to decide
+            # whether a Linear's MLP bypass fits.
+            usable_slots=build_kw["d_hidden"],
         )
     else:
         lo_b = hi_b = None
@@ -504,7 +507,6 @@ def main() -> None:
             cache_stride=config.model.cache_stride,
             trim_heads=config.model.trim_heads,
             optimize=config.model.optimize,
-            assume_zero_init=config.model.assume_zero_init,
             verbose=True,
             asset_config=config.asset_config(),
             wad_path=resolve_wad_path(config),

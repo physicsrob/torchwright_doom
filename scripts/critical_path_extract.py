@@ -59,10 +59,13 @@ from torchwright.compiler.forward.cpsat_scheduler import (  # noqa: E402
 from torchwright.compiler.forward.scheduling_policy import LEGACY_POLICY  # noqa: E402
 
 
-def _modes(n, gm, flex_routing=True):
+def _modes(n, gm, flex_routing=True, usable_slots=None):
     if flex_routing and is_flex(n, gm):
         return (ATTN, MLP)
-    return (routing(n, gm, LEGACY_POLICY),)
+    # usable_slots is only read for a standalone Linear, and under
+    # flex_routing=True those took the branch above; routing() raises rather
+    # than guess if that ever stops being true.
+    return (routing(n, gm, LEGACY_POLICY, usable_slots),)
 
 
 def _gap(a, b):
