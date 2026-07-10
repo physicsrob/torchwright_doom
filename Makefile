@@ -19,11 +19,17 @@ PNG_ZOOM ?= 8
 # head-pruning summary to stdout); opt out with VERBOSE_COMPILE=0.
 VERBOSE_COMPILE ?= 1
 _RENDER_VERBOSE_COMPILE := $(if $(filter-out 0,$(VERBOSE_COMPILE)),--verbose-compile)
+# DISABLE_CACHE=1 make compile — production compile that neither reads nor
+# writes the durable caches (compiled-ONNX CACHE_VOLUME + SCHEDULE_VOLUME);
+# the sampled schedule is saved to local /tmp instead (path printed).  Any
+# non-empty, non-0 value enables it.  `compile` only.
+_RENDER_DISABLE_CACHE := $(if $(filter-out 0,$(DISABLE_CACHE)),--disable-cache)
 _RENDER_PNG := $(if $(PNG),--png)
 _RENDER_COMPARE := $(if $(COMPARE),--compare)
 _RENDER_COMPILE_ARGS = $(strip \
 	--config $(CONFIG) \
 	$(_RENDER_VERBOSE_COMPILE) \
+	$(_RENDER_DISABLE_CACHE) \
 )
 _RENDER_RUN_ARGS = $(strip \
 	--config $(CONFIG) \
@@ -57,9 +63,11 @@ lint:
 # schedule than a local box can in the time budget. The artifact lands in the
 # durable CACHE_VOLUME (not local disk); a later `make run` is a cache hit.
 # (Local compile still happens implicitly via `make run-local` on a miss.)
+# The log file is timestamp+pid-unique so parallel invocations never share
+# one; the /tmp/torchwright_doom-compile.log symlink is last-wins.
 render-compile compile:
 	@bash -c ' \
-		LOGFILE=/tmp/torchwright_doom-compile-$$(date +%Y%m%d-%H%M%S).log ; \
+		LOGFILE=/tmp/torchwright_doom-compile-$$(date +%Y%m%d-%H%M%S)-$$$$.log ; \
 		ln -sfn "$$LOGFILE" /tmp/torchwright_doom-compile.log ; \
 		echo "=== Log file: $$LOGFILE ===" | tee "$$LOGFILE" ; \
 		echo "=== Compiling on Modal (64-CPU CP-SAT) ===" | tee -a "$$LOGFILE" ; \

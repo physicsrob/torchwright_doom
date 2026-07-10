@@ -80,6 +80,7 @@ def compile_remote(
     cache_subdir: str,
     compile_payload: dict,
     verbose_compile: bool,
+    disable_cache: bool = False,
 ) -> dict:
     import os
     import sys
@@ -92,25 +93,55 @@ def compile_remote(
     # CP-SAT reads this at solve time (torchwright cpsat_scheduler); point it
     # at the container's full CPU allocation instead of the 16-worker default.
     os.environ["TW_CPSAT_WORKERS"] = str(_COMPILE_CPUS)
-    # Durable schedule cache (see SCHEDULE_VOLUME above).
-    os.environ["TW_SCHEDULE_CACHE_DIR"] = "/root/.cache/torchwright_doom/schedules"
+    if disable_cache:
+        # DISABLE_CACHE: neither durable cache is read or written.  Both the
+        # ONNX artifact and the schedule entry go to a per-call scratch dir
+        # (mkdtemp, not a fixed path: a warm container must not hand a later
+        # no-cache run an earlier one's artifact or schedule as a hit), and
+        # the volume reload/commit pairs are skipped — the mounts stay
+        # untouched.
+        import tempfile
+
+        scratch = tempfile.mkdtemp(prefix="compile-nocache-", dir="/tmp")
+        os.environ["TW_SCHEDULE_CACHE_DIR"] = f"{scratch}/schedules"
+        cache_dir = f"{scratch}/compiled/{cache_subdir}"
+        print(f"[compile] [nocache] volumes bypassed; scratch={scratch}", flush=True)
+    else:
+        # Durable schedule cache (see SCHEDULE_VOLUME above).
+        os.environ["TW_SCHEDULE_CACHE_DIR"] = "/root/.cache/torchwright_doom/schedules"
+        # The cache key + payload come from the LOCAL machine: this container
+        # has no ``.git``, so deriving them here would collapse the git SHAs
+        # to "unknown" and silently reuse a stale model across code changes.
+        CACHE_VOLUME.reload()
+        SCHEDULE_VOLUME.reload()
+        cache_dir = f"/root/.cache/torchwright_doom/compiled/{cache_subdir}"
 
     from torchwright_doom.inference.cli import compile_config
 
-    # The cache key + payload come from the LOCAL machine: this container has
-    # no ``.git``, so deriving them here would collapse the git SHAs to
-    # "unknown" and silently reuse a stale model across code changes.
-    CACHE_VOLUME.reload()
-    SCHEDULE_VOLUME.reload()
-    cache_dir = f"/root/.cache/torchwright_doom/compiled/{cache_subdir}"
     result = compile_config(
         config_path=config_path,
         verbose_compile=verbose_compile,
         cache_dir=cache_dir,
         compile_payload=compile_payload,
     )
-    CACHE_VOLUME.commit()
-    SCHEDULE_VOLUME.commit()
+    if disable_cache:
+        # Ship the sampled schedule back by VALUE so the local side can
+        # preserve the draw without any volume write (schedules enter the
+        # durable cache exactly one way — a caching compile solve).
+        sched_dir = Path(os.environ["TW_SCHEDULE_CACHE_DIR"])
+        result["nocache_schedules"] = {
+            p.name: p.read_text(encoding="utf-8")
+            for p in sorted(sched_dir.glob("*.json"))
+        }
+        print(
+            f"[compile] [nocache] done — durable caches untouched; "
+            f"{len(result['nocache_schedules'])} schedule entry(ies) "
+            f"returned inline",
+            flush=True,
+        )
+    else:
+        CACHE_VOLUME.commit()
+        SCHEDULE_VOLUME.commit()
     return result
 
 
@@ -153,7 +184,35 @@ def _volume_has_compiled(cache_subdir: str) -> bool:
     return {"model.onnx", "model.meta.json"} <= names
 
 
-def _compile_on_modal(config_path: Path, verbose_compile: bool) -> str:
+def _save_nocache_schedules(result: dict) -> None:
+    """Mirror a no-cache run's sampled schedule entries to local /tmp.
+
+    The no-cache path never writes SCHEDULE_VOLUME, so a good draw would
+    otherwise die with the container.  Filenames carry a timestamp + pid
+    (concurrent `make compile` runs are separate processes and must not
+    collide) plus the drawn n_layers so draws compare at a glance.
+    """
+    import json
+    import os
+
+    entries = result.get("nocache_schedules") or {}
+    if not entries:
+        # optimize=0 and UNKNOWN/INFEASIBLE fallbacks store no entry.
+        print("[local] [nocache] no schedule entry to save", flush=True)
+        return
+    save_dir = Path("/tmp/torchwright_doom-nocache-schedules")
+    save_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    for name, text in sorted(entries.items()):
+        n_layers = json.loads(text).get("n_layers")
+        dest = save_dir / f"{stamp}-p{os.getpid()}_L{n_layers}_{name}"
+        dest.write_text(text, encoding="utf-8")
+        print(f"[local] [nocache] schedule draw saved -> {dest}", flush=True)
+
+
+def _compile_on_modal(
+    config_path: Path, verbose_compile: bool, disable_cache: bool = False
+) -> str:
     """Compute the compile-cache key LOCALLY and compile on Modal on a miss.
 
     Shared by the render entrypoint (``main``) and the compile-only
@@ -174,6 +233,11 @@ def _compile_on_modal(config_path: Path, verbose_compile: bool) -> str:
     ``compile_config`` to call ``apply_screen_env`` before touching
     ``inference.compile_cache``).
 
+    ``disable_cache`` (the ``DISABLE_CACHE=1 make compile`` path) skips the
+    HIT probe (a volume read), compiles into container-local scratch instead
+    of CACHE_VOLUME, and mirrors the sampled schedule to local /tmp — the
+    durable caches are neither read nor written.
+
     Returns the cache subdir (the volume-relative key).
     """
     from torchwright_doom.inference.config import (
@@ -191,7 +255,23 @@ def _compile_on_modal(config_path: Path, verbose_compile: bool) -> str:
     compile_payload = canonical_compile_payload(render_config, wad_path)
     cache_subdir = cache_key_from_payload(compile_payload)
 
-    if _volume_has_compiled(cache_subdir):
+    if disable_cache:
+        print(
+            f"[local] [nocache] DISABLE_CACHE — cache probe skipped; compiling "
+            f"{config_path} on Modal ({_COMPILE_CPUS} CPUs) -> container-local "
+            f"scratch (volumes untouched)",
+            flush=True,
+        )
+        result = compile_remote.remote(
+            config_path.name,
+            config_text,
+            cache_subdir,
+            compile_payload,
+            verbose_compile,
+            True,
+        )
+        _save_nocache_schedules(result)
+    elif _volume_has_compiled(cache_subdir):
         print(f"[local] compile cache HIT CACHE_VOLUME:/{cache_subdir}", flush=True)
     else:
         print(
@@ -213,6 +293,7 @@ def _compile_on_modal(config_path: Path, verbose_compile: bool) -> str:
 def compile_only(
     config: str = "configs/e1m1.yaml",
     verbose_compile: bool = False,
+    disable_cache: bool = False,
 ):
     """``make compile`` — compile a config to the Modal cache volume, no render.
 
@@ -221,10 +302,22 @@ def compile_only(
     and a later ``make run`` is a cache hit.  The compiled ONNX lives in
     CACHE_VOLUME (durable), exactly where ``render_remote`` reads it — there is
     no local-disk copy (that is what ``make run-local`` would build instead).
+
+    ``--disable-cache`` (``DISABLE_CACHE=1 make compile``) runs the same
+    production compile but touches neither durable cache: no HIT probe, the
+    artifact dies with the container, and the sampled schedule is mirrored to
+    local /tmp instead of SCHEDULE_VOLUME (see _save_nocache_schedules).
     """
     config_path = Path(config)
-    cache_subdir = _compile_on_modal(config_path, verbose_compile)
-    print(f"[local] compile complete -> CACHE_VOLUME:/{cache_subdir}", flush=True)
+    cache_subdir = _compile_on_modal(config_path, verbose_compile, disable_cache)
+    if disable_cache:
+        print(
+            "[local] [nocache] compile complete — CACHE_VOLUME/SCHEDULE_VOLUME "
+            "untouched (artifact discarded with the container)",
+            flush=True,
+        )
+    else:
+        print(f"[local] compile complete -> CACHE_VOLUME:/{cache_subdir}", flush=True)
 
 
 @app.function(
