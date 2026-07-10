@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from torchwright_doom.constants import SCREEN_WIDTH
+from torchwright_doom.constants import COLUMN_COUNT
 from torchwright_doom.embedding import TOKEN_VOCAB, Layout, VocabLayoutError
 from torchwright_doom.tokens import Derived, IntSlot, TokenType
 
@@ -77,6 +77,6 @@ def test_live_derived_spans_disjoint() -> None:
 def test_multiwidth_declared_widths() -> None:
     layout = TOKEN_VOCAB.layout
     assert layout.derived_columns_by_name["id_lifted_key"][0][3] == 3
-    assert layout.derived_columns_by_name["u_tan_by_column"][0][3] == SCREEN_WIDTH
+    assert layout.derived_columns_by_name["u_tan_by_column"][0][3] == COLUMN_COUNT
     # id_lifted_key is shared across several types, each its own span
     assert len(layout.derived_columns_by_name["id_lifted_key"]) >= 2

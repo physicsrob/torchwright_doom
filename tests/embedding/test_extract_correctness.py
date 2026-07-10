@@ -29,11 +29,11 @@ from torchwright_doom.vocab import (
     ANGLE_BAM,
     ANGLE_VALUE,
     BEGIN,
+    COLUMN_COUNT,
     DONE,
     EMIT_X2,
     NODE,
     NO_OP,
-    SCREEN_WIDTH,
     SEG_CLOSED_DOOR,
     SEG_EMPTY_LINE,
     SEG_TWO_SIDED,
@@ -144,7 +144,7 @@ def test_is_type_indicator_strict_zero_or_one() -> None:
     [
         (NODE, "j", [0, 1, 31, 63]),  # boundaries + interior
         (SEG_TWO_SIDED, "flag", [0, 1]),
-        (EMIT_X2, "x", [0, 1, SCREEN_WIDTH // 2, SCREEN_WIDTH - 1]),
+        (EMIT_X2, "x", [0, 1, COLUMN_COUNT // 2, COLUMN_COUNT - 1]),
     ],
     ids=["NODE.j", "SEG_TWO_SIDED.flag", "EMIT_X2.x"],
 )
@@ -315,7 +315,7 @@ def test_extract_derived_one_hot_x_oh_NNN() -> None:
     """EMIT_X2's ``x_oh_NNN`` derived column reads 1 at the matching x,
     0 elsewhere."""
     inp = create_input("iv", TOKEN_VOCAB.layout.d_embed)
-    targets = [0, 7, SCREEN_WIDTH // 2, SCREEN_WIDTH - 1]
+    targets = [0, 7, COLUMN_COUNT // 2, COLUMN_COUNT - 1]
     nodes = {x: extract.extract_derived(inp, f"x_oh_{x:03d}") for x in targets}
 
     for x_actual in targets:

@@ -35,8 +35,8 @@ from torchwright_doom.embedding import (
 from torchwright_doom.tokens import Derived, FloatSlot, IntSlot, TokenType
 from torchwright_doom.vocab import (
     ANGLE_VALUE,
+    COLUMN_COUNT,
     EMIT_X2,
-    SCREEN_WIDTH,
     SEG,
     VALUE,
 )
@@ -263,10 +263,10 @@ def test_derived_column_round_trip_one_hot_emit_x1() -> None:
     elsewhere — the canonical column-addressed token for screen-X."""
     layout = TOKEN_VOCAB.layout
     emit_start, _ = TOKEN_VOCAB.type_to_row_range[EMIT_X2]
-    test_xs = [0, 1, SCREEN_WIDTH // 2, SCREEN_WIDTH - 1]
+    test_xs = [0, 1, COLUMN_COUNT // 2, COLUMN_COUNT - 1]
     for x in test_xs:
         row = W_EMBED[emit_start + x]
-        for col_name in (f"x_oh_{c:03d}" for c in range(SCREEN_WIDTH)):
+        for col_name in (f"x_oh_{c:03d}" for c in range(COLUMN_COUNT)):
             start, _w = layout.derived_columns[(EMIT_X2.name, "x", col_name)]
             target = int(col_name.split("_")[-1])
             expected = 1.0 if x == target else 0.0

@@ -41,16 +41,30 @@ Each row carries:
                                  query. One digit (2 cols) for positions
                                  whose widest slot has cardinality ≤ 256,
                                  two digits (4 cols) for 257..65536.
-  per-derived-name cols       — one column per distinct ``derived_name``
-                                 declared on any slot in the vocab.
-                                 Token types are mutually exclusive at
-                                 inference, so columns are shared across
-                                 types: ``x_oh_007`` is one column whether
-                                 it came from ``EMIT_X1.x`` or
-                                 ``WALL_COLUMN.x``. The ``Layout`` asserts
-                                 that same-named declarations agree on
-                                 their function output by sampling at
-                                 construction time.
+  per-declaration derived cols — one ``width``-wide span per derived
+                                 *declaration* (a ``(type, slot,
+                                 derived_name)`` triple), NOT one column
+                                 per distinct name and NOT shared across
+                                 types: ``x_oh_007`` owns five spans,
+                                 one for each of the five slots that
+                                 declare it (``clipScan.x``,
+                                 ``bboxClipScan.x``, ``drawseg.x2.x``,
+                                 ``setCursorX.x``, ``R_MakeSpans.col.x``),
+                                 while ``ray_x_007`` owns one.
+                                 ``extract_derived`` sums a name's spans
+                                 — token types are mutually exclusive at
+                                 inference, so only the active type's
+                                 span is non-zero.  Same-named
+                                 declarations must agree on *width* only;
+                                 their functions may differ, and do
+                                 (``setCursorX`` computes
+                                 ``int(v) // PIXEL_WIDTH == column``, the
+                                 other four ``int(v) == column``).  No
+                                 output-agreement check exists — the
+                                 per-declaration spans are what make the
+                                 disagreement harmless.  (See the
+                                 ``Layout`` class docstring, which is
+                                 authoritative.)
 
 The digit-quad encoder is one vector-PWL staircase (the high byte) plus
 affine math (the low byte) — ~2 MLP sublayers, and every slot uses the same
