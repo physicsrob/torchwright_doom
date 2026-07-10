@@ -229,10 +229,8 @@ validated at. Consequences:
   construction to measure the solver — replicas rot on every compiler
   change (`cpsat_prod_harness.py` died this way, deleted 2026-07-09).
   Measure through the real path: `scripts/cpsat_gap_attribution.py`
-  (the real `forward_compile`, solve-only, cache-bypassing,
-  fingerprint-gated) or the CP-SAT fixture layer
-  (`modal_cpsat_fixture.py`), which snapshots the problem from inside
-  the real compile.
+  (the real `forward_compile`, solve-only, cache-bypassing, and
+  fingerprint-gated).
 
 # Testing
 
