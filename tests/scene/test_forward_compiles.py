@@ -78,11 +78,6 @@ _D_HEAD = 64
 _D_ROT = 32
 
 
-# The d=4096 atomic-FFN-placement deadlock (torchwright 726f349; xfail'd here
-# 2026-07-03) dissolved with the swiglu machine flip: multiply lanes replaced
-# the relu-era grid banks, dropping the residual pressure the optimize=0
-# static schedule wedged on. The strict xfail XPASSed at the D2 cutover gate
-# and was removed per its own instruction.
 def test_forward_compiles_to_onnx(tmp_path) -> None:
     emb = build_doom_embedding("token_ids")
     rope = create_rope_config(d_head=_D_HEAD, max_positions=65536, d_rot=_D_ROT)
@@ -110,10 +105,9 @@ def test_forward_compiles_to_onnx(tmp_path) -> None:
     onnx.checker.check_model(model)  # structurally valid ONNX (I1–I4 already enforced)
 
     # The token-I/O static-cache contract: token_ids + cache_position +
-    # per-layer past PREFIX VIEWS in, logits out (past_len/Concat is gone —
-    # the CUDA-graph-capturable contract, plan_cuda_graph_decode.md; the
-    # past first dim is the SYMBOLIC cache_slots so one graph serves any
-    # attention-window bucket, plan_stride_bucketing.md).
+    # per-layer past PREFIX VIEWS in, logits out. The past first dimension is
+    # the symbolic cache_slots, so one CUDA-graph-capturable artifact serves
+    # any attention-window bucket.
     in_names = {i.name for i in model.graph.input}
     out_names = {o.name for o in model.graph.output}
     assert "token_ids" in in_names, in_names

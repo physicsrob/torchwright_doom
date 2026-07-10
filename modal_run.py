@@ -21,8 +21,7 @@ The CPU-only container is sized via env vars read at (local) import time —
 they must be in the environment, not make variables:
 
     MODAL_RUN_CPU=64 MODAL_RUN_MEMORY=65536 MODAL_RUN_TIMEOUT=7200 \\
-        make modal-run MODULE=scripts.cpsat_gap_attribution CPU_ONLY=1 \
-            ARGS="--config configs/e1m1.yaml --sound --seeds 0"
+        make modal-run MODULE=scripts.analyze_forward_cost CPU_ONLY=1
 """
 
 import os
@@ -103,8 +102,7 @@ def run_gpu(module: str, script: str, args: str, env: dict[str, str]) -> int:
     memory=_MEMORY,
     timeout=_TIMEOUT,
     # Same configs-augmented image as run_gpu: CPU scripts that rebuild the
-    # production graph (e.g. scripts.cpsat_hint_audit) load configs/e1m1.yaml
-    # from /root/configs.
+    # production graph load configs/e1m1.yaml from /root/configs.
     image=ASSETS_IMAGE,
 )
 def run_cpu(module: str, script: str, args: str, env: dict[str, str]) -> int:

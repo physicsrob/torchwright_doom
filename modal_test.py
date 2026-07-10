@@ -38,7 +38,6 @@ app = modal.App("torchwright-doom-test", image=TEST_IMAGE)
 # own container; everything else is batched together.
 # New test files are caught by the catch-all shard automatically.
 #
-# Both lists are empty: the whole suite fits one container today.
 # When a heavy compiled-test file needs its own container, list it in
 # _HEAVY_FILES; medium-weight groups go in _MEDIUM_FILE_GROUPS.
 # Anything not listed is picked up by the catch-all shard at the

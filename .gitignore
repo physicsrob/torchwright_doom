@@ -13,6 +13,3 @@ __pycache__
 .codex
 out/
 token_dump*.json
-
-# Recency-usage harness output dumps (position_attention_log.py) — generated on demand
-scripts/*.jsonl

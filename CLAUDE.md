@@ -225,13 +225,6 @@ validated at. Consequences:
 - Schedules enter the cache exactly one way: a `make compile` solve.
   Never inject entries into the volume by hand, and measurement runs
   never write (they lack `TW_SCHEDULE_CACHE_DIR`).
-- NEVER write a standalone replica of the production model
-  construction to measure the solver — replicas rot on every compiler
-  change (`cpsat_prod_harness.py` died this way, deleted 2026-07-09).
-  Measure through the real path: `scripts/cpsat_gap_attribution.py`
-  (the real `forward_compile`, solve-only, cache-bypassing, and
-  fingerprint-gated).
-
 # Testing
 
 Tests live under `tests/` (`tests/embedding/`, `tests/scene/`,
