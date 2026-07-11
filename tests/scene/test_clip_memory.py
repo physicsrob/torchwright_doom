@@ -1,4 +1,4 @@
-"""Focused gate for the lifted per-column ClipMemory recovery (Phase H, step #3).
+"""Focused gate for lifted per-column ``ClipMemory`` recovery.
 
 ``ClipMemory`` replaces a width-(SCREEN_WIDTH+1) one-hot column key with a
 width-3 lifted scalar-id equality so the R_RenderSegLoop clip read stops being a

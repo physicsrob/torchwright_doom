@@ -1,4 +1,4 @@
-"""Plan A: W_EMBED layout invariants + the A2 derived-column contract.
+"""``W_EMBED`` layout invariants and the derived-column contract.
 
 Pins the per-declaration derived-span model: widths agree across types
 for a shared name, a name is not declared on two slots of one type

@@ -1,8 +1,4 @@
-"""Plan A / A3: ``TokenType`` equality is name-based, not identity-based.
-
-These tests fail under the rejected option (default dataclass identity
-equality), pinning the decision rather than leaving it implicit.
-"""
+"""``TokenType`` equality is name-based, not identity-based."""
 
 from __future__ import annotations
 

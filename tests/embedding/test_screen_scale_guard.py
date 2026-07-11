@@ -1,9 +1,9 @@
-"""Anti-toy-scale guard: no bare screen-dimension literals.
+"""Screen-scale guard: no bare default-dimension literals.
 
-The production config renders at 160x100 (``configs/e1m1.yaml``
-``model.scale: 2`` via ``apply_screen_env``); the 60x50 fixture
-scale remains the bare-import default in ``constants.py``. The scale
-stays a config swap (not a re-port) only if every screen-derived
+The production config renders at 320x200 (``configs/e1m1.yaml``
+``model.scale: 1`` via ``apply_screen_env``); 60x50 remains the
+bare-import test default in ``constants.py``. Screen size stays a
+configuration choice only if every screen-derived
 width/range references ``SCREEN_WIDTH`` / ``SCREEN_HEIGHT`` symbolically
 and never a bare ``60`` / ``50`` literal. This test fails if a bare
 ``60`` or ``50`` NUMBER literal appears in ``vocab.py`` or
@@ -36,6 +36,5 @@ def test_no_bare_screen_dim_literals() -> None:
         hits = _bare_screen_literals(module.__file__)
         assert not hits, (
             f"{module.__name__} has bare 60/50 literals at {hits}; use "
-            f"SCREEN_WIDTH/SCREEN_HEIGHT so the 160x100 retarget stays a "
-            f"constant swap"
+            f"SCREEN_WIDTH/SCREEN_HEIGHT so screen size remains configurable"
         )

@@ -1,17 +1,10 @@
-"""Feasibility/safety check for a *shared-slot-column* embedding layout.
+"""Safety checks for the shared-slot-column embedding layout.
 
-Today every ``(token type, slot)`` pair gets its own private columns in
-``W_EMBED``; an emitted token fills its ~3 columns and zeros the other ~225.
-That per-type layout is what forces the renderer's output head to build one
-near-all-zero candidate row per token type and discard all but one — the
-"N×constant-zeros" the dispatch peak grows with.
-
-The proposed alternative lays the table out the way a normal transformer would:
+The table is laid out like a normal transformer embedding:
 ``[E8 type code][slot-A value][slot-B value][slot-C value]`` with **all token
 types sharing the same slot columns**, the E8 code doing the type-discrimination.
-The risk that decides whether that's viable: does ``argmax(emit_query · table)``
-still land on the correct token when same-position slot values from *different*
-types now collide in the same columns?
+These tests verify that ``argmax(emit_query · table)`` still lands on the correct
+token when same-position slot values from different types share columns.
 
 This test builds a faithful shared-column table (real E8 codes + the real
 digit-quadratic value encoding, just relocated to shared columns) and the
@@ -23,8 +16,8 @@ matching emit queries for the whole vocabulary, and proves:
    is large, far above the ~1-unit value-resolution margin the current design
    already depends on.
 
-It is a design-validation test, not a test of shipping code: if it ever fails,
-the shared-column layout is unsafe and must not be adopted as-is.
+This independently reconstructs the layout so changes cannot make the table and
+the test agree tautologically.
 """
 
 from __future__ import annotations

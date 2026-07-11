@@ -1,4 +1,4 @@
-"""E6: the compiled renderer free-runs autoregressively, no host computation.
+"""The compiled renderer free-runs autoregressively without host computation.
 
 Everything else teacher-forces — the host feeds a known token sequence. This is
 the real autoregressive loop: the compiled transformer emits a token, the host
@@ -23,15 +23,8 @@ real token-I/O artifact's *compile* is validated separately by
 ``test_forward_compiles`` (``compile_to_onnx``); running that artifact is
 memory-infeasible on a 30 GB box (its weights densify to >26 GB — onnxruntime
 ``bad_alloc``s on load), so artifact-level inference belongs on a larger machine.
-The dispatch reduction is ``max_fanout=8`` (render_main), so the free-run compiles
-to ~44 layers rather than the ~66 of the old serial fold.
-
-Scope: the rollout walks ``BEGIN -> SET_CURSOR_DIRECTION_Y -> the side-bit
-precompute -> TRAVERSE_ENTER -> the descent to a leaf``. At the first subsector
-the projection owner would take over; it is deferred this phase (stubbed NO_OP),
-so the run stops there — the honest boundary of the traversal-only spine. The
-meaningful prefix (a real side test + a real descent, generated autonomously) is
-what the loop is validated on.
+The short rollout exercises the seed, side test, and BSP descent. Longer
+renderer behavior is covered by the teacher-forced full-frame oracle.
 """
 
 from __future__ import annotations

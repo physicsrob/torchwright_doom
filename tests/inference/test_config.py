@@ -1,4 +1,4 @@
-"""Render-config contract tests (batch 2 of the tech-debt cleanup).
+"""Render-config contract tests.
 
 Two load-bearing guarantees:
 

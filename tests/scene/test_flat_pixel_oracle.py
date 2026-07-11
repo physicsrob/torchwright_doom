@@ -1,4 +1,4 @@
-"""Phase J2 gate — flat floor/ceiling span pass oracle (through DONE).
+"""Full-frame floor/ceiling span-pass oracle through ``DONE``.
 
 Drives the real ``forward()`` graph teacher-forced on the in-tree pydoom
 drafter's golden token stream for the e1m1 production frame (loaded from
@@ -47,7 +47,7 @@ _ANGLE_BAM_TOL = 2
 # to ~4e-3 encoded float32 PWL noise on the textured fixture's segs (the H/F
 # projection chain; the geometry-only fixture stays under 3e-3). Downstream-
 # absorbed by the ±4 UV pixel option set. 5e-3 covers it with margin; the
-# J-owned R3 v0 carrier sits far below.
+# carriers sit far below.
 _VALUE_ENC_TOL = 5.0e-3
 # wallColU.u_idx is floor(-(rw_distance·tan)) via a float32 PWL product; near an
 # integer boundary it differs ±1 from the float64 reference's int(). The texel

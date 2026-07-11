@@ -1,4 +1,4 @@
-"""Plan B: GraphPast facade tests."""
+"""``GraphPast`` facade tests."""
 
 from __future__ import annotations
 

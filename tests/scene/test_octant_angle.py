@@ -1,7 +1,6 @@
-"""Phase F / F0 de-risk gate: the R_PointToAngle BAM-atan2 octant.
+"""``R_PointToAngle`` BAM-atan2 octant gate.
 
-``signed_world_angle`` is the chunk's single biggest numeric risk (Plan E
-deferred it as E5): a ray-threshold *count* approximating ``atan2`` whose
+``signed_world_angle`` is a ray-threshold count approximating ``atan2`` whose
 ``compare(sharpness=32000)`` deadband and ±3072 coordinate clamp both have to
 hold for the projected angle to argmax to the exact BAM value the reference
 renderer emits. This isolates it — no forward graph, no compile — and checks the
@@ -9,8 +8,8 @@ real-graph build against the exact golden BAM angle:
 
 1. a dense angle sweep at radii up to the clamp, covering every octant; and
 2. the real ``e1m1_subset`` geometry — every seg endpoint and every BSP-node
-   bbox corner, relative to every test pose — which is what the projection (F)
-   and bbox-pruning (G) owners actually feed the octant.
+   bbox corner, relative to every test pose — the inputs supplied by projection
+   and bounding-box pruning.
 
 Both are evaluated through ``reference_eval`` (exact math). The companion
 ``wrap_signed_angle`` one-turn wrap is checked the same way.

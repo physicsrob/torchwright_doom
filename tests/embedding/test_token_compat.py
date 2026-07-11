@@ -1,7 +1,6 @@
-"""Plan A / A7: token-compatibility helpers.
+"""Token-compatibility helpers.
 
-Covers the surface Plan B's ``GraphPast.input_type()`` /
-``_input_type_matches`` consume:
+Covers the predicates consumed by ``GraphPast.input_type()`` and dispatch:
 
 * ``TokenType.check`` -> ±1 on/off the active type.
 * free ``extract.is_type`` still returns 0/1 (backwards compat).

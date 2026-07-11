@@ -1,4 +1,4 @@
-"""In-graph embedding + autoregressive ``.step()`` — the OQ-1 de-risk.
+"""In-graph embedding plus autoregressive ``.step()``.
 
 The teacher-forced renderer tests feed a *pre-embedded* 820-wide input row per
 position (the host computes ``W_EMBED[row]``). A free-running renderer can't do
@@ -78,7 +78,7 @@ def test_in_graph_embedding_autoregressive_counter(device) -> None:
 
 def test_step_matches_full_forward_with_cross_position_handle(device) -> None:
     """The KV-cached ``.step()`` loop must agree with a single full forward when
-    the graph attends across positions — the second half of OQ-1.
+    the graph attends across positions.
 
     The counter above never reads history, so it doesn't exercise the KV cache.
     ``render_main`` reads prior positions via ``GraphPast`` handles (the cheapest

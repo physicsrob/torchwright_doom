@@ -1,4 +1,4 @@
-"""Plan A: multi-width derived columns round-trip through extract_derived.
+"""Multi-width derived columns round-trip through ``extract_derived``.
 
 ``id_lifted_key`` (width 3, on node/seg/SSECTOR/...) and
 ``u_tan_by_column`` (width SCREEN_WIDTH, on angleValue) are the two

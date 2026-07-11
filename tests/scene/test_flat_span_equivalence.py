@@ -1,4 +1,4 @@
-"""Phase J2 — R_MakeSpans open/close equivalence (DIVERGENCE #1).
+"""``R_MakeSpans`` open/close equivalence.
 
 ``flat_state.py`` ports the **original** R_MakeSpans formulation, which uses the
 RAW ``t1/b1/t2/b2`` in all four close/open sub-steps and compensates with two

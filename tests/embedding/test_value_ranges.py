@@ -1,4 +1,4 @@
-"""Plan A: value-range bank round-trips (the foundation test).
+"""Value-range bank round trips.
 
 For each ``ValueRange`` R0..R9: encode a physical value into the VALUE
 carrier's ``[-1, 1]`` space, embed it as a VALUE row (FloatSlot snaps to

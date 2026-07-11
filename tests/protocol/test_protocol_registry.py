@@ -1,4 +1,4 @@
-"""Plan D / D6: protocol_registry coverage and classification."""
+"""Protocol-registry coverage and classification."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Focused crafted-input gate for the R_CheckPlane overlap test (Phase H).
+"""Focused crafted-input gate for the ``R_CheckPlane`` overlap test.
 
 ``e1m1_subset`` never produces a visplane overlap/merge (verified: every
 R_CheckPlane run is length 1, every result vp=0, across all 8 poses), so the
@@ -15,8 +15,8 @@ bucket, a wide multi-bucket range, the empty visplane, the carry's ``c* <= x2``
 edge, and a high-instance-id case (the fp32-magnitude path; resolution itself is
 proven by the compiled probe, since ``reference_eval`` is exact float64).
 
-``reference_eval`` (exact math, CPU, no compile) — the smallest layer that
-reproduces the overlap decision (torchwright doctrine D6).
+``reference_eval`` provides exact graph math; selected cases also run through
+the compiled fp32 path.
 """
 
 from __future__ import annotations

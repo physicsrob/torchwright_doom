@@ -1,15 +1,13 @@
-"""Plan I gate (I5): the texel database is readable through the real graph.
+"""The texel database is readable through the real graph.
 
-A ``reference_eval``-only, teacher-forced **direct value-match probe** — Plan I
-emits no token, so this is the Plan-D oracle pattern at its simplest: build the
+A ``reference_eval``-only direct value-match probe: build the
 asset accessors with literal query inputs, ``reference_eval`` the channel, and
 compare to the WAD-loaded ``ASSET_BOOK`` pixels / ``COLORMAP_ROWS`` within
 ``1e-3``. No compile, no GPU, no rollout, no geometry.
 
-Covers the
-floors named in plan_i.md: a wall lookup that exercises the ``u``-wrap, one that
+Covers a wall lookup that exercises the ``u``-wrap, one that
 hits the missing-texture bank 0, a flat, and a non-zero ``colormap_row``; plus
-the de-stubbed ``WallAssets.height`` / ``h_idx_oh`` metadata and the
+the ``WallAssets.height`` / ``h_idx_oh`` metadata and the
 ``AssetIndex`` wiring ``SceneIndex`` exposes.
 """
 
@@ -88,7 +86,7 @@ def test_wall_metadata_accessors():
     assert _scalar(walls.bank_id(constant(1.0))) == 6.0
     assert _scalar(walls.local_id(constant(1.0))) == 0.0
     assert _scalar(walls.width(constant(1.0))) == 128.0
-    # de-stubbed height (was constant(0.0) in the Phase-F stub).
+    # Texture height and height-bank identity.
     assert _scalar(walls.height(constant(1.0))) == 128.0
     # h_idx_oh: WALL_HEIGHT_BANK = (16, 56, 72, 128); height 128 -> index 3.
     assert ab.WALL_HEIGHT_BANK == (16, 56, 72, 128)
@@ -124,8 +122,7 @@ def test_apply_colormap_row_matches_reference():
 
 
 def test_assets_exposed_through_scene_index():
-    # I4: SceneIndex.assets is the working AssetIndex surface (zero past.publish
-    # — AssetIndex accessors take no GraphPast and publish nothing).
+    # SceneIndex.assets is the working constant-backed AssetIndex surface.
     assert SceneIndex.__dataclass_fields__["assets"].type == "AssetIndex"
     index = AssetIndex()
     assert isinstance(index.walls, WallAssets)

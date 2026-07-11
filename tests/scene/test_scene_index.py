@@ -1,4 +1,4 @@
-"""Plan D / D2 + D3 + D5: SceneIndex.build end-to-end on a hand-built prefill.
+"""``SceneIndex.build`` end-to-end on a hand-built prefill.
 
 Exercises the full scene read-side stack — SceneTokenView interpretation,
 HeaderContext recency recovery, the lifted/one-hot keyed lookups, and the

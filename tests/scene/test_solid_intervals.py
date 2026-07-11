@@ -1,4 +1,4 @@
-"""Phase F / F3 focused gate: the SolidIntervals coverage key (the new numeric).
+"""Focused gate for the ``SolidIntervals`` coverage key and successor lookup.
 
 ``SolidIntervals`` is filled at ``R_STORE_WALL_RANGE`` and queried at
 ``FIND_RUN`` to decide horizontal occlusion. The genuinely new math is
@@ -7,8 +7,7 @@
 scores ``-2(col-a)(col-b)`` — positive inside the padded interval, and the
 flat-1 sentinel key wins outside it. This checks that ``MUL_SCREEN`` (the
 swiglu ``multiply`` — exact to ~2 ulp, no grid) plus the affine assembly
-resolve coverage correctly; the full publish/query against the golden stream
-is covered by the F gate.
+resolve coverage correctly.
 """
 
 from __future__ import annotations
@@ -32,7 +31,11 @@ from torchwright_doom.solid_intervals import (
 )
 from torchwright_doom.std import concat
 
-from .test_radix_successor_oracle import brute_next_start_after
+
+def brute_next_start_after(starts, column: int, width: int) -> int:
+    """Nearest interval start strictly greater than ``column``, else ``width``."""
+    later = [start for start in starts if start > column]
+    return min(later) if later else width
 
 
 def _scores(cases: list[tuple[int, int, int]]) -> list[float]:

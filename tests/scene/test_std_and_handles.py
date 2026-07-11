@@ -1,4 +1,4 @@
-"""Plan D / D0 + D1: std shim and attention-handle correctness.
+"""Graph utility and attention-handle correctness.
 
 All checks evaluate the graph oracle (``node.compute``) — the same recursive
 exact-math evaluation ``probe_compiled`` compares the compiled transformer
@@ -41,7 +41,7 @@ def _val(node, n_pos: int, inputs: dict) -> torch.Tensor:
 
 
 # ---------------------------------------------------------------------------
-# D0 std shim
+# Graph utilities
 # ---------------------------------------------------------------------------
 
 
@@ -101,7 +101,7 @@ def test_lifted_id_query_shape() -> None:
 
 
 # ---------------------------------------------------------------------------
-# D1 attention handles
+# Attention handles
 # ---------------------------------------------------------------------------
 
 

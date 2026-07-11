@@ -4,7 +4,7 @@ Pins the HUD patch bank against real game bytes (patch dimensions and the DOOM
 picture offsets the blit relies on) and the E1M1 draw-list against the exact
 ``STlib_drawNum`` right-justification, so a regression in the bake or the
 right-justify math is caught without a compiled render. The composite is the
-pixel oracle's ground truth for the graph phase (Step 6).
+pixel oracle's ground truth for graph-side HUD rendering.
 """
 
 from __future__ import annotations

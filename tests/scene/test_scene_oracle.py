@@ -1,19 +1,18 @@
-"""Plan D mandatory oracle gate: real-fixture round-trip correctness.
+"""Real-fixture scene-index round-trip correctness.
 
 This is the hard gate the other scene tests cannot replace: it drives
 ``SceneIndex.build`` over a *real* map's prompt (E1M1 start room, 41 BSP
 nodes / 81 segs) and confirms every probed scene-index channel recovers the
 value the prompt encoded.
 
-Two comparisons, kept separate (Plan D oracle-harness section):
+Two comparisons are kept separate:
 
 1. **Port-correctness (this gate).** Each channel node is evaluated through the
    graph oracle (``reference_eval`` -> memoised ``node.compute``) and compared
    against the map data the prompt builder encoded. This proves the ported
    graph computes the *right* values.
-2. **Compile-fidelity (downstream, not here).** ``probe_compiled`` would compare
-   the *compiled transformer* against this same graph oracle — a separate check
-   that the compiler realises the graph, run once this gate passes.
+2. **Compile fidelity.** ``test_scene_compiled_probe`` compares the compiled
+   transformer against this same graph oracle.
 
 Tolerance: scene coordinate reads are one affine ``Linear`` over a
 ``FloatSlot`` (65536 levels) — quantization error is < 0.1 in the R0/R1 ranges,

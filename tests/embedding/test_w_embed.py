@@ -1,6 +1,6 @@
-"""End-to-end checks on the spec09-shaped TokenVocab and W_EMBED.
+"""End-to-end checks on ``TokenVocab`` and ``W_EMBED``.
 
-Mirrors the four checks called out in the embedding-port plan:
+The checks cover:
 
 1. Total cardinality fits the 2^17 budget.
 2. Shape sanity: every row's E8 category code is non-zero, slot raw

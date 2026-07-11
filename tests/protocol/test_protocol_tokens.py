@@ -1,4 +1,4 @@
-"""Plan D / D7: ProtocolTokenView predicates, prev-type chains, accessors."""
+"""``ProtocolTokenView`` predicates, previous-type chains, and accessors."""
 
 from __future__ import annotations
 

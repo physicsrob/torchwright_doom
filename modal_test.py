@@ -52,11 +52,9 @@ _HEAVY_FILES: list[str] = [
 ]
 
 _MEDIUM_FILE_GROUPS: list[list[str]] = [
-    # Whole-forward ONNX compile + a couple of light oracle/layout gates.
+    # Whole-forward ONNX compile.
     [
         "tests/scene/test_forward_compiles.py",
-        "tests/scene/test_radix_successor_oracle.py",
-        "tests/embedding/test_shared_slot_layout.py",
     ],
     # The emit-graph correctness gate. The wall/projection/traversal oracle
     # gates that used to share these shards were folded into the pydoom

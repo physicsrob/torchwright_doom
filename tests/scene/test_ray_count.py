@@ -1,4 +1,4 @@
-"""Exact-integer gate for the swiglu ``_ray_count`` (the swiglu cutover's D6).
+"""Exact-integer gate for the SwiGLU ``_ray_count``.
 
 ``render_ops._ray_count`` counts the positive components of a ray vector on
 two swish-hinge FFN stages (``hinge(z) = Swish(scale·z)/scale``, equal to

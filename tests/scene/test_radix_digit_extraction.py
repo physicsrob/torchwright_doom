@@ -1,4 +1,4 @@
-"""Compiled numerics gate for radix digit extraction (Task 3 derisk).
+"""Compiled numerics gate for radix digit extraction.
 
 The single highest numerical risk in the radix successor port is digit
 extraction: turning a screen column ``v`` into ``hi(v) = v // B`` and
@@ -25,6 +25,8 @@ GPU compile: run with ``make test-local FILE=tests/scene/test_radix_digit_extrac
 
 from __future__ import annotations
 
+import math
+
 import pytest
 import torch
 
@@ -34,10 +36,23 @@ from torchwright.ops.inout_nodes import create_input
 
 from torchwright_doom.std import concat, one_hot
 
-from .test_radix_successor_oracle import hi, lo, radix_params
-
-# Both scales: (W, B, N_BUCKETS). B/N_BUCKETS cross-checked by the oracle module.
+# Both supported column counts: (W, B, N_BUCKETS).
 _SCALES = [(60, 8, 8), (160, 13, 13)]
+
+
+def radix_params(width: int) -> tuple[int, int]:
+    base = math.isqrt(width + 1)
+    if base * base < width + 1:
+        base += 1
+    return base, width // base + 1
+
+
+def hi(value: int, base: int) -> int:
+    return value // base
+
+
+def lo(value: int, base: int) -> int:
+    return value % base
 
 
 def _columns_tensor(W: int) -> torch.Tensor:

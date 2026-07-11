@@ -4,8 +4,7 @@ Teacher-forced direct probe (the texture-oracle pattern): drive
 ``HudAssets.color_or_transparent`` with literal ``(patch_id, u, v)`` and assert
 the channel equals the baked patch pixel — a palette index for an opaque cell,
 ``HUD_TRANSPARENT`` for a transparent or padding cell. This pins the graph-side
-lookup against the same bake the reference V_DrawPatch blit composites, so the
-spine (Step 6) can trust the color path.
+lookup against the same bake the reference ``V_DrawPatch`` blit composites.
 """
 
 from __future__ import annotations
