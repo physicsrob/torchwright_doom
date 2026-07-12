@@ -1,19 +1,27 @@
+"""Bundle layout gate: root ``infer.py`` + ``tools/`` byte-identical to their
+sources, dependency boundaries intact, and the copied inference program's
+placement-derived defaults working from a real bundle root."""
+
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
+import subprocess
 import sys
+from functools import lru_cache
 from pathlib import Path
+from types import ModuleType
 
+import pytest
 import torch
 
-import torchwright_doom.inference_example as inference_example
 from torchwright_doom.asset_banks import PLAYPAL
 from torchwright_doom.asset_config import DEFAULT_ASSET_CONFIG
-from torchwright_doom.bundle_examples import write_bundle_examples
-from torchwright_doom.frame_decoder_kernel import _pixels, _write_png
+from torchwright_doom.bundle.layout import write_bundle_layout
 from torchwright_doom.inference.decode import decode_rows_to_pixels
 from torchwright_doom.inference.tokens_bridge import row_index
+from torchwright_doom.portable.txt_to_png import _pixels, _write_png
 from torchwright_doom.tokenizer.freeze import build_vocab_blob
 from torchwright_doom.vocab import (
     PIXEL,
@@ -21,6 +29,22 @@ from torchwright_doom.vocab import (
     SET_CURSOR_X,
     SET_CURSOR_Y,
 )
+
+ROOT = Path(__file__).resolve().parents[2]
+INFER_SOURCE = ROOT / "torchwright_doom" / "infer.py"
+PORTABLE_DIR = ROOT / "torchwright_doom" / "portable"
+
+
+@lru_cache(maxsize=1)
+def _infer_module() -> ModuleType:
+    """Load the standalone inference program from its file path — the same
+    standalone shape a bundle consumer runs. The package never imports it
+    (`import torchwright_doom.infer` is forbidden by the runtime policy)."""
+    spec = importlib.util.spec_from_file_location("doom_bundle_infer", INFER_SOURCE)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _imports(path: Path) -> set[str]:
@@ -33,12 +57,11 @@ def _imports(path: Path) -> set[str]:
     return imports
 
 
-def test_bundle_examples_have_the_required_dependency_boundaries(
+def test_bundle_layout_has_the_required_dependency_boundaries(
     tmp_path: Path,
 ) -> None:
-    write_bundle_examples(tmp_path, prompt_text="begin")
-    examples = tmp_path / "examples"
-    infer_imports = _imports(examples / "infer.py")
+    write_bundle_layout(tmp_path, prompt_text="begin")
+    infer_imports = _imports(tmp_path / "infer.py")
     assert "torchwright" not in infer_imports
     assert "torchwright_doom" not in infer_imports
     assert infer_imports <= set(sys.stdlib_module_names) | {
@@ -46,21 +69,36 @@ def test_bundle_examples_have_the_required_dependency_boundaries(
         "torch",
         "transformers",
     }
-    for name in ("pretty_text.py", "txt_to_png.py"):
-        assert _imports(examples / name) <= set(sys.stdlib_module_names) | {
+    for name in ("tools/pretty_text.py", "tools/txt_to_png.py"):
+        assert _imports(tmp_path / name) <= set(sys.stdlib_module_names) | {
             "__future__"
         }
 
 
-def test_bundle_infer_is_the_exact_production_source(tmp_path: Path) -> None:
-    write_bundle_examples(tmp_path, prompt_text="begin")
-    source = Path(inference_example.__file__)
-    assert (tmp_path / "examples/infer.py").read_bytes() == source.read_bytes()
+def test_bundle_layout_is_byte_identical_to_sources(tmp_path: Path) -> None:
+    written = write_bundle_layout(tmp_path, prompt_text="begin")
+    expected = {
+        tmp_path / "infer.py": INFER_SOURCE,
+        tmp_path / "tools/pretty_text.py": PORTABLE_DIR / "pretty_text.py",
+        tmp_path / "tools/txt_to_png.py": PORTABLE_DIR / "txt_to_png.py",
+    }
+    for target, source in expected.items():
+        assert target.read_bytes() == source.read_bytes(), target
+    assert (tmp_path / "examples/e1m1_prompt.txt").read_text() == "begin\n"
+    assert (tmp_path / "tools/README.md").read_text().startswith("# Reproduce")
+    assert set(written) == {
+        *expected,
+        tmp_path / "examples/e1m1_prompt.txt",
+        tmp_path / "tools/README.md",
+    }
+    # The old layout must not reappear.
+    assert not (tmp_path / "examples" / "infer.py").exists()
 
 
 def test_portable_infer_accepts_text_and_writes_ids_plus_raw_text(
     tmp_path: Path, monkeypatch
 ) -> None:
+    infer = _infer_module()
     model_dir = tmp_path / "bundle"
     output = tmp_path / "out"
     model_dir.mkdir()
@@ -138,13 +176,11 @@ def test_portable_infer_accepts_text_and_writes_ids_plus_raw_text(
         return Model()
 
     monkeypatch.setattr(
-        inference_example.AutoTokenizer, "from_pretrained", lambda path: Tokenizer()
+        infer.AutoTokenizer, "from_pretrained", lambda path: Tokenizer()
     )
-    monkeypatch.setattr(
-        inference_example.AutoModelForCausalLM, "from_pretrained", fake_model_load
-    )
+    monkeypatch.setattr(infer.AutoModelForCausalLM, "from_pretrained", fake_model_load)
     assert (
-        inference_example.main(
+        infer.main(
             [
                 "--model",
                 str(model_dir),
@@ -173,14 +209,14 @@ def test_portable_infer_accepts_text_and_writes_ids_plus_raw_text(
     assert (output / "output.txt").read_text() == "three done\n"
 
 
-def test_portable_infer_runs_a_real_saved_phi3_bundle(tmp_path: Path) -> None:
+def _tiny_phi3_bundle(model_dir: Path, *, original_max: int = 16) -> list[int]:
+    """Save a real tiny stock Phi-3 + tokenizer + bundle layout; returns the
+    bundled prompt's row ids."""
     from tokenizers import Tokenizer, pre_tokenizers
     from tokenizers.models import WordLevel
     from transformers import Phi3Config, Phi3ForCausalLM, PreTrainedTokenizerFast
 
-    model_dir = tmp_path / "tiny-bundle"
-    output = tmp_path / "real-out"
-    model_dir.mkdir()
+    model_dir.mkdir(parents=True, exist_ok=True)
     vocab = {"begin": 0, "scene": 1, "done": 2}
     raw = Tokenizer(WordLevel(vocab=vocab, unk_token=None))
     raw.pre_tokenizer = pre_tokenizers.WhitespaceSplit()
@@ -202,7 +238,7 @@ def test_portable_infer_runs_a_real_saved_phi3_bundle(tmp_path: Path) -> None:
             num_attention_heads=2,
             num_key_value_heads=2,
             max_position_embeddings=16,
-            original_max_position_embeddings=16,
+            original_max_position_embeddings=original_max,
             bos_token_id=0,
             eos_token_id=2,
             pad_token_id=2,
@@ -210,9 +246,8 @@ def test_portable_infer_runs_a_real_saved_phi3_bundle(tmp_path: Path) -> None:
     )
     model.save_pretrained(model_dir)
 
-    prompt = model_dir / "prompt.txt"
-    prompt_bytes = b"begin scene\n"
-    prompt.write_bytes(prompt_bytes)
+    write_bundle_layout(model_dir, prompt_text="begin scene")
+    prompt_bytes = (model_dir / "examples/e1m1_prompt.txt").read_bytes()
     prompt_rows = [0, 1]
     manifest = {
         "validation": {"complete": True},
@@ -228,21 +263,30 @@ def test_portable_infer_runs_a_real_saved_phi3_bundle(tmp_path: Path) -> None:
         "generation": {"max_new_tokens": 2},
     }
     (model_dir / "doom_bundle_manifest.json").write_text(json.dumps(manifest))
+    return prompt_rows
 
-    assert (
-        inference_example.main(
-            [
-                "--model",
-                str(model_dir),
-                "--prompt",
-                str(prompt),
-                "--output",
-                str(output),
-                "--device",
-                "cpu",
-            ]
-        )
-        == 0
+
+def test_copied_bundle_root_infer_resolves_its_own_defaults(tmp_path: Path) -> None:
+    """Run the exact copied ``<bundle>/infer.py`` as a subprocess with
+    ``--model`` and ``--prompt`` omitted: the program must resolve its own
+    bundle directory and the bundled default prompt (Decision 1)."""
+    model_dir = tmp_path / "tiny-bundle"
+    output = tmp_path / "real-out"
+    prompt_rows = _tiny_phi3_bundle(model_dir)
+
+    elsewhere = tmp_path / "unrelated-cwd"
+    elsewhere.mkdir()
+    subprocess.run(
+        [
+            sys.executable,
+            str(model_dir / "infer.py"),
+            "--output",
+            str(output),
+            "--device",
+            "cpu",
+        ],
+        check=True,
+        cwd=elsewhere,
     )
     payload = json.loads((output / "output.ids.json").read_text())
     assert payload["bundle"] == "bundle:real-tiny"
@@ -250,6 +294,24 @@ def test_portable_infer_runs_a_real_saved_phi3_bundle(tmp_path: Path) -> None:
     assert payload["prompt"]["row_ids"] == prompt_rows
     assert 1 <= len(payload["emitted_row_ids"]) <= 2
     assert (output / "output.txt").read_text().strip()
+
+
+def test_portable_infer_rejects_inconsistent_position_capacity(
+    tmp_path: Path,
+) -> None:
+    model_dir = tmp_path / "tiny-bundle-bad-positions"
+    _tiny_phi3_bundle(model_dir, original_max=8)
+    with pytest.raises(RuntimeError, match="position"):
+        _infer_module().main(
+            [
+                "--model",
+                str(model_dir),
+                "--output",
+                str(tmp_path / "out"),
+                "--device",
+                "cpu",
+            ]
+        )
 
 
 def test_standalone_frame_decoder_matches_host_cursor_protocol(tmp_path: Path) -> None:

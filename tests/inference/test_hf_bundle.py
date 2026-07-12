@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -35,28 +36,40 @@ def _fake_bundle(path: Path, payload: dict, *, complete: bool = True) -> None:
         "doom_tables.json": "{}",
         "doom_palette.json": "{}",
         "README.md": "model card",
+        "infer.py": "# portable inference program\n",
         "examples/e1m1_prompt.txt": "begin\n",
-        "examples/infer.py": "",
-        "examples/pretty_text.py": "",
-        "examples/txt_to_png.py": "",
-        "examples/README.md": "",
+        "tools/pretty_text.py": "# pretty\n",
+        "tools/txt_to_png.py": "# png\n",
+        "tools/README.md": "# tools\n",
     }
     for name, value in required.items():
         target = path / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(value)
+    files: dict[str, dict] = {}
+    for name, value in required.items():
+        facts: dict = {"size": len(value.encode())}
+        # Layout v2 verifies every hash-bearing file in a normal probe;
+        # safetensor shards are the only hash-exempt (size-checked) files.
+        if not name.endswith(".safetensors"):
+            facts["sha256"] = hashlib.sha256(value.encode()).hexdigest()
+        files[name] = facts
     manifest = {
         "format": "torchwright_doom.phi3.v1",
         "artifact_kind": "hf_phi3_bundle",
         "profile": "phi3",
         "compile_payload_sha256": compile_payload_sha256(payload),
-        "files": {
-            name: {"sha256": "not-checked", "size": len(value)}
-            for name, value in required.items()
-        },
-        "validation": {"complete": complete, "format_version": 1},
+        "files": files,
+        "validation": {"complete": complete, "format_version": 2},
     }
     (path / "doom_bundle_manifest.json").write_text(json.dumps(manifest))
+
+
+def _edit_manifest(bundle: Path, mutate) -> None:
+    manifest_path = bundle / "doom_bundle_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    mutate(manifest)
+    manifest_path.write_text(json.dumps(manifest))
 
 
 def test_lightweight_complete_bundle_probe(tmp_path: Path) -> None:
@@ -74,6 +87,94 @@ def test_public_manifest_validation_rejects_incomplete(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="not complete"):
         validate_bundle_manifest(bundle)
     validate_bundle_manifest(bundle, allow_incomplete=True)
+
+
+def test_missing_or_old_layout_version_fails_closed(tmp_path: Path) -> None:
+    """Pre-v2 cache entries (and manifests with no version at all) are
+    rejected even when no expected compile payload is passed."""
+    payload = {"artifact": {"kind": "hf_phi3_bundle"}}
+    bundle = tmp_path / "bundle"
+    _fake_bundle(bundle, payload)
+    validate_bundle_manifest(bundle)
+
+    _edit_manifest(bundle, lambda m: m["validation"].update(format_version=1))
+    with pytest.raises(ValueError, match="layout version"):
+        validate_bundle_manifest(bundle)
+    assert not is_complete_hf_bundle(bundle)
+
+    _edit_manifest(bundle, lambda m: m["validation"].pop("format_version"))
+    with pytest.raises(ValueError, match="layout version"):
+        validate_bundle_manifest(bundle, allow_incomplete=True)
+
+
+def test_declared_size_mismatch_fails(tmp_path: Path) -> None:
+    payload = {"artifact": {"kind": "hf_phi3_bundle"}}
+    bundle = tmp_path / "bundle"
+    _fake_bundle(bundle, payload)
+    (bundle / "doom_tables.json").write_text("{}  ")
+    with pytest.raises(ValueError, match="size mismatch"):
+        validate_bundle_manifest(bundle)
+    assert not is_complete_hf_bundle(bundle)
+
+
+def test_truncated_shard_fails(tmp_path: Path) -> None:
+    payload = {"artifact": {"kind": "hf_phi3_bundle"}}
+    bundle = tmp_path / "bundle"
+    _fake_bundle(bundle, payload)
+    (bundle / "model-00001.safetensors").write_text("fa")
+    with pytest.raises(ValueError, match="size mismatch"):
+        validate_bundle_manifest(bundle)
+
+
+def test_altered_hash_bearing_file_fails(tmp_path: Path) -> None:
+    """A same-size content change to a hash-bearing file (here a shipped
+    tool) fails the normal completeness probe — no verify flag needed."""
+    payload = {"artifact": {"kind": "hf_phi3_bundle"}}
+    bundle = tmp_path / "bundle"
+    _fake_bundle(bundle, payload)
+    original = (bundle / "tools/pretty_text.py").read_text()
+    (bundle / "tools/pretty_text.py").write_text("# ALTERED" + original[9:])
+    with pytest.raises(ValueError, match="hash mismatch"):
+        validate_bundle_manifest(bundle)
+
+
+def test_indexed_but_undeclared_shard_fails(tmp_path: Path) -> None:
+    payload = {"artifact": {"kind": "hf_phi3_bundle"}}
+    bundle = tmp_path / "bundle"
+    _fake_bundle(bundle, payload)
+    index = {
+        "weight_map": {
+            "model.embed_tokens.weight": "model-00001.safetensors",
+            "lm_head.weight": "model-00002.safetensors",
+        }
+    }
+    (bundle / "model-00002.safetensors").write_text("fake")
+    index_text = json.dumps(index)
+    (bundle / "model.safetensors.index.json").write_text(index_text)
+    _edit_manifest(
+        bundle,
+        lambda m: m["files"].__setitem__(
+            "model.safetensors.index.json",
+            {
+                "size": len(index_text.encode()),
+                "sha256": hashlib.sha256(index_text.encode()).hexdigest(),
+            },
+        ),
+    )
+    with pytest.raises(ValueError, match="undeclared shard"):
+        validate_bundle_manifest(bundle)
+
+
+def test_legacy_examples_layout_is_not_accepted(tmp_path: Path) -> None:
+    """A bundle carrying the retired examples/infer.py instead of a root
+    infer.py is incomplete."""
+    payload = {"artifact": {"kind": "hf_phi3_bundle"}}
+    bundle = tmp_path / "bundle"
+    _fake_bundle(bundle, payload)
+    (bundle / "infer.py").rename(bundle / "examples" / "infer.py")
+    with pytest.raises(ValueError, match="missing"):
+        validate_bundle_manifest(bundle)
+    assert not is_complete_hf_bundle(bundle)
 
 
 def test_outer_transaction_preserves_previous_destination_on_failure(

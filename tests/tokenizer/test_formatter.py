@@ -65,7 +65,10 @@ def test_public_formatter_rejects_incomplete_bundle(tmp_path) -> None:
 
 def test_formatter_kernel_is_stdlib_only() -> None:
     source = (
-        Path(__file__).resolve().parents[2] / "torchwright_doom" / "formatter_kernel.py"
+        Path(__file__).resolve().parents[2]
+        / "torchwright_doom"
+        / "portable"
+        / "pretty_text.py"
     ).read_text()
     imports = set()
     for line in source.splitlines():

@@ -7,9 +7,9 @@ Two remote stages: ``compile_remote`` (CPU-only, 64 cores so CP-SAT's parallel
 search gets real width; writes a complete direct-HF bundle into its volume) and
 ``render_remote`` (a big GPU — the dense native HF checkpoint is ~98 GB fp32
 plus the generation cache over the full frame). The render executes the
-artifact's isolated stock-Transformers ``examples/infer.py``. The compile cache
-key is computed on the LOCAL machine because it embeds submodule git SHAs that
-don't exist inside a Modal container.
+artifact's isolated stock-Transformers bundle-root ``infer.py``. The compile
+cache key is computed on the LOCAL machine because it embeds submodule git SHAs
+that don't exist inside a Modal container.
 Artifacts (generated/reference/diff PNGs + token_dump.json) are written to a
 ``modal.Volume`` (durable; inspect later with ``modal volume get``) *and*
 returned so the local entrypoint mirrors them to ``out/<run>/`` on disk —

@@ -116,7 +116,7 @@ def test_only_content_bearing_run_fields_enter_bundle_payload(monkeypatch) -> No
     }
     assert canonical_compile_payload(base, wad)["artifact"] == {
         "kind": "hf_phi3_bundle",
-        "format": 1,
+        "format": 2,
         "architecture": "phi3",
     }
     assert canonical_compile_payload(base, wad)["wad"] == base.wad

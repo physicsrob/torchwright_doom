@@ -5,8 +5,8 @@ Submodules (the import graph runs one direction, top to bottom):
 - ``tokens_bridge`` — token <-> W_EMBED-row encode/decode.
 - ``hf_bundle`` — compile a complete stock ``Phi3ForCausalLM`` bundle directly
   from ``build_graph``, validate it, and publish it atomically.
-- ``../inference_example.py`` — the isolated ``model.generate`` CLI copied
-  into each bundle and executed verbatim by production rendering.
+- ``../infer.py`` — the isolated ``model.generate`` CLI copied to each
+  bundle's root and executed verbatim by production rendering.
 - ``compiled_model`` — the sole source graph builder plus explicit ONNX debug
   compilation.
 - ``compile_cache`` — diagnostic-only ONNX cache and ``OnnxDebugSession`` loader.

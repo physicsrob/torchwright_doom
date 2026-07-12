@@ -1,6 +1,6 @@
-"""Pure-stdlib, bundle-driven Doom text formatter.
+"""Pure-stdlib, bundle-driven Doom text prettifier.
 
-This file is also copied into published bundles as ``examples/pretty_text.py``.
+This file is also copied into published bundles as ``tools/pretty_text.py``.
 It therefore must not import TorchWright, torch, Transformers, or
 ``torchwright_doom``.
 """

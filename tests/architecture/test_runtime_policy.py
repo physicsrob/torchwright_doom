@@ -39,12 +39,12 @@ PACKAGE = ROOT / "torchwright_doom"
 
 # The sole portable inference program: the one .generate() caller, copied
 # byte-identical to the bundle root and executed by production as a subprocess.
-RUNTIME_PATH = "torchwright_doom/inference_example.py"
+RUNTIME_PATH = "torchwright_doom/infer.py"
 
 # Pure-stdlib standalone tool sources copied byte-for-byte into bundle tools/.
 PORTABLE_SOURCES = (
-    "torchwright_doom/formatter_kernel.py",
-    "torchwright_doom/frame_decoder_kernel.py",
+    "torchwright_doom/portable/pretty_text.py",
+    "torchwright_doom/portable/txt_to_png.py",
 )
 
 # The only production files allowed to import the portable sources
@@ -64,7 +64,7 @@ CLI_PATH: str | None = None
 
 # Flips True in the Workstream 2 commit that establishes bundle layout v2
 # (root infer.py + tools/) — afterwards no legacy layout name may remain.
-NEW_BUNDLE_LAYOUT = False
+NEW_BUNDLE_LAYOUT = True
 
 # Flips True when torchwright_doom/inference/ is deleted (Workstream 11).
 OLD_PACKAGE_REMOVED = False

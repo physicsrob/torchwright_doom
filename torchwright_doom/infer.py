@@ -1,10 +1,12 @@
-"""Isolated stock-Hugging-Face inference copied verbatim into Doom bundles.
+"""The sole Doom inference program: portable stock-Hugging-Face generation.
 
-This file is the complete inference program used by both a downloaded bundle
-and TorchWright Doom's production render orchestration.  It intentionally
-imports no TorchWright or ``torchwright_doom`` code: text enters through the
-saved tokenizer, a stock ``Phi3ForCausalLM`` produces rows, and the only
-outputs are canonical integer ids plus their raw tokenizer text.
+This file is copied byte-identical to the root of every published Doom
+bundle (``<bundle>/infer.py``) and executed there as a subprocess — by a
+downloader and by production render orchestration alike.  It is executed,
+never imported.  It intentionally imports no TorchWright or
+``torchwright_doom`` code: text enters through the saved tokenizer, a stock
+``Phi3ForCausalLM`` produces rows, and the only outputs are canonical
+integer ids plus their raw tokenizer text.
 """
 
 from __future__ import annotations
@@ -98,7 +100,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-new-tokens", type=int)
     args = parser.parse_args(argv)
 
-    model_dir = (args.model or Path(__file__).resolve().parent.parent).resolve()
+    # This file sits at the bundle root, so its own directory is the bundle.
+    model_dir = (args.model or Path(__file__).resolve().parent).resolve()
     prompt_path = args.prompt or model_dir / "examples" / "e1m1_prompt.txt"
     manifest = json.loads((model_dir / "doom_bundle_manifest.json").read_text())
     if not manifest.get("validation", {}).get("complete"):

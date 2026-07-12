@@ -17,6 +17,11 @@ from .config import RenderConfig, resolve_wad_path, validate_compile_payload
 _MANIFEST = "doom_bundle_manifest.json"
 _FORMAT = "torchwright_doom.phi3.v1"
 _ARTIFACT_KIND = "hf_phi3_bundle"
+# Bundle layout version: 2 = root infer.py + tools/, size checks for every
+# declared file, hash checks for every hash-bearing file. Bumped together
+# with the compile payload's artifact.format (config.compile_payload_domain);
+# validators fail closed on older or missing versions.
+_LAYOUT_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -123,31 +128,6 @@ def _stamp_model_config(
     _write_json(path, payload)
 
 
-def _write_model_card(bundle: Path, config: RenderConfig) -> None:
-    text = f"""---
-library_name: transformers
-pipeline_tag: text-generation
----
-
-# TorchWright Doom — {config.map}
-
-This is a stock Hugging Face `Phi3ForCausalLM` that renders DOOM through
-ordinary autoregressive inference. The model and the data-only fast tokenizer
-load through ordinary Transformers auto classes without remote code.
-
-The bundled `examples/e1m1_prompt.txt` is the executable prompt. Run
-`examples/infer.py` to produce canonical emitted row ids and raw tokenizer text.
-`examples/pretty_text.py` formats that text for reading, while
-`examples/txt_to_png.py` independently decodes its cursor/pixel protocol into a
-PNG. Neither post-processing program participates in inference or performs
-geometry, visibility, lighting, texture selection, or sorting.
-
-Screen: {config.screen[0]}×{config.screen[1]}; map: {config.map}; fp32 weights;
-eager attention is the validated implementation.
-"""
-    (bundle / "README.md").write_text(text, encoding="utf-8")
-
-
 def _file_manifest(bundle: Path) -> dict[str, dict[str, Any]]:
     files: dict[str, dict[str, Any]] = {}
     for path in sorted(bundle.rglob("*")):
@@ -231,7 +211,7 @@ def _candidate_manifest(
         "schedule": report.schedule_provenance.to_dict(),
         "compile": {"n_layers": int(report.n_layers)},
         "files": files,
-        "validation": {"complete": False, "format_version": 1},
+        "validation": {"complete": False, "format_version": _LAYOUT_VERSION},
     }
 
 
@@ -240,9 +220,14 @@ def validate_bundle_manifest(
     *,
     expected_payload: dict[str, Any] | None = None,
     allow_incomplete: bool = False,
-    verify_all_hashes: bool = False,
 ) -> dict[str, Any]:
-    """Validate Doom-owned identity without loading model weights."""
+    """Validate Doom-owned identity without loading model weights.
+
+    A normal probe verifies the layout version, every declared file's size,
+    and the hash of every hash-bearing file. Safetensor shards are the only
+    hash-exempt files (the index binds their tensors; their sizes are still
+    checked), which keeps completeness probes cheap.
+    """
     bundle = Path(bundle_dir)
     path = bundle / _MANIFEST
     if not path.is_file():
@@ -255,6 +240,10 @@ def validate_bundle_manifest(
         raise ValueError("directory is not a supported Doom Phi-3 bundle")
     if manifest.get("profile") != "phi3":
         raise ValueError("Doom production bundle does not declare the Phi-3 profile")
+    if manifest.get("validation", {}).get("format_version") != _LAYOUT_VERSION:
+        raise ValueError(
+            f"Doom bundle does not declare layout version {_LAYOUT_VERSION}"
+        )
     if not allow_incomplete and not manifest.get("validation", {}).get("complete"):
         raise ValueError("Doom bundle manifest is not complete")
     if expected_payload is not None and manifest.get(
@@ -273,11 +262,11 @@ def validate_bundle_manifest(
         "doom_tables.json",
         "doom_palette.json",
         "README.md",
+        "infer.py",
         "examples/e1m1_prompt.txt",
-        "examples/infer.py",
-        "examples/pretty_text.py",
-        "examples/txt_to_png.py",
-        "examples/README.md",
+        "tools/pretty_text.py",
+        "tools/txt_to_png.py",
+        "tools/README.md",
     }
     declared = manifest.get("files", {})
     missing = sorted(
@@ -287,14 +276,23 @@ def validate_bundle_manifest(
     )
     if missing:
         raise ValueError(f"Doom bundle is incomplete; missing: {', '.join(missing)}")
+    for name, facts in declared.items():
+        file_path = bundle / name
+        if not file_path.is_file():
+            raise ValueError(f"Doom bundle declares a missing file: {name}")
+        if file_path.stat().st_size != facts.get("size"):
+            raise ValueError(f"Doom bundle file size mismatch: {name}")
+        if "sha256" in facts and _sha_file(file_path) != facts["sha256"]:
+            raise ValueError(f"Doom bundle file hash mismatch: {name}")
     index = json.loads((bundle / "model.safetensors.index.json").read_text())
     shards = set(index.get("weight_map", {}).values())
-    if not shards or any(not (bundle / shard).is_file() for shard in shards):
-        raise ValueError("Doom bundle safetensors index references missing shards")
-    if verify_all_hashes:
-        for name, facts in declared.items():
-            if "sha256" in facts and _sha_file(bundle / name) != facts["sha256"]:
-                raise ValueError(f"Doom bundle file hash mismatch: {name}")
+    if not shards:
+        raise ValueError("Doom bundle safetensors index references no shards")
+    undeclared = sorted(shards - set(declared))
+    if undeclared:
+        raise ValueError(
+            f"Doom bundle index references undeclared shards: {', '.join(undeclared)}"
+        )
     config = json.loads((bundle / "config.json").read_text())
     if config.get("model_type") != "phi3" or config.get("architectures") != [
         "Phi3ForCausalLM"
@@ -333,9 +331,7 @@ def _validate_complete_staged_bundle(
 
     from ..formatter import DoomFormatter
 
-    manifest = validate_bundle_manifest(
-        bundle, allow_incomplete=True, verify_all_hashes=True
-    )
+    manifest = validate_bundle_manifest(bundle, allow_incomplete=True)
     tokenizer = AutoTokenizer.from_pretrained(bundle)
     if len(tokenizer) != manifest["vocab_size"]:
         raise ValueError("tokenizer width differs from Doom manifest")
@@ -449,7 +445,7 @@ def compile_phi3_bundle(
 
     from torchwright.compiler import CompileProfile, compile_hf_bundle
 
-    from ..bundle_examples import write_bundle_examples
+    from ..bundle.layout import write_bundle_layout, write_model_card
     from ..tokenizer.freeze import write_frozen_data
     from ..tokenizer.identity import vocab_fingerprint
     from ..tokenizer.standard import (
@@ -513,10 +509,10 @@ def compile_phi3_bundle(
             vocab_fingerprint=fingerprint,
             eos_row=special.eos_row,
         )
-        written_examples = write_bundle_examples(stage, prompt_text=prompt_text)
-        _write_model_card(stage, config)
+        written_layout = write_bundle_layout(stage, prompt_text=prompt_text)
+        write_model_card(stage, config)
         prompt_path = next(
-            path for path in written_examples if path.name == "e1m1_prompt.txt"
+            path for path in written_layout if path.name == "e1m1_prompt.txt"
         )
         manifest = _candidate_manifest(
             bundle=stage,

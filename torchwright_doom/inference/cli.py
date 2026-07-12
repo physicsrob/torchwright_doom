@@ -167,10 +167,10 @@ def run_config(
     prompt_path = out_dir / "prompt.txt"
     prompt_path.write_text(prompt_text, encoding="utf-8")
 
-    # This is deliberately the exact portable program shipped in the bundle,
-    # executed as a process boundary.  Production therefore has no private
-    # model loader, cache implementation, or generation loop.
-    infer_script = cache_dir / "examples" / "infer.py"
+    # This is deliberately the exact portable program shipped at the bundle
+    # root, executed as a process boundary.  Production therefore has no
+    # private model loader, cache implementation, or generation loop.
+    infer_script = cache_dir / "infer.py"
     command = [
         sys.executable,
         str(infer_script),

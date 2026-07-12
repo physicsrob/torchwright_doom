@@ -338,7 +338,10 @@ def compile_payload_domain(
     return {
         "artifact": {
             "kind": "hf_phi3_bundle",
-            "format": 1,
+            # format 2 = bundle layout v2 (root infer.py + tools/, sized and
+            # hash-verified manifest); bumped together with the manifest's
+            # validation.format_version.
+            "format": 2,
             "architecture": "phi3",
         },
         "wad": config.wad,
