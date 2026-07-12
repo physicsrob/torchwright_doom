@@ -23,18 +23,23 @@ geometry, sorting, or arithmetic. (See `CLAUDE.md`.)
 
 ## Where to start
 
+- **The graph lives in `torchwright_doom/model/`** — everything there
+  compiles into the transformer; everything outside it runs on the host.
+  Shared kernel modules (vocabulary, token↔residual codec, attention
+  plumbing, shared math) sit flat at `model/` root; the pipeline stages are
+  `model/scene/`, `model/protocol/`, `model/traversal/`, `model/raster/`,
+  `model/assets/`. `model/__init__.py` has the per-module map.
 - **Entry point:** the per-token forward pass is `render_main.forward`
-  (`torchwright_doom/render_main.py`). It builds the read side (decode the
-  input token + consult static map facts), publishes the write-side
+  (`torchwright_doom/model/render_main.py`). It builds the read side (decode
+  the input token + consult static map facts), publishes the write-side
   protocol owners, builds each dispatch branch's next-token, and selects one
   by the current token's type.
-- **Reading path** (one `forward()` pass, read side → write side):
-  `vocab` / `tokens` → `embedding` / `extract` → `scene_tokens` /
-  `scene_headers` / `scene_index` / `scene_facts` (static read side) →
-  `protocol_tokens` / `protocol_registry` (the dispatch table) →
-  `render_main.forward` (assembly) → the write side: `bsp_traversal`
-  (R_RenderBSPNode) → `seg_projection` → the `wall_*` / `visplane_*` /
-  `flat_*` rasterizers → the pixel pass.
+- **Reading path** (one `forward()` pass, read side → write side, all under
+  `model/`): `vocab` / `tokens` → `embedding` / `extract` → `scene/`
+  (static read side) → `protocol/` (the dispatch table) →
+  `render_main.forward` (assembly) → the write side:
+  `traversal/bsp_traversal` (R_RenderBSPNode) → `raster/seg_projection` →
+  the `wall_*` / `visplane_*` / `flat_*` rasterizers → the pixel pass.
 - **Prefill pipeline** (WAD → tokens the model reads before autoregression):
   `doom1.wad` → `prompt/wad.py` (raw `MapData`) → `prompt/subset.py`
   (bbox-sliced, renumbered, mean-centred) → `prompt/build.py` (`list[Token]`)
