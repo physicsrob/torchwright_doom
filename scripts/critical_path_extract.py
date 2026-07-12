@@ -61,7 +61,6 @@ from torchwright.compiler.forward.cpsat_scheduler import (  # noqa: E402
 )
 from torchwright.compiler.forward.scheduling_policy import LEGACY_POLICY  # noqa: E402
 
-
 _SLACK_FAMILIES = (
     "floor_int",
     "table_lookup_2d",
