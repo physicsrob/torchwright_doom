@@ -233,7 +233,7 @@ def _bundle_cache_probe_remote(cache_subdir: str, compile_payload: dict) -> bool
 
     if "/root" not in sys.path:
         sys.path.insert(0, "/root")
-    from torchwright_doom.inference.hf_bundle import is_complete_hf_bundle
+    from torchwright_doom.bundle.manifest import is_complete_hf_bundle
 
     HF_BUNDLE_VOLUME.reload()
     directory = f"/root/.cache/torchwright_doom/hf_phi3/{cache_subdir}"

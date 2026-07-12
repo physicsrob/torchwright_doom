@@ -1,8 +1,13 @@
-"""Direct stock-Phi-3 Doom bundle construction and validation."""
+"""Direct stock-Phi-3 Doom bundle construction and staged publication.
+
+Manifest schema, hashing, and completeness validation live in
+``bundle.manifest``; this module owns the compile + staging transaction +
+stamping + staged validation + rollback-protected publication (it becomes
+``bundle/build.py`` at the end of the cleanup).
+"""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import shutil
@@ -12,17 +17,15 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
-from ..config import RenderConfig, resolve_wad_path
+from ..bundle.manifest import (  # noqa: F401  (validation re-exported for callers)
+    MANIFEST_NAME,
+    candidate_manifest,
+    compile_payload_sha256,
+    is_complete_hf_bundle,
+    validate_bundle_manifest,
+)
+from ..config import RenderConfig
 from ..identity import validate_compile_payload
-
-_MANIFEST = "doom_bundle_manifest.json"
-_FORMAT = "torchwright_doom.phi3.v1"
-_ARTIFACT_KIND = "hf_phi3_bundle"
-# Bundle layout version: 2 = root infer.py + tools/, size checks for every
-# declared file, hash checks for every hash-bearing file. Bumped together
-# with the compile payload's artifact.format (config.compile_payload_domain);
-# validators fail closed on older or missing versions.
-_LAYOUT_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -36,28 +39,6 @@ class BundleReport:
         return asdict(self)
 
 
-def _canonical_json(value: Any) -> bytes:
-    return json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
-
-
-def _sha_bytes(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
-
-
-def _sha_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def compile_payload_sha256(payload: dict[str, Any]) -> str:
-    return _sha_bytes(_canonical_json(payload))
-
-
 def _remove(path: Path) -> None:
     if not path.exists() and not path.is_symlink():
         return
@@ -69,7 +50,14 @@ def _remove(path: Path) -> None:
 
 @contextmanager
 def _outer_bundle_transaction(destination: str | Path) -> Iterator[Path]:
-    """Stage a complete bundle beside its destination and publish with rollback."""
+    """Stage a complete bundle beside its destination and publish with rollback.
+
+    Staging and final paths share a filesystem so each rename is atomic and a
+    failed second rename can restore the previous destination. The two-rename
+    replacement is NOT reader-visible atomic — there is a short gap after the
+    old destination moves aside. Production assumes one publisher per cache
+    key; concurrent-publisher serialization is a recorded follow-up.
+    """
     final = Path(destination).absolute()
     final.parent.mkdir(parents=True, exist_ok=True)
     root = Path(
@@ -129,201 +117,6 @@ def _stamp_model_config(
     _write_json(path, payload)
 
 
-def _file_manifest(bundle: Path) -> dict[str, dict[str, Any]]:
-    files: dict[str, dict[str, Any]] = {}
-    for path in sorted(bundle.rglob("*")):
-        if path.is_file() and path.name != _MANIFEST:
-            relative = path.relative_to(bundle).as_posix()
-            facts: dict[str, Any] = {"size": path.stat().st_size}
-            # The safetensors index binds every tensor key to a shard. Avoid a
-            # second tens-of-GB read solely to hash the already validated shard
-            # bytes; hash all Doom-owned data, configs, examples, and the index.
-            if path.suffix != ".safetensors":
-                facts["sha256"] = _sha_file(path)
-            files[relative] = facts
-    return files
-
-
-def _aggregate_hash(files: dict[str, dict[str, Any]], names: list[str]) -> str:
-    return _sha_bytes(_canonical_json({name: files[name]["sha256"] for name in names}))
-
-
-def _candidate_manifest(
-    *,
-    bundle: Path,
-    config: RenderConfig,
-    wad_path: Path,
-    compile_payload: dict[str, Any],
-    report,
-    prompt_rows: list[int],
-    prompt_path: Path,
-    vocab_size: int,
-    row_vocab_fingerprint: str,
-    tokenizer_vocab_sha256: str,
-    bos_row: int,
-    eos_row: int,
-    origin: tuple[float, float],
-) -> dict[str, Any]:
-    files = _file_manifest(bundle)
-    prompt_bytes = prompt_path.read_bytes()
-    prompt_ids = _canonical_json(prompt_rows)
-    payload_digest = compile_payload_sha256(compile_payload)
-    return {
-        "format": _FORMAT,
-        "artifact_kind": _ARTIFACT_KIND,
-        "profile": "phi3",
-        "compile_payload_sha256": payload_digest,
-        "source_revisions": dict(compile_payload["git"]),
-        "bundle_identity": f"{_FORMAT}:{payload_digest}",
-        "model_type": "phi3",
-        "architecture": "Phi3ForCausalLM",
-        "dtype": "float32",
-        "model": asdict(config.model),
-        "screen": {
-            "width": config.screen[0],
-            "height": config.screen[1],
-            "scale": config.model.scale,
-            "detail": config.model.detail,
-            "hud": config.model.hud,
-        },
-        "wad": {"name": config.wad, "sha256": _sha_file(wad_path)},
-        "map": config.map,
-        "region": asdict(config.region),
-        "pose": {**asdict(config.run.pose), "scene_origin": list(origin)},
-        "vocab_size": int(vocab_size),
-        "row_vocab_fingerprint": row_vocab_fingerprint,
-        "tokenizer_vocab_sha256": tokenizer_vocab_sha256,
-        "formatter_data_sha256": _aggregate_hash(
-            files, ["doom_vocab.json", "doom_tables.json"]
-        ),
-        "frame_decoder_data_sha256": _aggregate_hash(
-            files, ["doom_vocab.json", "doom_palette.json"]
-        ),
-        "bos_token_id": int(bos_row),
-        "eos_token_id": int(eos_row),
-        "pad_token_id": int(eos_row),
-        "prompt": {
-            "path": prompt_path.relative_to(bundle).as_posix(),
-            "sha256": _sha_bytes(prompt_bytes),
-            "row_ids_sha256": _sha_bytes(prompt_ids),
-            "n_rows": len(prompt_rows),
-        },
-        "generation": {"max_new_tokens": int(config.run.max_new_tokens)},
-        "schedule": report.schedule_provenance.to_dict(),
-        "compile": {"n_layers": int(report.n_layers)},
-        "files": files,
-        "validation": {"complete": False, "format_version": _LAYOUT_VERSION},
-    }
-
-
-def validate_bundle_manifest(
-    bundle_dir: str | Path,
-    *,
-    expected_payload: dict[str, Any] | None = None,
-    allow_incomplete: bool = False,
-) -> dict[str, Any]:
-    """Validate Doom-owned identity without loading model weights.
-
-    A normal probe verifies the layout version, every declared file's size,
-    and the hash of every hash-bearing file. Safetensor shards are the only
-    hash-exempt files (the index binds their tensors; their sizes are still
-    checked), which keeps completeness probes cheap.
-    """
-    bundle = Path(bundle_dir)
-    path = bundle / _MANIFEST
-    if not path.is_file():
-        raise FileNotFoundError(f"Doom bundle has no {_MANIFEST}: {bundle}")
-    manifest = json.loads(path.read_text(encoding="utf-8"))
-    if (
-        manifest.get("format") != _FORMAT
-        or manifest.get("artifact_kind") != _ARTIFACT_KIND
-    ):
-        raise ValueError("directory is not a supported Doom Phi-3 bundle")
-    if manifest.get("profile") != "phi3":
-        raise ValueError("Doom production bundle does not declare the Phi-3 profile")
-    if manifest.get("validation", {}).get("format_version") != _LAYOUT_VERSION:
-        raise ValueError(
-            f"Doom bundle does not declare layout version {_LAYOUT_VERSION}"
-        )
-    if not allow_incomplete and not manifest.get("validation", {}).get("complete"):
-        raise ValueError("Doom bundle manifest is not complete")
-    if expected_payload is not None and manifest.get(
-        "compile_payload_sha256"
-    ) != compile_payload_sha256(expected_payload):
-        raise ValueError(
-            "Doom bundle compile payload does not match the requested build"
-        )
-
-    required = {
-        "config.json",
-        "model.safetensors.index.json",
-        "tokenizer.json",
-        "tokenizer_config.json",
-        "doom_vocab.json",
-        "doom_tables.json",
-        "doom_palette.json",
-        "README.md",
-        "infer.py",
-        "examples/e1m1_prompt.txt",
-        "tools/pretty_text.py",
-        "tools/txt_to_png.py",
-        "tools/README.md",
-    }
-    declared = manifest.get("files", {})
-    missing = sorted(
-        name
-        for name in required
-        if name not in declared or not (bundle / name).is_file()
-    )
-    if missing:
-        raise ValueError(f"Doom bundle is incomplete; missing: {', '.join(missing)}")
-    for name, facts in declared.items():
-        file_path = bundle / name
-        if not file_path.is_file():
-            raise ValueError(f"Doom bundle declares a missing file: {name}")
-        if file_path.stat().st_size != facts.get("size"):
-            raise ValueError(f"Doom bundle file size mismatch: {name}")
-        if "sha256" in facts and _sha_file(file_path) != facts["sha256"]:
-            raise ValueError(f"Doom bundle file hash mismatch: {name}")
-    index = json.loads((bundle / "model.safetensors.index.json").read_text())
-    shards = set(index.get("weight_map", {}).values())
-    if not shards:
-        raise ValueError("Doom bundle safetensors index references no shards")
-    undeclared = sorted(shards - set(declared))
-    if undeclared:
-        raise ValueError(
-            f"Doom bundle index references undeclared shards: {', '.join(undeclared)}"
-        )
-    config = json.loads((bundle / "config.json").read_text())
-    if config.get("model_type") != "phi3" or config.get("architectures") != [
-        "Phi3ForCausalLM"
-    ]:
-        raise ValueError("Doom bundle does not have stock Phi-3 identity")
-    if "auto_map" in config:
-        raise ValueError("Doom stock model config must not contain auto_map")
-    tokenizer_config = json.loads((bundle / "tokenizer_config.json").read_text())
-    if "auto_map" in tokenizer_config:
-        raise ValueError("Doom stock tokenizer config must not contain auto_map")
-    forbidden = [
-        path.name
-        for pattern in ("modeling_*.py", "configuration_*.py", "tokenization_*.py")
-        for path in bundle.glob(pattern)
-    ]
-    if forbidden:
-        raise ValueError(f"Doom stock bundle contains auto-loaded code: {forbidden}")
-    return manifest
-
-
-def is_complete_hf_bundle(
-    bundle_dir: str | Path, *, expected_payload: dict[str, Any] | None = None
-) -> bool:
-    try:
-        validate_bundle_manifest(bundle_dir, expected_payload=expected_payload)
-    except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError):
-        return False
-    return True
-
-
 def _validate_complete_staged_bundle(
     bundle: Path, config: RenderConfig, prompt_rows: list[int]
 ) -> None:
@@ -361,7 +154,7 @@ def _validate_complete_staged_bundle(
         )
         != prompt_rows
     ):
-        raise ValueError("DoomFormatter changed bundled prompt row identity")
+        raise ValueError("DoomTextFormatter changed bundled prompt row identity")
 
     model = AutoModelForCausalLM.from_pretrained(
         bundle, attn_implementation="eager", dtype=torch.float32
@@ -430,7 +223,7 @@ def compile_phi3_bundle(
     compile_payload: dict[str, Any],
     verbose: bool = False,
 ) -> BundleReport:
-    """Compile and atomically publish one complete production Doom bundle."""
+    """Compile and publish one complete production Doom bundle (with rollback)."""
     if config.map.upper() != "E1M1":
         raise ValueError(
             "the production HF bundle contract currently supports E1M1 only"
@@ -450,6 +243,7 @@ def compile_phi3_bundle(
     from torchwright.compiler import CompileProfile, compile_hf_bundle
 
     from ..bundle.layout import write_bundle_layout, write_model_card
+    from ..model_graph import build_graph
     from ..prompt.scene import load_render_scene, pose_from_world, prefill_rows_for
     from ..tokenizer.codec import raw_text_from_rows
     from ..tokenizer.freeze import write_frozen_data
@@ -460,7 +254,6 @@ def compile_phi3_bundle(
         doom_special_tokens,
         ordered_words_sha256,
     )
-    from ..model_graph import build_graph
 
     next_token, _rope, embedding, asset_banks = build_graph(
         d_head=config.model.d_head,
@@ -519,7 +312,7 @@ def compile_phi3_bundle(
         prompt_path = next(
             path for path in written_layout if path.name == "e1m1_prompt.txt"
         )
-        manifest = _candidate_manifest(
+        manifest = candidate_manifest(
             bundle=stage,
             config=config,
             wad_path=wad_path,
@@ -534,32 +327,14 @@ def compile_phi3_bundle(
             eos_row=special.eos_row,
             origin=scene.origin,
         )
-        _write_json(stage / _MANIFEST, manifest)
+        _write_json(stage / MANIFEST_NAME, manifest)
         _validate_complete_staged_bundle(stage, config, prompt_rows)
         manifest["validation"]["complete"] = True
-        _write_json(stage / _MANIFEST, manifest)
+        _write_json(stage / MANIFEST_NAME, manifest)
 
     return BundleReport(
         destination=str(destination),
         n_layers=int(report.n_layers),
         vocab_size=len(words),
         manifest=manifest,
-    )
-
-
-def compile_phi3_bundle_from_config(
-    config: RenderConfig,
-    *,
-    destination: str | Path,
-    compile_payload: dict[str, Any],
-    base_dir: str | Path | None = None,
-    verbose: bool = False,
-) -> BundleReport:
-    wad_path = resolve_wad_path(config, base_dir=base_dir)
-    return compile_phi3_bundle(
-        config,
-        wad_path=wad_path,
-        destination=destination,
-        compile_payload=compile_payload,
-        verbose=verbose,
     )
