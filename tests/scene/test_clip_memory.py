@@ -27,13 +27,13 @@ import torch
 from torchwright.debug.probe import probe_graph, reference_eval
 from torchwright.ops.inout_nodes import create_input, create_rope_config
 
-from torchwright_doom.attention_handles import RecentMarkerHandle
-from torchwright_doom.constants import SCREEN_HEIGHT
-from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
-from torchwright_doom.past import GraphPast
-from torchwright_doom.std import concat, constant, linear
-from torchwright_doom.vocab import BOS, NO_OP
-from torchwright_doom.wall_column_state import ClipMemory
+from torchwright_doom.model.attention_handles import RecentMarkerHandle
+from torchwright_doom.model.constants import SCREEN_HEIGHT
+from torchwright_doom.model.embedding import TOKEN_VOCAB, W_EMBED
+from torchwright_doom.model.past import GraphPast
+from torchwright_doom.model.std import concat, constant, linear
+from torchwright_doom.model.vocab import BOS, NO_OP
+from torchwright_doom.model.raster.wall_column_state import ClipMemory
 
 from ..prefill_fixture import row_index
 

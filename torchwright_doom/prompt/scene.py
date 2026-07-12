@@ -12,9 +12,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..asset_config import AssetConfig
+from ..model.asset_config import AssetConfig
 from ..config import RenderConfig, resolve_wad_path
-from ..wad_assets import AssetBook, load_asset_book
+from ..model.assets.wad_assets import AssetBook, load_asset_book
 from .build import build_prompt
 from .subset import subset_by_bbox
 from .types import GameState, MapData

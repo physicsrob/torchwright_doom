@@ -57,8 +57,8 @@ from __future__ import annotations
 
 from typing import Mapping, Sequence
 
-from ..tokens import FloatSlot, TokenType
-from ..vocab import BACK_HEIGHT_SENTINEL, N_NODES_MAX, VOCAB_TYPES
+from ..model.tokens import FloatSlot, TokenType
+from ..model.vocab import BACK_HEIGHT_SENTINEL, N_NODES_MAX, VOCAB_TYPES
 
 # ---------------------------------------------------------------------------
 # type aliases (drop the redundant entity prefix; short common words)

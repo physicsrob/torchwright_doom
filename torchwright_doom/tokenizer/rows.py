@@ -23,10 +23,10 @@ from __future__ import annotations
 
 import torch
 
-from ..embedding import TOKEN_VOCAB, W_EMBED
-from ..tokens import IntSlot, Token, TokenType
-from ..value_ranges import ValueRange, encode_float
-from ..vocab import ANGLE_VALUE, VALUE
+from ..model.embedding import TOKEN_VOCAB, W_EMBED
+from ..model.tokens import IntSlot, Token, TokenType
+from ..model.value_ranges import ValueRange, encode_float
+from ..model.vocab import ANGLE_VALUE, VALUE
 
 # --- row <-> (type, slot_values) ------------------------------------------
 

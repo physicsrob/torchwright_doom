@@ -28,11 +28,11 @@ import torch
 from torchwright.compiler.export import compile_headless
 from torchwright.ops.inout_nodes import create_rope_config
 
-from torchwright_doom.embedding import W_EMBED, build_doom_embedding
-from torchwright_doom.past import GraphPast
-from torchwright_doom.render_ops import add_const
-from torchwright_doom.std import make_token
-from torchwright_doom.vocab import THINK_SIDE
+from torchwright_doom.model.embedding import W_EMBED, build_doom_embedding
+from torchwright_doom.model.past import GraphPast
+from torchwright_doom.model.render_ops import add_const
+from torchwright_doom.model.std import make_token
+from torchwright_doom.model.vocab import THINK_SIDE
 
 from ..prefill_fixture import row_index
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from torchwright_doom.asset_config import DEFAULT_ASSET_CONFIG
+from torchwright_doom.model.asset_config import DEFAULT_ASSET_CONFIG
 from torchwright_doom.portable.pretty_text import DoomTextFormatter
 from torchwright_doom.tokenizer.codec import raw_text_from_rows, rows_from_raw_text
 from torchwright_doom.tokenizer.freeze import build_tables, build_vocab_blob

@@ -15,8 +15,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ..constants import SCREEN_HEIGHT, SCREEN_WIDTH
-from ..embedding import TOKEN_VOCAB
+from ..model.constants import SCREEN_HEIGHT, SCREEN_WIDTH
+from ..model.embedding import TOKEN_VOCAB
 
 
 def _row_entry(pos: int, row: int, phase: str) -> dict[str, Any]:

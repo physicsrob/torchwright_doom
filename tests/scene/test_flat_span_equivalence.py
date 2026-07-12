@@ -20,7 +20,7 @@ does not.
 from __future__ import annotations
 
 
-from torchwright_doom.constants import SCREEN_HEIGHT
+from torchwright_doom.model.constants import SCREEN_HEIGHT
 
 
 def _make_spans_raw(

@@ -257,7 +257,7 @@ def main():
     fuse = os.environ.get("FUSE", "1") == "1"
 
     from torchwright_doom.model_graph import build_graph
-    from torchwright_doom import constants as C
+    from torchwright_doom.model import constants as C
 
     next_token, pos, emb, _banks = build_graph()
 

@@ -34,12 +34,12 @@ import torch
 from torchwright.debug.probe import reference_eval
 from torchwright.ops.inout_nodes import create_input, create_rope_config
 
-from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
-from torchwright_doom.past import GraphPast
+from torchwright_doom.model.embedding import TOKEN_VOCAB, W_EMBED
+from torchwright_doom.model.past import GraphPast
 from torchwright_doom.model_graph import build_graph
 from torchwright_doom.tokenizer.rows import rows_to_input
-from torchwright_doom.render_main import forward
-from torchwright_doom.vocab import NO_OP
+from torchwright_doom.model.render_main import forward
+from torchwright_doom.model.vocab import NO_OP
 
 from ..prefill_fixture import TINY_BSP_SCENE, row_index
 

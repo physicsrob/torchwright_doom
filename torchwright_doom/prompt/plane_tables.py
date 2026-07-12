@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..asset_config import FLAT_ID_BY_NAME
+from ..model.asset_config import FLAT_ID_BY_NAME
 from .types import MapData, Sector
 
 

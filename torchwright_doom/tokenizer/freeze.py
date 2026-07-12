@@ -23,12 +23,18 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from ..asset_config import DEFAULT_ASSET_CONFIG, AssetConfig
-from ..embedding import TOKEN_VOCAB
-from ..marker_ranges import ANGLE_MARKERS, MARKER_RANGE
-from ..tokens import FloatSlot, IntSlot
-from ..value_ranges import VALUE_RANGES
-from ..vocab import ANGLE_BAM, ANGLE_VALUE, BACK_HEIGHT_SENTINEL, VALUE, VOCAB_TYPES
+from ..model.asset_config import DEFAULT_ASSET_CONFIG, AssetConfig
+from ..model.embedding import TOKEN_VOCAB
+from ..model.marker_ranges import ANGLE_MARKERS, MARKER_RANGE
+from ..model.tokens import FloatSlot, IntSlot
+from ..model.value_ranges import VALUE_RANGES
+from ..model.vocab import (
+    ANGLE_BAM,
+    ANGLE_VALUE,
+    BACK_HEIGHT_SENTINEL,
+    VALUE,
+    VOCAB_TYPES,
+)
 from . import display, surface
 from .display import DISPLAY_NAME, token_label, token_word
 from .identity import screen_config, vocab_fingerprint

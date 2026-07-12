@@ -13,14 +13,14 @@ import dataclasses
 
 from torchwright.debug.probe import reference_eval
 
-from torchwright_doom import asset_banks as ab
-from torchwright_doom.assets import HudAssets
-from torchwright_doom.hud_assets import (
+from torchwright_doom.model.assets import asset_banks as ab
+from torchwright_doom.model.assets.assets import HudAssets
+from torchwright_doom.model.assets.hud_assets import (
     HUD_TRANSPARENT,
     bake_hud_bank,
     load_hud_patches,
 )
-from torchwright_doom.std import constant
+from torchwright_doom.model.std import constant
 
 
 def _hud_on_banks(scale: int = 1):

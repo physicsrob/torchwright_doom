@@ -14,14 +14,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from torchwright_doom.asset_config import DEFAULT_ASSET_CONFIG
-from torchwright_doom.embedding import TOKEN_VOCAB
+from torchwright_doom.model.asset_config import DEFAULT_ASSET_CONFIG
+from torchwright_doom.model.embedding import TOKEN_VOCAB
 from torchwright_doom.tokenizer.rows import row_to_token, token_to_row
-from torchwright_doom.marker_ranges import ANGLE_MARKERS, MARKER_RANGE
-from torchwright_doom.tokens import IntSlot, Token
+from torchwright_doom.model.marker_ranges import ANGLE_MARKERS, MARKER_RANGE
+from torchwright_doom.model.tokens import IntSlot, Token
 from torchwright_doom.tokenizer import display, surface
-from torchwright_doom.value_ranges import ValueRange, encode_float
-from torchwright_doom.vocab import (
+from torchwright_doom.model.value_ranges import ValueRange, encode_float
+from torchwright_doom.model.vocab import (
     ANGLE_VALUE,
     BACK_HEIGHT_SENTINEL,
     SEG_BACK_FLOOR,

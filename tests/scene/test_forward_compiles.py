@@ -17,9 +17,9 @@ from torchwright.compiler.export import compile_to_onnx
 from torchwright.compiler import CompileProfile
 from torchwright.ops.inout_nodes import create_rope_config
 
-from torchwright_doom.embedding import build_doom_embedding
-from torchwright_doom.past import GraphPast
-from torchwright_doom.render_main import forward
+from torchwright_doom.model.embedding import build_doom_embedding
+from torchwright_doom.model.past import GraphPast
+from torchwright_doom.model.render_main import forward
 
 # This lighter-than-production geometry keeps the structural compile gate
 # tractable while retaining enough residual and head width for the full graph.

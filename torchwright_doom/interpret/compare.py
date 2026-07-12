@@ -18,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ..constants import PIXEL_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH
+from ..model.constants import PIXEL_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH
 
 Rgb = tuple[int, int, int]
 PixelBuf = dict[tuple[int, int], Rgb]
@@ -35,8 +35,8 @@ def _weapon_reference_cells() -> list[tuple[int, int, Rgb]]:
     pydoom token reference use — so the weapon is consistent across all three.
     The baked value is a *lit* palette index; PLAYPAL maps it to RGB exactly as
     the host does for an emitted PIXEL token."""
-    from ..asset_banks import PLAYPAL, configured_weapon_bake
-    from ..weapon_assets import WEAPON_TRANSPARENT
+    from ..model.assets.asset_banks import PLAYPAL, configured_weapon_bake
+    from ..model.assets.weapon_assets import WEAPON_TRANSPARENT
 
     bake = configured_weapon_bake()
     if bake is None:
@@ -64,12 +64,12 @@ def _hud_reference_cells() -> list[tuple[int, int, Rgb]]:
     (one cell per column, ``w = 1``, unlike the doubled weapon/3D view). Cells are
     emitted in draw-list order, so the consumer's last-write-wins puts each widget
     over the plate beneath it (DOOM's painter order)."""
-    from ..asset_banks import (
+    from ..model.assets.asset_banks import (
         PLAYPAL,
         configured_hud_bake,
         configured_hud_draw_list,
     )
-    from ..hud_assets import HUD_TRANSPARENT
+    from ..model.assets.hud_assets import HUD_TRANSPARENT
 
     draw_list = configured_hud_draw_list()
     bake = configured_hud_bake()

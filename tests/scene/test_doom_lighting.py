@@ -1,7 +1,7 @@
 """Doom wall-lighting row selection — constant anchors against DOOM's C source.
 
 Pinned against the
-in-tree ``torchwright_doom.doom_lighting``. After the renderer/drafter were
+in-tree ``torchwright_doom.model.doom_lighting``. After the renderer/drafter were
 vendored, a compiled-vs-Python-renderer gate can no longer catch a *lighting*
 transcription bug (both descend from the same hand-port). This pins the
 scalelight table, the lightnum sector-shift, and the scale-diminish distance
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from torchwright_doom.doom_lighting import (
+from torchwright_doom.model.doom_lighting import (
     DEFAULT_SCREEN_WIDTH,
     FRACUNIT,
     MAXLIGHTSCALE,

@@ -12,10 +12,10 @@ from __future__ import annotations
 
 from typing import cast
 
-from torchwright_doom.protocol_registry import DISPATCH_TRANSITIONS
-from torchwright_doom.protocol_tokens import ProtocolTokenView
-from torchwright_doom.render_main import _distinct_head_pairs
-from torchwright_doom.std import constant
+from torchwright_doom.model.protocol.protocol_registry import DISPATCH_TRANSITIONS
+from torchwright_doom.model.protocol.protocol_tokens import ProtocolTokenView
+from torchwright_doom.model.render_main import _distinct_head_pairs
+from torchwright_doom.model.std import constant
 
 
 class _FakeInp:

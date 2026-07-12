@@ -20,12 +20,12 @@ import torch
 
 from torchwright.debug.probe import reference_eval
 
-from torchwright_doom import asset_banks as ab
-from torchwright_doom.assets import AssetIndex, FlatAssets, WallAssets
-from torchwright_doom.doom_lighting import NUMCOLORMAPS, apply_doom_colormap
-from torchwright_doom.lighting import apply_colormap_row
-from torchwright_doom.scene_index import SceneIndex
-from torchwright_doom.std import constant
+from torchwright_doom.model.assets import asset_banks as ab
+from torchwright_doom.model.assets.assets import AssetIndex, FlatAssets, WallAssets
+from torchwright_doom.model.doom_lighting import NUMCOLORMAPS, apply_doom_colormap
+from torchwright_doom.model.assets.lighting import apply_colormap_row
+from torchwright_doom.model.scene.scene_index import SceneIndex
+from torchwright_doom.model.std import constant
 
 BOOK = ab.ASSET_BOOK
 ATOL = 1e-3
@@ -140,9 +140,11 @@ def test_no_import_time_graph_nodes():
     # node-id reset). Checked in a clean interpreter so the in-test node counter
     # does not mask leakage.
     code = (
-        "import torchwright_doom.wad_assets, torchwright_doom.asset_banks, "
-        "torchwright_doom.assets, torchwright_doom.lighting, torchwright_doom.std, "
-        "torchwright_doom.scene_index;"
+        "import torchwright_doom.model.assets.wad_assets, "
+        "torchwright_doom.model.assets.asset_banks, "
+        "torchwright_doom.model.assets.assets, "
+        "torchwright_doom.model.assets.lighting, torchwright_doom.model.std, "
+        "torchwright_doom.model.scene.scene_index;"
         "from torchwright.graph import node as n;"
         "print(n.global_node_id)"
     )

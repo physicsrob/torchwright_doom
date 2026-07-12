@@ -26,7 +26,7 @@ import torch
 
 from torchwright.graph.spherical_codes import index_to_vector
 
-from torchwright_doom.embedding import (
+from torchwright_doom.model.embedding import (
     BASE,
     CENTER,
     TOKEN_VOCAB,

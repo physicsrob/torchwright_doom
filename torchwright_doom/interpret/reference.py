@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, cast
 
-from ..asset_config import AssetConfig
+from ..model.asset_config import AssetConfig
 from ..prompt.scene import LoadedRenderScene
 from ..prompt.types import GameState
 

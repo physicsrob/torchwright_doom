@@ -9,7 +9,7 @@ pixel oracle's ground truth for graph-side HUD rendering.
 
 from __future__ import annotations
 
-from torchwright_doom.hud_assets import (
+from torchwright_doom.model.assets.hud_assets import (
     DrawCall,
     composite_bar,
     e1m1_draw_list,

@@ -39,10 +39,10 @@ from torchwright.debug.probe import reference_eval
 from torchwright.graph import fresh_graph_session
 from torchwright.ops.inout_nodes import create_input
 
-from torchwright_doom.embedding import BASE, TOKEN_VOCAB, W_EMBED
-from torchwright_doom.emit import emit_float_slot_token, emit_int_slot_token
-from torchwright_doom.tokens import FloatSlot
-from torchwright_doom.vocab import ANGLE_VALUE, VALUE
+from torchwright_doom.model.embedding import BASE, TOKEN_VOCAB, W_EMBED
+from torchwright_doom.model.emit import emit_float_slot_token, emit_int_slot_token
+from torchwright_doom.model.tokens import FloatSlot
+from torchwright_doom.model.vocab import ANGLE_VALUE, VALUE
 
 
 def _project_argmax(emit_value: torch.Tensor) -> int:

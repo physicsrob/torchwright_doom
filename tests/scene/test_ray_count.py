@@ -30,7 +30,7 @@ from torchwright.debug.probe import probe_graph, reference_eval
 from torchwright.ops.const import scale
 from torchwright.ops.inout_nodes import create_input
 
-from torchwright_doom.render_ops import _RAY_SHARPNESS, _ray_count
+from torchwright_doom.model.render_ops import _RAY_SHARPNESS, _ray_count
 
 #: The committed-fixture extreme ray magnitudes (see ``_RAY_SHARPNESS``'s
 #: note in ``render_ops.py``): the smallest nonzero |ray| across the e1m1
@@ -130,14 +130,14 @@ def test_ray_count_exact_integers_when_compiled():
 
 import math
 
-from torchwright_doom.render_ops import (
+from torchwright_doom.model.render_ops import (
     _HIGH_RAY_MATRIX,
     _LOW_RAY_MATRIX,
     _abs_coord,
     signed_world_angle,
 )
-from torchwright_doom.std import concat as _concat, linear as _linear
-from torchwright_doom.vocab import ANGLE_BAM
+from torchwright_doom.model.std import concat as _concat, linear as _linear
+from torchwright_doom.model.vocab import ANGLE_BAM
 
 _BAM_U = 2.0 * math.pi / ANGLE_BAM
 
@@ -151,9 +151,9 @@ def _flat_signed_world_angle(dx, dy):
 
     from torchwright.graph import Linear as _Linear
 
-    from torchwright_doom.render_ops import _ray_count
-    from torchwright_doom.std import constant as _constant, select as _select
-    from torchwright_doom.render_ops import compare as _compare, neg as _neg
+    from torchwright_doom.model.render_ops import _ray_count
+    from torchwright_doom.model.std import constant as _constant, select as _select
+    from torchwright_doom.model.render_ops import compare as _compare, neg as _neg
 
     abs_dx = _abs_coord(dx)
     abs_dy = _abs_coord(dy)

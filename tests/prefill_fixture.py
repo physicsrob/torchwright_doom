@@ -15,9 +15,9 @@ from torchwright_doom.tokenizer.rows import (  # noqa: F401  (re-exports)
     tokens_to_input,
     value,
 )
-from torchwright_doom.tokens import TokenType
-from torchwright_doom.value_ranges import ValueRange
-from torchwright_doom.vocab import (
+from torchwright_doom.model.tokens import TokenType
+from torchwright_doom.model.value_ranges import ValueRange
+from torchwright_doom.model.vocab import (
     BEGIN,
     BOS,
     NODE,

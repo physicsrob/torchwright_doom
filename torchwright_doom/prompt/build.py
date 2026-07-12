@@ -15,14 +15,14 @@ standalone flat tokens.
 
 from __future__ import annotations
 
-from ..asset_config import DEFAULT_ASSET_CONFIG, AssetConfig
-from ..doom_lighting import (
+from ..model.asset_config import DEFAULT_ASSET_CONFIG, AssetConfig
+from ..model.doom_lighting import (
     doom_wall_light_static,
     doom_wall_orientation_light_bias,
 )
-from ..marker_ranges import MARKER_RANGE
-from ..tokens import Token, TokenType
-from ..vocab import (
+from ..model.marker_ranges import MARKER_RANGE
+from ..model.tokens import Token, TokenType
+from ..model.vocab import (
     ANGLE_BAM,
     ANGLE_VALUE,
     BACK_HEIGHT_SENTINEL,

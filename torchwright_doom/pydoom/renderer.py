@@ -17,15 +17,15 @@ from ._bsp import decode_child, make_plane, side_P
 from ._scene import GameState, Pixel, Scene
 from ..prompt.geometry import Segment, bake_segments
 from ..prompt.types import MapData, Sector, Seg
-from ..doom_lighting import (
+from ..model.doom_lighting import (
     NUMCOLORMAPS,
     apply_doom_colormap,
     doom_flat_colormap_row,
     doom_wall_colormap_row,
     doom_wall_orientation_light_bias,
 )
-from ..asset_banks import ASSET_BOOK, COLORMAP_ROWS, PLAYPAL
-from ..asset_config import FLAT_ID_BY_NAME, WALL_TEXTURE_ID_BY_NAME
+from ..model.assets.asset_banks import ASSET_BOOK, COLORMAP_ROWS, PLAYPAL
+from ..model.asset_config import FLAT_ID_BY_NAME, WALL_TEXTURE_ID_BY_NAME
 
 _DEFAULT_SCREEN_WIDTH = 60
 _DEFAULT_SCREEN_HEIGHT = 50

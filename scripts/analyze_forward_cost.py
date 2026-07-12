@@ -45,9 +45,9 @@ import torchwright.compiler.forward.residual_map as _rm
 from torchwright.graph.misc import LiteralValue
 from torchwright.graph.node import reserve_node_id_above
 from torchwright.ops.inout_nodes import create_rope_config
-from torchwright_doom.embedding import build_doom_embedding
-from torchwright_doom.past import GraphPast
-from torchwright_doom.render_main import forward
+from torchwright_doom.model.embedding import build_doom_embedding
+from torchwright_doom.model.past import GraphPast
+from torchwright_doom.model.render_main import forward
 
 # --- subsystem classification (by node name; first match wins) --------------
 _BUCKETS: list[tuple[str, tuple[str, ...]]] = [
@@ -433,16 +433,16 @@ def main():
         # Rebuild forward() with a custom dispatch max_fanout to probe the
         # depth/width tradeoff of the type_switch fold (FANOUT=none for a full
         # tree reduction). Mirrors render_main.forward / dispatch_next_token.
-        from torchwright_doom.protocol_tokens import ProtocolTokenView
-        from torchwright_doom.scene_index import SceneIndex
-        from torchwright_doom.render_main import (
+        from torchwright_doom.model.protocol.protocol_tokens import ProtocolTokenView
+        from torchwright_doom.model.scene.scene_index import SceneIndex
+        from torchwright_doom.model.render_main import (
             publish_runtime_protocols,
             build_branch_outputs,
             _distinct_head_pairs,
         )
-        from torchwright_doom.emit import emit_derived_zero
-        from torchwright_doom.std import concat as _concat, type_switch as _ts
-        from torchwright_doom.past import PastHandleScope
+        from torchwright_doom.model.emit import emit_derived_zero
+        from torchwright_doom.model.std import concat as _concat, type_switch as _ts
+        from torchwright_doom.model.past import PastHandleScope
 
         fanout = (
             None if fanout_env.lower() in ("none", "0", "full") else int(fanout_env)

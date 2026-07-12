@@ -17,7 +17,10 @@ What they enforce, lifecycle-stage by stage:
   the model may load a model); ``bundle/`` never imports ``interpret/`` or
   the run orchestrator; ``prompt/`` never imports the output side or pydoom;
 * the root CLI is argparse + lazy dispatch only, and importing it in a fresh
-  process loads no screen-sized graph state.
+  process loads no screen-sized graph state;
+* ``model/`` (the compiled graph) never imports the host-side lifecycle,
+  only three root files reach into it, and its interior follows the
+  measured stage layering (kernel -> stages -> ``render_main``).
 """
 
 from __future__ import annotations
@@ -65,6 +68,48 @@ DIAGNOSTICS_IMPORTERS = ("torchwright_doom/cli.py",)
 
 # The root dispatch-only CLI.
 CLI_PATH: str | None = "torchwright_doom/cli.py"
+
+# Root-level package files allowed to import torchwright_doom.model — the
+# graph bridge, the orchestrator (vocab sentinel), and the job spec (asset
+# defaults). Lifecycle subpackages are not restricted (interpret/, prompt/,
+# tokenizer/, bundle/, diagnostics/ and pydoom/ all read model data);
+# infer.py and cli.py are separately gated to load no graph state.
+MODEL_IMPORTERS = (
+    "torchwright_doom/model_graph.py",
+    "torchwright_doom/run.py",
+    "torchwright_doom/config.py",
+)
+
+# Host-side modules the model may never import: the model/ boundary is the
+# dumb-host line — everything inside compiles into transformer weights.
+# tokenizer/ is deliberately absent: embedding.py lazily imports
+# tokenizer.display for the shared cosmetic row labels.
+MODEL_FORBIDDEN_IMPORTS = (
+    "torchwright_doom.run",
+    "torchwright_doom.cli",
+    "torchwright_doom.config",
+    "torchwright_doom.identity",
+    "torchwright_doom.bundle",
+    "torchwright_doom.prompt",
+    "torchwright_doom.interpret",
+    "torchwright_doom.pydoom",
+    "torchwright_doom.diagnostics",
+    "torchwright_doom.portable",
+)
+
+# model/ interior layering, measured against the import graph (2026-07):
+# each stage directory -> the model layers it may import from ("" is the
+# kernel, the flat files at model/ root). render_main.py is the assembler
+# and the sole exemption — it imports every stage.
+MODEL_LAYER_ALLOWED = {
+    "": frozenset({""}),
+    "protocol": frozenset({""}),
+    "assets": frozenset({""}),
+    "scene": frozenset({"", "assets"}),
+    "traversal": frozenset({"", "protocol", "scene"}),
+    "raster": frozenset({"", "protocol", "scene", "traversal", "assets"}),
+}
+MODEL_LAYERING_EXEMPT = ("torchwright_doom/model/render_main.py",)
 
 # Flips True in the Workstream 2 commit that establishes bundle layout v2
 # (root infer.py + tools/) — afterwards no legacy layout name may remain.
@@ -291,6 +336,63 @@ def test_host_package_name_does_not_exist() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Model boundary (the dumb-host line) and interior layering
+# ---------------------------------------------------------------------------
+
+
+def _model_files() -> list[Path]:
+    return _py_files(PACKAGE / "model")
+
+
+def test_model_never_imports_host_side() -> None:
+    """Everything under model/ compiles into transformer weights; it may
+    not reach back into the host-side lifecycle."""
+    for path in _model_files():
+        for forbidden in MODEL_FORBIDDEN_IMPORTS:
+            assert not _imports_module(path, forbidden), (path, forbidden)
+
+
+def test_model_imports_from_package_root_are_confined() -> None:
+    allowed = {ROOT / rel for rel in MODEL_IMPORTERS}
+    offenders = [
+        path
+        for path in _py_files(PACKAGE)
+        if path.parent == PACKAGE
+        and path not in allowed
+        and _imports_module(path, "torchwright_doom.model")
+    ]
+    assert not offenders, offenders
+
+
+def _model_layer_of(name: str) -> str | None:
+    """The model layer an imported dotted name lives in ("" = kernel), or
+    None if the name is not under torchwright_doom.model."""
+    prefix = "torchwright_doom.model"
+    if name != prefix and not name.startswith(prefix + "."):
+        return None
+    rest = name[len(prefix) + 1 :].split(".") if name != prefix else []
+    if rest and rest[0] in MODEL_LAYER_ALLOWED and rest[0] != "":
+        return rest[0]
+    return ""
+
+
+def test_model_interior_layering() -> None:
+    """Imports flow kernel -> {protocol, assets} -> scene -> traversal ->
+    raster; render_main (the assembler) is the sole exemption."""
+    exempt = {ROOT / rel for rel in MODEL_LAYERING_EXEMPT}
+    model_dir = PACKAGE / "model"
+    for path in _model_files():
+        if path in exempt:
+            continue
+        here = "" if path.parent == model_dir else path.parent.name
+        allowed = MODEL_LAYER_ALLOWED[here] | {here}
+        for name in _resolved_imports(path):
+            layer = _model_layer_of(name)
+            if layer is not None:
+                assert layer in allowed, (path, name, layer)
+
+
+# ---------------------------------------------------------------------------
 # Import-time safety
 # ---------------------------------------------------------------------------
 
@@ -330,8 +432,8 @@ def test_importing_cli_loads_no_graph_state() -> None:
         "import sys\n"
         "import torchwright_doom.cli\n"
         "forbidden = ["
-        "'torchwright_doom.constants', 'torchwright_doom.embedding', "
-        "'torchwright_doom.asset_banks', 'torchwright_doom.tokenizer.rows', "
+        "'torchwright_doom.model.constants', 'torchwright_doom.model.embedding', "
+        "'torchwright_doom.model.assets.asset_banks', 'torchwright_doom.tokenizer.rows', "
         "'torchwright_doom.model_graph']\n"
         "loaded = [m for m in forbidden if m in sys.modules]\n"
         "assert not loaded, loaded\n"

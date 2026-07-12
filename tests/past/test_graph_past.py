@@ -7,10 +7,10 @@ import torch
 
 from torchwright.ops.inout_nodes import create_input, create_rope_config
 
-from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
-from torchwright_doom.extract import type_code
-from torchwright_doom.past import GraphPast, PastHandleScope
-from torchwright_doom.vocab import BOS, NO_OP, NODE, SEG, VALUE
+from torchwright_doom.model.embedding import TOKEN_VOCAB, W_EMBED
+from torchwright_doom.model.extract import type_code
+from torchwright_doom.model.past import GraphPast, PastHandleScope
+from torchwright_doom.model.vocab import BOS, NO_OP, NODE, SEG, VALUE
 
 _D_EMBED = TOKEN_VOCAB.layout.d_embed
 

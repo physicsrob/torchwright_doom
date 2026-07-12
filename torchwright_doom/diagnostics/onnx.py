@@ -17,7 +17,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from ..asset_config import MISSING_TEXTURE_ID, AssetConfig
+from ..model.asset_config import MISSING_TEXTURE_ID, AssetConfig
 from ..config import (
     RenderConfig,
     apply_screen_env,
@@ -192,7 +192,7 @@ def compile_onnx_debug_path(
     """
     from torchwright.compiler.export import compile_to_onnx
 
-    from ..embedding import TOKEN_VOCAB
+    from ..model.embedding import TOKEN_VOCAB
     from ..model_graph import build_graph
 
     next_token, rope, emb, asset_banks = build_graph(
@@ -248,9 +248,9 @@ def _write_render_meta(
     build_info: dict[str, Any],
     compile_payload: dict[str, Any] | None = None,
 ) -> None:
-    from ..embedding import TOKEN_VOCAB
+    from ..model.embedding import TOKEN_VOCAB
     from ..tokenizer.rows import row_index
-    from ..vocab import DONE, PIXEL
+    from ..model.vocab import DONE, PIXEL
 
     asset_config = config.asset_config()
     existing = json.loads(path.read_text()) if path.exists() else {}

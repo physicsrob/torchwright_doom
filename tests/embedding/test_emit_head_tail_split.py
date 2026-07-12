@@ -18,15 +18,15 @@ import torch
 from torchwright.debug.probe import reference_eval
 from torchwright.graph import Concatenate
 
-from torchwright_doom.embedding import TOKEN_VOCAB
-from torchwright_doom.emit import (
+from torchwright_doom.model.embedding import TOKEN_VOCAB
+from torchwright_doom.model.emit import (
     emit_derived_zero,
     emit_token,
     emit_token_head,
     head_width,
 )
-from torchwright_doom.std import constant
-from torchwright_doom.vocab import NO_OP, SIDE_RECORD, THINK_SIDE, TRAVERSE_RETURN
+from torchwright_doom.model.std import constant
+from torchwright_doom.model.vocab import NO_OP, SIDE_RECORD, THINK_SIDE, TRAVERSE_RETURN
 
 
 def _slots(**kw):

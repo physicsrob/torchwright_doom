@@ -14,10 +14,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
-from ..asset_config import DEFAULT_ASSET_CONFIG, AssetConfig
-from ..embedding import TOKEN_VOCAB
+from ..model.asset_config import DEFAULT_ASSET_CONFIG, AssetConfig
+from ..model.embedding import TOKEN_VOCAB
 from .rows import row_index
-from ..vocab import BOS, DONE
+from ..model.vocab import BOS, DONE
 from .display import token_word
 
 

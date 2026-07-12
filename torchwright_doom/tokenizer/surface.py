@@ -42,10 +42,10 @@ from __future__ import annotations
 from typing import Iterable, Mapping, Sequence
 
 from . import display
-from ..marker_ranges import ANGLE_MARKERS, MARKER_RANGE
-from ..tokens import Token, TokenType
-from ..value_ranges import ValueRange, decode_float, encode_float
-from ..vocab import ANGLE_BAM, ANGLE_VALUE, VALUE, VOCAB_TYPES
+from ..model.marker_ranges import ANGLE_MARKERS, MARKER_RANGE
+from ..model.tokens import Token, TokenType
+from ..model.value_ranges import ValueRange, decode_float, encode_float
+from ..model.vocab import ANGLE_BAM, ANGLE_VALUE, VALUE, VOCAB_TYPES
 
 TokenLike = Token | tuple[TokenType, Mapping[str, int | float]]
 

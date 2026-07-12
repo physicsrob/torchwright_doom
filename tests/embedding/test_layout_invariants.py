@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import pytest
 
-from torchwright_doom.constants import COLUMN_COUNT
-from torchwright_doom.embedding import TOKEN_VOCAB, Layout, VocabLayoutError
-from torchwright_doom.tokens import Derived, IntSlot, TokenType
+from torchwright_doom.model.constants import COLUMN_COUNT
+from torchwright_doom.model.embedding import TOKEN_VOCAB, Layout, VocabLayoutError
+from torchwright_doom.model.tokens import Derived, IntSlot, TokenType
 
 
 def test_width_disagreement_raises() -> None:

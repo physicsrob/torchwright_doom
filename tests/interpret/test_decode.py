@@ -3,13 +3,13 @@ and the low-detail width slot (paint W cells, advance by counting)."""
 
 from __future__ import annotations
 
-from torchwright_doom.asset_banks import PLAYPAL
+from torchwright_doom.model.assets.asset_banks import PLAYPAL
 from torchwright_doom.interpret.decode import (
     decode_rows_to_pixels,
     pixel_color_index,
 )
 from torchwright_doom.tokenizer.rows import row_index
-from torchwright_doom.vocab import (
+from torchwright_doom.model.vocab import (
     PIXEL,
     SET_CURSOR_DIRECTION_X,
     SET_CURSOR_DIRECTION_Y,

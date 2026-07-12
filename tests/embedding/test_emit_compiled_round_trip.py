@@ -25,14 +25,14 @@ from torchwright.debug.probe import build_prefill_from_input_values
 from torchwright.graph import fresh_graph_session
 from torchwright.ops.inout_nodes import create_input
 
-from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
-from torchwright_doom.emit import (
+from torchwright_doom.model.embedding import TOKEN_VOCAB, W_EMBED
+from torchwright_doom.model.emit import (
     emit_float_slot_token,
     emit_int_slot_token,
     emit_slotless,
 )
-from torchwright_doom.tokens import FloatSlot
-from torchwright_doom.vocab import (
+from torchwright_doom.model.tokens import FloatSlot
+from torchwright_doom.model.vocab import (
     BEGIN,
     NODE,
     DRAWSEG_META,

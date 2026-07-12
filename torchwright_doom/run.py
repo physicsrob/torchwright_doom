@@ -74,7 +74,7 @@ def run_config(
     from .prompt.scene import load_render_scene, pose_from_world, prefill_rows_for
     from .tokenizer.codec import raw_text_from_rows, rows_from_raw_text
     from .tokenizer.rows import row_index
-    from .vocab import DONE
+    from .model.vocab import DONE
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

@@ -22,10 +22,10 @@ from torchwright.debug.probe import reference_eval
 from torchwright.graph.spherical_codes import index_to_vector
 from torchwright.ops.inout_nodes import create_input
 
-from torchwright_doom import extract
-from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
-from torchwright_doom.tokens import FloatSlot, IntSlot
-from torchwright_doom.vocab import (
+from torchwright_doom.model import extract
+from torchwright_doom.model.embedding import TOKEN_VOCAB, W_EMBED
+from torchwright_doom.model.tokens import FloatSlot, IntSlot
+from torchwright_doom.model.vocab import (
     ANGLE_BAM,
     ANGLE_VALUE,
     BEGIN,

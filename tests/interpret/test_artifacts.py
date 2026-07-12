@@ -6,7 +6,7 @@ import json
 
 from torchwright_doom.interpret import artifacts
 from torchwright_doom.tokenizer.rows import row_index
-from torchwright_doom.vocab import BEGIN, PIXEL, SET_CURSOR_DIRECTION_Y
+from torchwright_doom.model.vocab import BEGIN, PIXEL, SET_CURSOR_DIRECTION_Y
 
 
 def test_build_and_write_token_dump(tmp_path):

@@ -24,7 +24,7 @@ import torch
 from torchwright.debug.probe import reference_eval
 from torchwright.ops.inout_nodes import create_input
 
-from torchwright_doom.render_ops import (
+from torchwright_doom.model.render_ops import (
     signed_world_angle,
     wrap_signed_angle,
 )

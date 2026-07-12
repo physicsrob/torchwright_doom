@@ -12,8 +12,8 @@ import torch
 
 from torchwright.ops.inout_nodes import create_input, create_rope_config
 
-from torchwright_doom import render_ops, std
-from torchwright_doom.attention_handles import (
+from torchwright_doom.model import render_ops, std
+from torchwright_doom.model.attention_handles import (
     KeyMarkerHandle,
     KeyPresenceLookup,
     KeyValueHandle,
@@ -23,8 +23,8 @@ from torchwright_doom.attention_handles import (
     OptionalKeyValueLookup,
     lifted_id_query,
 )
-from torchwright_doom.embedding import TOKEN_VOCAB
-from torchwright_doom.past import GraphPast
+from torchwright_doom.model.embedding import TOKEN_VOCAB
+from torchwright_doom.model.past import GraphPast
 
 _D_EMBED = TOKEN_VOCAB.layout.d_embed
 

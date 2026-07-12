@@ -21,9 +21,9 @@ import pytest
 
 from torchwright.graph.spherical_codes import index_to_vector
 
-from torchwright_doom import extract
-from torchwright_doom.embedding import TOKEN_VOCAB
-from torchwright_doom.vocab import NODE
+from torchwright_doom.model import extract
+from torchwright_doom.model.embedding import TOKEN_VOCAB
+from torchwright_doom.model.vocab import NODE
 
 # ---------------------------------------------------------------------------
 # is_type threshold margin — the load-bearing E8 sanity check.
@@ -90,7 +90,7 @@ def test_flat_namespace_disagreement_raises(monkeypatch) -> None:
     the layout's type list looking for declaring types and validates
     (lo, hi) — that's the path the test stresses.
     """
-    from torchwright_doom.tokens import IntSlot, TokenType
+    from torchwright_doom.model.tokens import IntSlot, TokenType
 
     fake_a = TokenType("fake_a", slots={"shared": IntSlot(0, 4)})
     fake_b = TokenType("fake_b", slots={"shared": IntSlot(0, 8)})

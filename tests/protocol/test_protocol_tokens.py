@@ -7,10 +7,13 @@ import torch
 
 from torchwright.ops.inout_nodes import create_input
 
-from torchwright_doom.embedding import TOKEN_VOCAB
-from torchwright_doom.extract import type_code
-from torchwright_doom.protocol_tokens import ProtocolTokenView, screen_column_one_hot
-from torchwright_doom.vocab import (
+from torchwright_doom.model.embedding import TOKEN_VOCAB
+from torchwright_doom.model.extract import type_code
+from torchwright_doom.model.protocol.protocol_tokens import (
+    ProtocolTokenView,
+    screen_column_one_hot,
+)
+from torchwright_doom.model.vocab import (
     DRAWSEG_SCALE1,
     DRAWSEG_SCALE2,
     DONE,

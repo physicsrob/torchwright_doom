@@ -18,10 +18,10 @@ import torch
 from torchwright.debug.probe import reference_eval
 from torchwright.ops.inout_nodes import create_input
 
-from torchwright_doom import value_ranges as vr
-from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
-from torchwright_doom.tokens import FloatSlot
-from torchwright_doom.vocab import VALUE
+from torchwright_doom.model import value_ranges as vr
+from torchwright_doom.model.embedding import TOKEN_VOCAB, W_EMBED
+from torchwright_doom.model.tokens import FloatSlot
+from torchwright_doom.model.vocab import VALUE
 
 
 def _value_slot() -> FloatSlot:

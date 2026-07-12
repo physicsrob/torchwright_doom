@@ -6,10 +6,10 @@ import hashlib
 import json
 from typing import Any
 
-from ..constants import COLUMN_COUNT, PIXEL_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH
-from ..embedding import TOKEN_VOCAB
-from ..tokens import FloatSlot, IntSlot
-from ..vocab import VOCAB_TYPES
+from ..model.constants import COLUMN_COUNT, PIXEL_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH
+from ..model.embedding import TOKEN_VOCAB
+from ..model.tokens import FloatSlot, IntSlot
+from ..model.vocab import VOCAB_TYPES
 
 
 def screen_config() -> dict[str, int]:

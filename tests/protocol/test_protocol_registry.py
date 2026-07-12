@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from torchwright_doom import protocol_registry as reg
-from torchwright_doom.protocol_tokens import ProtocolTokenView
-from torchwright_doom.vocab import SEG_LIGHT_STATIC, VOCAB_TYPES
+from torchwright_doom.model.protocol import protocol_registry as reg
+from torchwright_doom.model.protocol.protocol_tokens import ProtocolTokenView
+from torchwright_doom.model.vocab import SEG_LIGHT_STATIC, VOCAB_TYPES
 
 
 def test_registry_covers_vocab_exactly_once() -> None:

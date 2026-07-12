@@ -33,13 +33,13 @@ import torch
 from torchwright.debug.probe import reference_eval
 from torchwright.ops.inout_nodes import create_input, create_rope_config
 
-from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
-from torchwright_doom.graph_debug import silenced_graph_asserts
+from torchwright_doom.model.embedding import TOKEN_VOCAB, W_EMBED
+from torchwright_doom.diagnostics.graph_debug import silenced_graph_asserts
 from torchwright_doom.tokenizer.rows import carrier_delta as _carrier_delta
-from torchwright_doom.past import GraphPast
-from torchwright_doom.render_main import forward
+from torchwright_doom.model.past import GraphPast
+from torchwright_doom.model.render_main import forward
 from torchwright_doom.tokenizer.rows import row_index, tokens_to_input
-from torchwright_doom.vocab import PIXEL
+from torchwright_doom.model.vocab import PIXEL
 
 _CARRIERS = {"value", "angleValue"}
 _ANGLE_BAM_TOL = 2
@@ -113,7 +113,7 @@ def _decode_pixel_xy(full) -> dict[int, tuple[int, int]]:
 
 @pytest.fixture(scope="module")
 def flat_pixel_eval():
-    import torchwright_doom.asset_banks as asset_banks
+    import torchwright_doom.model.assets.asset_banks as asset_banks
     import torchwright_doom.pydoom as pydoom
     from torchwright_doom.config import load_render_config
     from torchwright_doom.interpret.reference import pydoom_scene_for

@@ -33,13 +33,13 @@ from torchwright.graph import Concatenate
 from torchwright.debug.probe import reference_eval
 from torchwright.ops.inout_nodes import create_input, create_rope_config
 
-from torchwright_doom import std
-from torchwright_doom.embedding import TOKEN_VOCAB
-from torchwright_doom.past import GraphPast
+from torchwright_doom.model import std
+from torchwright_doom.model.embedding import TOKEN_VOCAB
+from torchwright_doom.model.past import GraphPast
 from torchwright_doom.prompt.build import _player_angle_signed, build_prompt
 from torchwright_doom.prompt.geometry import bake_segments
 from torchwright_doom.prompt.scenes import E1M1_START_ROOM, load
-from torchwright_doom.scene_index import SceneIndex
+from torchwright_doom.model.scene.scene_index import SceneIndex
 
 from ..prefill_fixture import tokens_to_input
 

@@ -20,16 +20,16 @@ from torchwright.graph import Node
 from torchwright.graph.attn import Attn
 from torchwright.ops.inout_nodes import create_input, create_rope_config
 
-from torchwright_doom.constants import SCREEN_WIDTH
-from torchwright_doom.past import GraphPast, PastHandleScope
-from torchwright_doom.solid_intervals import _interval_key
-from torchwright_doom.solid_intervals import (
+from torchwright_doom.model.constants import SCREEN_WIDTH
+from torchwright_doom.model.past import GraphPast, PastHandleScope
+from torchwright_doom.model.traversal.solid_intervals import _interval_key
+from torchwright_doom.model.traversal.solid_intervals import (
     _N_BUCKETS,
     _RADIX_BASE,
     _publish_successor_fields,
     SolidIntervals,
 )
-from torchwright_doom.std import concat
+from torchwright_doom.model.std import concat
 
 
 def brute_next_start_after(starts, column: int, width: int) -> int:

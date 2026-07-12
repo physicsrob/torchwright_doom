@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .asset_config import (
+from .model.asset_config import (
     FLAT_NAMES,
     N_FLATS,
     N_WALL_TEXTURES,

@@ -34,12 +34,12 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, replace
 
-from ..tokens import Token
+from ..model.tokens import Token
 from ._bsp import decode_child, make_plane, side_P
 from ..prompt.geometry import bake_segments
 from ._scene import GameState, Scene
 from . import renderer as ref
-from ..protocol_tokens import (
+from ..model.protocol.protocol_tokens import (
     ADVANCE_SEG,
     BBOX_BOXPOS,
     BBOX_CORNER_X_MARK_A,
@@ -97,7 +97,7 @@ from ..protocol_tokens import (
     WORLD_ANGLE_MARK_A,
     WORLD_ANGLE_MARK_B,
 )
-from ..vocab import (
+from ..model.vocab import (
     ANGLE_BAM,
     ANGLE_VALUE,
     COLUMN_COUNT,
@@ -115,15 +115,15 @@ from ..vocab import (
     SET_CURSOR_DIRECTION_Y,
     _K_PART_TABLES,
 )
-from ..asset_banks import (
+from ..model.assets.asset_banks import (
     configured_hud_bake,
     configured_hud_draw_list,
     configured_weapon_bake,
 )
-from ..hud_assets import HUD_TRANSPARENT
-from ..weapon_assets import WEAPON_TRANSPARENT
-from ..marker_ranges import MARKER_RANGE
-from ..value_ranges import (
+from ..model.assets.hud_assets import HUD_TRANSPARENT
+from ..model.assets.weapon_assets import WEAPON_TRANSPARENT
+from ..model.marker_ranges import MARKER_RANGE
+from ..model.value_ranges import (
     ValueRange,
     decode_float,
     encode_float,

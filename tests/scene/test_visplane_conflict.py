@@ -27,15 +27,15 @@ import torch
 from torchwright.debug.probe import probe_graph, reference_eval
 from torchwright.ops.inout_nodes import create_input, create_rope_config
 
-from torchwright_doom.past import GraphPast
-from torchwright_doom.std import concat, constant, linear, one_hot
-from torchwright_doom.visplane_state import (
+from torchwright_doom.model.past import GraphPast
+from torchwright_doom.model.std import concat, constant, linear, one_hot
+from torchwright_doom.model.raster.visplane_state import (
     RuntimeVisplaneState,
     UsedPlaneSuccessor,
     _INSTANCE_IDX_LINEAR,
     _publish_occupancy_radix,
 )
-from torchwright_doom.vocab import N_VISPLANE_MAX
+from torchwright_doom.model.vocab import N_VISPLANE_MAX
 
 
 def _build_graph(plane_id, candidate_vp, x1, x2, occ_cols):

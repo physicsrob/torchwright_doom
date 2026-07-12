@@ -17,8 +17,8 @@ import io
 import tokenize
 from pathlib import Path
 
-import torchwright_doom.value_ranges as value_ranges
-import torchwright_doom.vocab as vocab
+import torchwright_doom.model.value_ranges as value_ranges
+import torchwright_doom.model.vocab as vocab
 
 
 def _bare_screen_literals(path: str) -> list[tuple[int, str]]:

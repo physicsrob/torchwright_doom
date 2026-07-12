@@ -15,9 +15,9 @@ in X after a ``setCursorDirectionX``.
 
 from __future__ import annotations
 
-from ..asset_banks import PLAYPAL
-from ..embedding import TOKEN_VOCAB
-from ..vocab import PIXEL
+from ..model.assets.asset_banks import PLAYPAL
+from ..model.embedding import TOKEN_VOCAB
+from ..model.vocab import PIXEL
 
 _PIXEL_START, _ = TOKEN_VOCAB.type_to_row_range[PIXEL]
 _PIXEL_NAME = PIXEL.name

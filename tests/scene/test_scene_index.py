@@ -15,12 +15,12 @@ import pytest
 
 from torchwright.ops.inout_nodes import create_input, create_rope_config
 
-from torchwright_doom import std
-from torchwright_doom.embedding import TOKEN_VOCAB
-from torchwright_doom.past import GraphPast
-from torchwright_doom.scene_index import SceneIndex
-from torchwright_doom.value_ranges import ValueRange
-from torchwright_doom.vocab import (
+from torchwright_doom.model import std
+from torchwright_doom.model.embedding import TOKEN_VOCAB
+from torchwright_doom.model.past import GraphPast
+from torchwright_doom.model.scene.scene_index import SceneIndex
+from torchwright_doom.model.value_ranges import ValueRange
+from torchwright_doom.model.vocab import (
     ANGLE_VALUE,
     BEGIN,
     BOS,
@@ -94,7 +94,7 @@ def test_player_view_pose() -> None:
 
 def test_player_view_ray_widths() -> None:
     scene, _n, _inputs = _scene_and_inputs()
-    from torchwright_doom.constants import SCREEN_WIDTH
+    from torchwright_doom.model.constants import SCREEN_WIDTH
 
     assert len(scene.view.ray_x_by_screen) == SCREEN_WIDTH
     assert len(scene.view.ray_y_by_screen) == SCREEN_WIDTH

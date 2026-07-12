@@ -20,15 +20,15 @@ from torchwright.debug.probe import reference_eval
 from torchwright.graph import fresh_graph_session
 from torchwright.ops.inout_nodes import create_input
 
-from torchwright_doom.embedding import BASE, CENTER, TOKEN_VOCAB, W_EMBED
-from torchwright_doom.emit import (
+from torchwright_doom.model.embedding import BASE, CENTER, TOKEN_VOCAB, W_EMBED
+from torchwright_doom.model.emit import (
     emit_float_slot_token,
     emit_int_slot_token,
     emit_slotless,
     emit_token,
 )
-from torchwright_doom.tokens import FloatSlot
-from torchwright_doom.vocab import (
+from torchwright_doom.model.tokens import FloatSlot
+from torchwright_doom.model.vocab import (
     BEGIN,
     DONE,
     NO_OP,
@@ -298,7 +298,7 @@ def test_two_digit_boundary_sliver_snaps_to_one_step() -> None:
     the byte split consistent (lo compensates whichever side the snap
     lands), so a fractional hi cannot leak ×BASE into the low byte (the
     unsnapped failure mode: a 192-row emitted error)."""
-    from torchwright_doom.emit import _DQ_HI_SHARPNESS
+    from torchwright_doom.model.emit import _DQ_HI_SHARPNESS
     from torchwright_doom.tokenizer.rows import carrier_delta
     from torchwright_doom.tokenizer.rows import row_index
 

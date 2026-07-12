@@ -13,9 +13,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .asset_banks import build_asset_banks
-from .asset_config import DEFAULT_ASSET_CONFIG, AssetConfig
-from .assets import AssetIndex
+from .model.assets.asset_banks import build_asset_banks
+from .model.asset_config import DEFAULT_ASSET_CONFIG, AssetConfig
+from .model.assets.assets import AssetIndex
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from torchwright.graph.node import Node
@@ -44,9 +44,9 @@ def build_graph(
     """
     from torchwright.ops.inout_nodes import create_rope_config
 
-    from .embedding import build_doom_embedding
-    from .past import GraphPast
-    from .render_main import forward
+    from .model.embedding import build_doom_embedding
+    from .model.past import GraphPast
+    from .model.render_main import forward
 
     asset_config = asset_config or DEFAULT_ASSET_CONFIG
     asset_banks = build_asset_banks(

@@ -1,7 +1,7 @@
 """BBOX derived columns + the ``_CHECKCOORD`` table — anchored to DOOM's source.
 
 Pinned against the in-tree
-protocol tokens. ``torchwright_doom.vocab`` carries its own hand-transcribed
+protocol tokens. ``torchwright_doom.model.vocab`` carries its own hand-transcribed
 ``_CHECKCOORD`` table (DOOM's ``R_CheckBBox`` corner-selection table); after the
 renderer/drafter were vendored, nothing else pins it. This anchors that table —
 and the per-corner derived columns built from it — against DOOM's ground truth.
@@ -9,8 +9,8 @@ and the per-corner derived columns built from it — against DOOM's ground truth
 
 from __future__ import annotations
 
-from torchwright_doom.constants import SCREEN_WIDTH
-from torchwright_doom.protocol_tokens import (
+from torchwright_doom.model.constants import SCREEN_WIDTH
+from torchwright_doom.model.protocol.protocol_tokens import (
     BBOX_BOXPOS,
     BBOX_CORNER_X_MARK_A,
     BBOX_CORNER_X_MARK_B,
@@ -19,7 +19,7 @@ from torchwright_doom.protocol_tokens import (
     BBOX_SCAN,
     FIND_RUN,
 )
-from torchwright_doom.vocab import _CHECKCOORD as NATIVE_CHECKCOORD
+from torchwright_doom.model.vocab import _CHECKCOORD as NATIVE_CHECKCOORD
 
 # DOOM's R_CheckBBox corner table (r_bsp.c): per boxpos, the (x_a, y_a, x_b, y_b)
 # BOXTOP/BOXBOTTOM/BOXLEFT/BOXRIGHT corner indices. Ground truth, hand-copied.

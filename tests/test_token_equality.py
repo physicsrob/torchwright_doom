@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from torchwright_doom.tokens import FloatSlot, IntSlot, TokenType
+from torchwright_doom.model.tokens import FloatSlot, IntSlot, TokenType
 
 
 def test_same_name_compares_equal_and_hashes_equal() -> None:

@@ -6,7 +6,7 @@ from collections import Counter
 
 from torchwright_doom.prompt.build import build_prompt
 from torchwright_doom.prompt.scenes import E1M1_START_ROOM, load
-from torchwright_doom.vocab import (
+from torchwright_doom.model.vocab import (
     BEGIN,
     BOS,
     NODE,

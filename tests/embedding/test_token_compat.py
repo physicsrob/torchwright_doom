@@ -18,10 +18,10 @@ import torch
 from torchwright.debug.probe import reference_eval
 from torchwright.ops.inout_nodes import create_input
 
-from torchwright_doom import extract
-from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
-from torchwright_doom.tokens import IntSlot, TokenType
-from torchwright_doom.vocab import DONE, NODE, SEG, VALUE
+from torchwright_doom.model import extract
+from torchwright_doom.model.embedding import TOKEN_VOCAB, W_EMBED
+from torchwright_doom.model.tokens import IntSlot, TokenType
+from torchwright_doom.model.vocab import DONE, NODE, SEG, VALUE
 
 
 def _row_for(

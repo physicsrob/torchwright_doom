@@ -5,13 +5,13 @@ import json
 import sys
 from pathlib import Path
 
-from torchwright_doom.asset_banks import PLAYPAL
+from torchwright_doom.model.assets.asset_banks import PLAYPAL
 from torchwright_doom.interpret.formatter import DoomFormatter
 from torchwright_doom.tokenizer.rows import row_index
 from torchwright_doom.tokenizer.freeze import write_frozen_data
 from torchwright_doom.tokenizer.identity import screen_config, vocab_fingerprint
 from torchwright_doom.tokenizer.standard import canonical_words, ordered_words_sha256
-from torchwright_doom.vocab import PLAYER_X_MARK, VALUE
+from torchwright_doom.model.vocab import PLAYER_X_MARK, VALUE
 
 
 def _sha(path: Path) -> str:

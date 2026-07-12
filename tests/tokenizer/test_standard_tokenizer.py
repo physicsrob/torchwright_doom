@@ -7,14 +7,14 @@ pytest.importorskip("tokenizers")
 
 from transformers import AutoTokenizer
 
-from torchwright_doom.embedding import TOKEN_VOCAB
+from torchwright_doom.model.embedding import TOKEN_VOCAB
 from torchwright_doom.tokenizer.rows import row_index
 from torchwright_doom.tokenizer import display
 from torchwright_doom.tokenizer.standard import (
     build_standard_tokenizer,
     canonical_words,
 )
-from torchwright_doom.vocab import BOS, DONE
+from torchwright_doom.model.vocab import BOS, DONE
 
 
 def test_token_word_is_compact_label_from_same_fields() -> None:

@@ -284,7 +284,7 @@ def compile_phi3_bundle(
     wad_path = Path(wad_path)
     validate_compile_payload(compile_payload, config, wad_path)
 
-    from ..constants import SCREEN_HEIGHT, SCREEN_WIDTH
+    from ..model.constants import SCREEN_HEIGHT, SCREEN_WIDTH
 
     if (SCREEN_WIDTH, SCREEN_HEIGHT) != config.screen:
         raise RuntimeError(

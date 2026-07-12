@@ -25,10 +25,10 @@ from torchwright.debug.probe import probe_graph, reference_eval
 from torchwright.graph import fresh_graph_session
 from torchwright.ops.inout_nodes import create_input
 
-from torchwright_doom.embedding import W_EMBED
-from torchwright_doom.emit import emit_token
-from torchwright_doom.tokens import FloatSlot
-from torchwright_doom.vocab import VALUE
+from torchwright_doom.model.embedding import W_EMBED
+from torchwright_doom.model.emit import emit_token
+from torchwright_doom.model.tokens import FloatSlot
+from torchwright_doom.model.vocab import VALUE
 
 
 def _slot() -> FloatSlot:

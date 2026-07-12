@@ -23,7 +23,7 @@ from typing import cast
 import numpy as np
 import torch
 
-from torchwright_doom.embedding import (
+from torchwright_doom.model.embedding import (
     D_CATEGORY,
     DEFAULT_MAX_CARDINALITY,
     TOKEN_VOCAB,
@@ -32,8 +32,8 @@ from torchwright_doom.embedding import (
     digit_quad_query_columns_for,
     digit_quad_row,
 )
-from torchwright_doom.tokens import Derived, FloatSlot, IntSlot, TokenType
-from torchwright_doom.vocab import (
+from torchwright_doom.model.tokens import Derived, FloatSlot, IntSlot, TokenType
+from torchwright_doom.model.vocab import (
     ANGLE_VALUE,
     COLUMN_COUNT,
     EMIT_X2,

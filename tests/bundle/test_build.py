@@ -218,14 +218,14 @@ def test_direct_builder_passes_exact_graph_embedding_and_phi3_contract(
 ) -> None:
     import torchwright.compiler
 
-    from torchwright_doom import constants
-    from torchwright_doom import embedding as embedding_mod
-    from torchwright_doom.asset_banks import PLAYPAL
+    from torchwright_doom.model import constants
+    from torchwright_doom.model import embedding as embedding_mod
+    from torchwright_doom.model.assets.asset_banks import PLAYPAL
     from torchwright_doom import model_graph
     from torchwright_doom.bundle import build as bundle_build
     from torchwright_doom.prompt import scene as prompt_scene
     from torchwright_doom.tokenizer.rows import row_index
-    from torchwright_doom.vocab import BOS, DONE
+    from torchwright_doom.model.vocab import BOS, DONE
 
     config = RenderConfig()
     monkeypatch.setattr(constants, "SCREEN_WIDTH", config.screen[0])

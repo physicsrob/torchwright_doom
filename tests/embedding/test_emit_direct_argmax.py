@@ -19,7 +19,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from torchwright_doom.embedding import (
+from torchwright_doom.model.embedding import (
     BASE,
     CENTER,
     D_CATEGORY,
