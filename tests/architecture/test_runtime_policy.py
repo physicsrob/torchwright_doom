@@ -52,7 +52,7 @@ PORTABLE_SOURCES = (
 # exempt by scope).
 PORTABLE_IMPORTERS = (
     "torchwright_doom/interpret/formatter.py",
-    "torchwright_doom/inference/hf_bundle.py",
+    "torchwright_doom/bundle/build.py",
 )
 
 # Package files allowed to import onnx / onnxruntime (diagnostic-only;

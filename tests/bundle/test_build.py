@@ -8,8 +8,8 @@ from typing import Any
 
 import pytest
 
-from torchwright_doom.inference.hf_bundle import (
-    _outer_bundle_transaction,
+from torchwright_doom.bundle.build import _outer_bundle_transaction
+from torchwright_doom.bundle.manifest import (
     compile_payload_sha256,
     is_complete_hf_bundle,
     validate_bundle_manifest,
@@ -209,7 +209,7 @@ def test_direct_builder_passes_exact_graph_embedding_and_phi3_contract(
     from torchwright_doom import embedding as embedding_mod
     from torchwright_doom.asset_banks import PLAYPAL
     from torchwright_doom import model_graph
-    from torchwright_doom.inference import hf_bundle
+    from torchwright_doom.bundle import build as bundle_build
     from torchwright_doom.prompt import scene as prompt_scene
     from torchwright_doom.tokenizer.rows import row_index
     from torchwright_doom.vocab import BOS, DONE
@@ -245,7 +245,7 @@ def test_direct_builder_passes_exact_graph_embedding_and_phi3_contract(
         prompt_scene, "prefill_rows_for", lambda scene, pose: prompt_rows
     )
     monkeypatch.setattr(
-        hf_bundle, "_validate_complete_staged_bundle", lambda *args: None
+        bundle_build, "_validate_complete_staged_bundle", lambda *args: None
     )
 
     captured: dict[str, Any] = {}
@@ -268,7 +268,7 @@ def test_direct_builder_passes_exact_graph_embedding_and_phi3_contract(
 
     monkeypatch.setattr(torchwright.compiler, "compile_hf_bundle", fake_compile)
     destination = tmp_path / "published"
-    report = hf_bundle.compile_phi3_bundle(
+    report = bundle_build.compile_phi3_bundle(
         config,
         wad_path=wad,
         destination=destination,

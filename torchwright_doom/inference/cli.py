@@ -22,7 +22,7 @@ from ..config import (
     resolve_run_args,
     resolve_wad_path,
 )
-from ..identity import canonical_compile_payload, hf_bundle_cache_dir
+from ..identity import hf_bundle_cache_dir
 
 
 def compile_config(
@@ -32,38 +32,15 @@ def compile_config(
     cache_dir: str | Path | None = None,
     compile_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    config_path = Path(config_path)
-    config = load_render_config(config_path)
-    apply_screen_env(config)
-    from .hf_bundle import compile_phi3_bundle, is_complete_hf_bundle
+    """Publication moved to bundle.build; lazy dispatch."""
+    from ..bundle.build import compile_config as build_compile_config
 
-    wad_path = resolve_wad_path(config, base_dir=config_path.parent)
-    payload = compile_payload or canonical_compile_payload(config, wad_path)
-    destination = (
-        Path(cache_dir)
-        if cache_dir is not None
-        else hf_bundle_cache_dir(config, wad_path)
+    return build_compile_config(
+        config_path=config_path,
+        verbose_compile=verbose_compile,
+        cache_dir=cache_dir,
+        compile_payload=compile_payload,
     )
-    if is_complete_hf_bundle(destination, expected_payload=payload):
-        print(f"[compile] direct-HF cache hit {destination}", flush=True)
-        return {"cache_dir": str(destination), "cache_hit": True}
-    print(f"[compile] direct-HF cache miss {destination}", flush=True)
-    report = compile_phi3_bundle(
-        config,
-        wad_path=wad_path,
-        destination=destination,
-        compile_payload=payload,
-        verbose=verbose_compile,
-    )
-    provenance = report.manifest["schedule"]
-    print(
-        f"[compile] {report.n_layers} layers "
-        f"(selected={provenance.get('selected_origin')}, "
-        f"delivery={provenance.get('delivery')}, "
-        f"objective={provenance.get('selected_objective')}) -> {destination}",
-        flush=True,
-    )
-    return {**report.to_dict(), "cache_dir": str(destination), "cache_hit": False}
 
 
 def compile_onnx_debug_config(
@@ -106,6 +83,7 @@ def run_config(
     x, y, angle, viewz = args.x, args.y, args.angle, args.viewz
     max_new_tokens = args.max_new_tokens
 
+    from ..bundle.manifest import validate_bundle_manifest
     from ..interpret import artifacts, compare as compare_mod
     from ..interpret.decode import decode_rows_to_pixels
     from ..interpret.reference import pydoom_scene_for
@@ -113,7 +91,6 @@ def run_config(
     from ..tokenizer.codec import raw_text_from_rows, rows_from_raw_text
     from ..tokenizer.rows import row_index
     from ..vocab import DONE
-    from .hf_bundle import validate_bundle_manifest
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

@@ -176,7 +176,7 @@ def compile_remote(
         SCHEDULE_VOLUME.reload()
         cache_dir = f"/root/.cache/torchwright_doom/hf_phi3/{cache_subdir}"
 
-    from torchwright_doom.inference.cli import compile_config
+    from torchwright_doom.bundle.build import compile_config
 
     result = compile_config(
         config_path=config_path,

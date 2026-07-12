@@ -1,9 +1,11 @@
-"""Direct stock-Phi-3 Doom bundle construction and staged publication.
+"""Publication: compile_config orchestration, compile, staged publication.
 
-Manifest schema, hashing, and completeness validation live in
-``bundle.manifest``; this module owns the compile + staging transaction +
-stamping + staged validation + rollback-protected publication (it becomes
-``bundle/build.py`` at the end of the cleanup).
+Manifest schema, hashing, and completeness validation live in ``manifest``;
+the copied bundle layout in ``layout``. This module owns ``compile_config``
+(cache probe + Modal-handed payloads), the stock Phi-3 compilation via
+``model_graph.build_graph`` and torchwright, model-config stamping, staged
+model/tokenizer smoke validation (through the shipped portable kernel), and
+the rollback-protected two-rename publication.
 """
 
 from __future__ import annotations
@@ -17,15 +19,66 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
-from ..bundle.manifest import (  # noqa: F401  (validation re-exported for callers)
+from ..config import (
+    RenderConfig,
+    apply_screen_env,
+    load_render_config,
+    resolve_wad_path,
+)
+from ..identity import (
+    canonical_compile_payload,
+    hf_bundle_cache_dir,
+    validate_compile_payload,
+)
+from .manifest import (
     MANIFEST_NAME,
     candidate_manifest,
-    compile_payload_sha256,
     is_complete_hf_bundle,
     validate_bundle_manifest,
 )
-from ..config import RenderConfig
-from ..identity import validate_compile_payload
+
+
+def compile_config(
+    *,
+    config_path: str | Path,
+    verbose_compile: bool = False,
+    cache_dir: str | Path | None = None,
+    compile_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compile ``config_path`` into a complete published bundle on a cache
+    miss. ``cache_dir`` / ``compile_payload`` exist for the Modal path: the
+    key embeds git SHAs unresolvable inside a container, so the local
+    entrypoint computes both and hands them over."""
+    config_path = Path(config_path)
+    config = load_render_config(config_path)
+    apply_screen_env(config)
+    wad_path = resolve_wad_path(config, base_dir=config_path.parent)
+    payload = compile_payload or canonical_compile_payload(config, wad_path)
+    destination = (
+        Path(cache_dir)
+        if cache_dir is not None
+        else hf_bundle_cache_dir(config, wad_path)
+    )
+    if is_complete_hf_bundle(destination, expected_payload=payload):
+        print(f"[compile] direct-HF cache hit {destination}", flush=True)
+        return {"cache_dir": str(destination), "cache_hit": True}
+    print(f"[compile] direct-HF cache miss {destination}", flush=True)
+    report = compile_phi3_bundle(
+        config,
+        wad_path=wad_path,
+        destination=destination,
+        compile_payload=payload,
+        verbose=verbose_compile,
+    )
+    provenance = report.manifest["schedule"]
+    print(
+        f"[compile] {report.n_layers} layers "
+        f"(selected={provenance.get('selected_origin')}, "
+        f"delivery={provenance.get('delivery')}, "
+        f"objective={provenance.get('selected_objective')}) -> {destination}",
+        flush=True,
+    )
+    return {**report.to_dict(), "cache_dir": str(destination), "cache_hit": False}
 
 
 @dataclass(frozen=True)
@@ -242,7 +295,7 @@ def compile_phi3_bundle(
 
     from torchwright.compiler import CompileProfile, compile_hf_bundle
 
-    from ..bundle.layout import write_bundle_layout, write_model_card
+    from .layout import write_bundle_layout, write_model_card
     from ..model_graph import build_graph
     from ..prompt.scene import load_render_scene, pose_from_world, prefill_rows_for
     from ..tokenizer.codec import raw_text_from_rows
