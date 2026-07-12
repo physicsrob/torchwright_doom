@@ -17,7 +17,10 @@ id<->label map at its core; the readability lives in the labels).
 * :mod:`.surface` — retained as the in-package presentation grammar behind
   ``DoomFormatter``; it is not registered as a Hugging Face tokenizer.
 
-Sibling to ``inference/`` and subject to the same import-time-vocab caveat:
-``embedding`` builds the screen-sized vocab AT IMPORT, so configure the screen
-(``apply_screen_env``) before importing modules that reach it.
+Subject to the import-time-vocab caveat: ``embedding`` builds the
+screen-sized vocab AT IMPORT, so configure the screen (``apply_screen_env``)
+before importing modules that reach it (``rows`` in this package; ``display``
+/ ``standard`` / ``freeze`` / ``identity`` reach it too). ``codec`` is the
+deliberate exception — pure functions over a words list, cheap to import
+anywhere.
 """

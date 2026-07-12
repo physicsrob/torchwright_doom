@@ -1,7 +1,7 @@
-"""Freeze tokenizer, formatter, and decoder identity into data-only JSON.
+"""Freeze tokenizer, prettifier, and decoder identity into data-only JSON.
 
 This runs in the full renderer environment and writes the JSON artifacts used
-by the stock tokenizer and standalone post-processing examples:
+by the stock tokenizer and the standalone bundle tools:
 
 * ``doom_vocab.json`` — the **pretty** ``{display_label: id}`` table (WAD texture
   names + decoded enums/bools/BSP-child-ids/bbox-codes baked into the label

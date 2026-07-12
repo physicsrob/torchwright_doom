@@ -38,8 +38,8 @@ geometry, sorting, or arithmetic. (See `CLAUDE.md`.)
 - **Prefill pipeline** (WAD → tokens the model reads before autoregression):
   `doom1.wad` → `prompt/wad.py` (raw `MapData`) → `prompt/subset.py`
   (bbox-sliced, renumbered, mean-centred) → `prompt/build.py` (`list[Token]`)
-  → `inference/tokens_bridge.py` (row indices) → the model. Production entry:
-  `inference/wad_scene.prefill_rows_for`.
+  → `tokenizer/rows.py` (row indices) → the model. Production entry:
+  `prompt/scene.prefill_rows_for`.
 
 ## Docs
 
@@ -55,12 +55,13 @@ geometry, sorting, or arithmetic. (See `CLAUDE.md`.)
 
 ## Running
 
-`make compile` creates the complete validated Phi-3 bundle on Modal. `make run`
-resolves that same bundle and executes its exact `examples/infer.py` on the
-configured GPU; it never compiles, converts, or uses a private generation path
-inside the renderer. `configs/e1m1.yaml` is the sole
-full-resolution publication configuration, while `configs/e1m1_lowres.yaml`
-is retained for preview and validation.
+`make compile` creates the complete validated Phi-3 bundle on Modal
+(publication, `bundle/`). `make run` resolves that same bundle and executes
+its exact bundle-root `infer.py` on the configured GPU (portable inference);
+it never compiles, converts, or uses a private generation path inside the
+renderer. Everything after the subprocess is interpretation (`interpret/`).
+`configs/e1m1.yaml` is the sole full-resolution publication configuration,
+while `configs/e1m1_lowres.yaml` is retained for preview and validation.
 
 The published bundle's claim-bearing load path is ordinary Transformers:
 
@@ -75,9 +76,16 @@ model = AutoModelForCausalLM.from_pretrained(
 )
 ```
 
-The bundle contains its executable E1M1 text prompt and `examples/infer.py`.
-That isolated script is the only inference program used by both downloaded and
-production renders. It writes canonical integer row ids and their raw
-standard-tokenizer text. `examples/pretty_text.py` formats that text for reading, and
-`examples/txt_to_png.py` independently turns the same text into a frame using
-only cursor bookkeeping, palette lookup, and last-write-wins blitting.
+The bundle contains its executable E1M1 text prompt (`examples/e1m1_prompt.txt`)
+and `infer.py` at the bundle root. That isolated script is the only inference
+program used by both downloaded and production renders. It writes canonical
+integer row ids and their raw standard-tokenizer text. `tools/pretty_text.py`
+formats that text for reading, and `tools/txt_to_png.py` independently turns
+the same text into a frame using only cursor bookkeeping, palette lookup, and
+last-write-wins blitting:
+
+```bash
+python infer.py --model . --prompt examples/e1m1_prompt.txt --output out
+python tools/pretty_text.py --input out/output.txt --output out/output.pretty.txt
+python tools/txt_to_png.py  --input out/output.txt --output out/frame.png
+```

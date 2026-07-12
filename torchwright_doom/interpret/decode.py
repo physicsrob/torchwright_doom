@@ -38,7 +38,7 @@ def _walk_pixels(rows):
     (matches the original host decode).  Cursor bookkeeping only — the
     dumb-host contract.
 
-    Shared so the render decode and the teacher-forced diagnostic
+    Shared so the render decode and the per-position variant
     (:func:`decode_xy_by_position`) can never disagree about where a
     pixel landed.
     """
@@ -107,8 +107,8 @@ def decode_xy_by_position(rows) -> dict[int, tuple[int, int]]:
     """Map each ``pixel`` row's stream position -> its ``(x, y)`` screen cursor.
 
     Same cursor walk as :func:`decode_rows_to_pixels` (literally — both
-    consume :func:`_walk_pixels`), keyed by stream position for the
-    teacher-forced diagnostic, which checks the compiled pixel color
-    against the option set at the reference cursor position.
+    consume :func:`_walk_pixels`), keyed by stream position for analyses
+    that check an emitted pixel against the option set at the reference
+    cursor position (the retired teacher-forced diagnostic consumed this).
     """
     return {i: xy for i, _, xy, _ in _walk_pixels(rows)}

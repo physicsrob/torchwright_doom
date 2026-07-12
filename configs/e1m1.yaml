@@ -22,7 +22,11 @@ textures:
   wall: [BROWN1, BROWN144, COMPUTE2, DOOR3, DOORSTOP, LITE3, STARTAN3, STEP6, SUPPORT2]
   flat: [CEIL3_5, FLAT14, FLAT5_5, FLOOR4_8, FLOOR7_1, F_SKY1]
 # Render-job runtime defaults — THE single source (CLI flags override
-# field-by-field).  Runtime knobs only: none enter the compile-cache key.
+# field-by-field, render-only, and never mutate the published bundle).
+# pose and max_new_tokens are content-bearing: they define the bundled
+# executable prompt and default generation bound, so they deliberately
+# enter the compile-cache key (identity.compile_payload_domain, "bundle"
+# section). Changing them recompiles/republishes the bundle.
 run:
   # Covers the full 320x200 low-detail frame (~53,748 tokens) with headroom;
   # the cap sizes the RoPE global-position recovery range (the BOS-weight PWL

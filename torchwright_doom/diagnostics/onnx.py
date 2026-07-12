@@ -262,7 +262,9 @@ def _write_render_meta(
     ]
     payload = {
         **existing,
-        "render_meta_format": "torchwright_doom.inference.v1",
+        # Informational format tag; nothing parses it. The historical value
+        # was "torchwright_doom.inference.v1" (pre-cleanup module layout).
+        "render_meta_format": "torchwright_doom.onnx_debug_meta.v1",
         # Prefer the handed-over payload: computed remotely it would carry
         # "unknown" git SHAs (see compile_onnx_debug_cached docstring).
         "compile_payload": (

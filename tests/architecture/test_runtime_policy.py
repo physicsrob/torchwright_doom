@@ -70,8 +70,8 @@ CLI_PATH: str | None = "torchwright_doom/cli.py"
 # (root infer.py + tools/) — afterwards no legacy layout name may remain.
 NEW_BUNDLE_LAYOUT = True
 
-# Flips True when torchwright_doom/inference/ is deleted (Workstream 11).
-OLD_PACKAGE_REMOVED = False
+# True since torchwright_doom/inference/ was deleted (Workstream 11).
+OLD_PACKAGE_REMOVED = True
 
 _STDLIB = set(sys.stdlib_module_names) | {"__future__"}
 

@@ -91,11 +91,20 @@ Rough layout of `torchwright_doom/`:
   (light levels and colormaps).
 - **Graph infrastructure** — `past` / `attention_handles` (reading
   previously-emitted tokens) and `std` (the helper-op shim).
-- **Runtime** — `inference/` (direct stock-Phi-3 bundle compilation in
-  `hf_bundle`, production orchestration around the bundle's isolated
-  `examples/infer.py`, complete-bundle cache/config/CLI, and diagnostic-only ONNX)
-  and `prompt/`
-  (prefill prompt construction from the WAD scene).
+- **Lifecycle packages** (everything below the graph, one per stage) —
+  `tokenizer/` (the token contract: per-id labels, the stock WordLevel
+  tokenizer, frozen vocab data, row arithmetic in `rows.py`, the raw-word
+  codec in `codec.py`), `prompt/` (input side: WAD → scene subset → prompt
+  rows; production entry `prompt/scene.py`), root `infer.py` (the sole
+  portable inference program, copied byte-identical to each bundle's root
+  and executed as a subprocess — never imported), `interpret/` (output
+  side: emitted rows → pixels, PNGs, metrics against the pydoom oracle,
+  the prettifier wrapper), `bundle/` (publication: `build.py` compile +
+  staged rollback publication, `manifest.py` schema/validation,
+  `layout.py` copied files), `portable/` (pure-stdlib tool sources shipped
+  under bundle `tools/`), `diagnostics/` (ONNX diagnostics, never on the
+  production path), and the root job spec `config.py` / `identity.py` with
+  the orchestrator `run.py` and the dispatch-only `cli.py`.
 
 **Reading path** for one `forward()` pass, read side → write side:
 `vocab` / `tokens` → `embedding` / `extract` → `scene_tokens` /
@@ -105,8 +114,9 @@ Rough layout of `torchwright_doom/`:
 (R_RenderBSPNode) → `seg_projection` → the `wall_*` / `visplane_*` /
 `flat_*` rasterizers → the pixel pass. The **prefill pipeline** (WAD →
 the tokens the model reads before autoregression) is `prompt/wad.py` →
-`prompt/subset.py` → `prompt/build.py` → `inference/tokens_bridge.py`;
-`README.md` spells out both chains with file:function references.
+`prompt/subset.py` → `prompt/build.py` → `prompt/scene.py` →
+`tokenizer/rows.py` (row indices); `README.md` spells out both chains
+with file:function references.
 
 Each renderer module is ported from an original plain-Python counterpart;
 many docstrings note that provenance.
@@ -168,12 +178,15 @@ or the stale copy bites (it has).
 
 # Production runtime — a standard HuggingFace transformer
 
-The complete direct-compiled bundle is rendered by executing its exact isolated
-`examples/infer.py`: text prompt -> stock tokenizer -> stock
-`Phi3ForCausalLM.generate()` -> `output.ids.json` plus raw `output.txt`. The
-script imports only standard Python, PyTorch, and Transformers. Production has
-no second model loader or generation loop; it resumes only after those two
-artifacts exist, then decodes/compares them as explicit post-processing.
+The complete direct-compiled bundle is rendered by executing its exact
+bundle-root `infer.py` (a byte-identical copy of `torchwright_doom/infer.py`;
+executed as a subprocess, never imported): text prompt -> stock tokenizer ->
+stock `Phi3ForCausalLM.generate()` -> `output.ids.json` plus raw `output.txt`.
+The script imports only standard Python, PyTorch, and Transformers. Production
+has no second model loader or generation loop; it resumes only after those two
+artifacts exist, then decodes/compares them as explicit post-processing
+(`interpret/`). The lifecycle reads: publication (`bundle/`) → portable
+inference (`infer.py`) → interpretation (`interpret/`).
 
 The compiled model uses default RoPE over one 65,536-position regime. Keep
 `original_max_position_embeddings == max_position_embeddings == max_seq_len`:
@@ -193,9 +206,10 @@ renderer. The trade-offs were accepted deliberately:
 in exchange for the large complexity reduction and the narrative win.
 
 Hugging Face and ONNX are sibling compiler targets rebuilt independently from
-`inference.compiled_model.build_graph`. Production compilation calls
-`compile_hf_bundle(CompileProfile.PHI3)` directly. ONNX is retained only for
-debug sessions and backend investigations; it is never a production input.
+the root `model_graph.build_graph`. Production compilation calls
+`compile_hf_bundle(CompileProfile.PHI3)` directly (`bundle/build.py`). ONNX is
+retained only for debug sessions and backend investigations
+(`diagnostics/onnx.py`); it is never a production input.
 
 **Correctness gate.** The graph-level gates
 (`tests/scene/test_flat_pixel_oracle.py`, `test_forward_ar_rollout.py`)

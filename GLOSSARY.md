@@ -280,15 +280,17 @@ the graph by `table_lookup_2d`.
 
 ## Runtime
 
-The production runtime executes the validated bundle's isolated
-`examples/infer.py`. That one script loads the stock model/tokenizer, accepts a
+The production runtime executes the validated bundle's isolated bundle-root
+`infer.py`. That one script loads the stock model/tokenizer, accepts a
 text prompt, calls stock `model.generate()`, and writes canonical ids plus raw
 text.
-Everything Doom-specific after generation consumes those artifacts.
+Everything Doom-specific after generation consumes those artifacts
+(interpretation, `interpret/`).
 
-- **Portable inference** — the bundle's `examples/infer.py`, copied verbatim
-  from `torchwright_doom/inference_example.py` and also used by production. It
-  is the only model-loading and generation path.
+- **Portable inference** — the bundle-root `infer.py`, copied byte-identical
+  from `torchwright_doom/infer.py` and also used by production (always as a
+  subprocess, never imported). It is the only model-loading and generation
+  path.
 
 - **KV cache** — Transformers' stock generation cache, wholly owned by
   stock `Phi3ForCausalLM.generate()`. Doom has no second host-side inference
