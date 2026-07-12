@@ -16,14 +16,13 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from .config import (
+from ..config import (
     apply_screen_env,
-    canonical_compile_payload,
-    hf_bundle_cache_dir,
     load_render_config,
     resolve_run_args,
     resolve_wad_path,
 )
+from ..identity import canonical_compile_payload, hf_bundle_cache_dir
 
 
 def compile_config(

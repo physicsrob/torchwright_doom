@@ -284,10 +284,10 @@ def _compile_on_modal(
     ``compile_remote``, which compiles straight into HF_BUNDLE_VOLUME under that
     key with CP-SAT fanned out across the container's 64 CPUs.
 
-    Importing ``inference.config`` here is safe: it has no dependency on the
-    screen-sized token vocab (the import-order trap that forces
-    ``compile_config`` to call ``apply_screen_env`` before touching
-    ``inference.compile_cache``).
+    Importing the root ``config`` / ``identity`` modules here is safe: they
+    have no dependency on the screen-sized token vocab (the import-order trap
+    that forces ``compile_config`` to call ``apply_screen_env`` before
+    touching graph-reaching modules).
 
     ``disable_cache`` (the ``DISABLE_CACHE=1 make compile`` path) skips the
     HIT probe (a volume read), compiles into container-local scratch instead
@@ -296,11 +296,10 @@ def _compile_on_modal(
 
     Returns the cache subdir (the volume-relative key).
     """
-    from torchwright_doom.inference.config import (
+    from torchwright_doom.config import load_render_config, resolve_wad_path
+    from torchwright_doom.identity import (
         cache_key_from_payload,
         canonical_compile_payload,
-        load_render_config,
-        resolve_wad_path,
     )
 
     # Shipped by VALUE (see _write_shipped_config): /tmp variant configs work
@@ -449,7 +448,7 @@ def main(
     cache_subdir = _compile_on_modal(config_path, verbose_compile)
 
     # Resolve the run section for the run id + pose defaults below.
-    from torchwright_doom.inference.config import load_render_config
+    from torchwright_doom.config import load_render_config
 
     render_config = load_render_config(config_path)
 

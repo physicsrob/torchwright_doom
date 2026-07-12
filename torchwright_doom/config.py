@@ -1,17 +1,27 @@
-"""YAML render-job config and cache-key helpers."""
+"""The render-job spec: YAML config loading, validation, run-knob resolution.
+
+Shared root authority (plan_cleanup_v2 Decision 5): ``bundle/`` and the run
+path both consume it, so it is owned by neither. Cache identity (compile
+payloads, cache keys, git/WAD hashing) lives in the sibling root
+``identity.py``. Note ``torchwright_doom/identity.py`` (cache identity)
+coexists with ``torchwright_doom/tokenizer/identity.py`` (vocab fingerprint)
+— different concerns, same basename; grep with paths.
+
+``apply_screen_env`` is the import-time screen-environment mechanism: the
+graph modules size themselves from env vars AT IMPORT, so every command must
+call it before importing anything that reaches ``constants`` / ``embedding``.
+Removing that mechanism is a separate graph-wide project.
+"""
 
 from __future__ import annotations
 
 import ast
-import hashlib
-import json
 import os
-import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..asset_config import (
+from .asset_config import (
     FLAT_NAMES,
     N_FLATS,
     N_WALL_TEXTURES,
@@ -265,133 +275,15 @@ def resolve_wad_path(
         if base_dir is not None:
             candidates.append(Path(base_dir) / wad)
         candidates.append(Path.cwd() / wad)
-        candidates.append(Path(__file__).resolve().parents[2] / wad)
+        # Repository-root fallback (this file sits at the package root, one
+        # directory below the repo).
+        candidates.append(Path(__file__).resolve().parents[1] / wad)
     for candidate in candidates:
         if candidate.exists():
             return candidate.resolve()
     raise FileNotFoundError(
         f"WAD {config.wad!r} not found. Checked: {[str(c) for c in candidates]}"
     )
-
-
-def hf_bundle_cache_dir(config: RenderConfig, wad_path: str | Path) -> Path:
-    """Production direct-HF bundle directory."""
-    return (
-        Path.home()
-        / ".cache"
-        / "torchwright_doom"
-        / "hf_phi3"
-        / cache_key(config, wad_path)
-    )
-
-
-def onnx_debug_cache_dir(config: RenderConfig, wad_path: str | Path) -> Path:
-    return (
-        Path.home()
-        / ".cache"
-        / "torchwright_doom"
-        / "onnx_debug"
-        / cache_key_from_payload(canonical_onnx_debug_payload(config, wad_path))
-    )
-
-
-def cache_key(config: RenderConfig, wad_path: str | Path) -> str:
-    return cache_key_from_payload(canonical_compile_payload(config, wad_path))
-
-
-def cache_key_from_payload(payload: dict[str, Any]) -> str:
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def canonical_compile_payload(
-    config: RenderConfig, wad_path: str | Path
-) -> dict[str, Any]:
-    git_shas = {
-        "torchwright_doom": _git_sha(Path(__file__).resolve().parents[2]),
-        "torchwright": _git_sha(Path(__file__).resolve().parents[3] / "torchwright"),
-    }
-    # Enforce "the container must never derive its own key": a git-less caller
-    # would mint a fixed
-    # "unknown"-keyed payload that never changes on a code edit, so the
-    # cache would silently serve artifacts compiled from other code
-    # states.  endswith also catches "<head>-dirty.unknown" (rev-parse
-    # worked but diff/status failed) — that key would be blind to
-    # working-tree edits, the same stale-artifact hazard.  Compute the
-    # payload where .git is available and hand it over explicitly
-    # (compile_payload=...).
-    unresolved = {k: v for k, v in git_shas.items() if v.endswith("unknown")}
-    if unresolved:
-        raise RuntimeError(
-            f"cannot derive a compile-cache key here: git sha unresolvable "
-            f"for {sorted(unresolved)} — compute canonical_compile_payload "
-            f"where .git is available and pass it through compile_payload=."
-        )
-    return {**compile_payload_domain(config, wad_path), "git": git_shas}
-
-
-def compile_payload_domain(
-    config: RenderConfig, wad_path: str | Path
-) -> dict[str, Any]:
-    """Portable, remotely re-verifiable portion of the production cache key."""
-    wad_path = Path(wad_path)
-    return {
-        "artifact": {
-            "kind": "hf_phi3_bundle",
-            # format 2 = bundle layout v2 (root infer.py + tools/, sized and
-            # hash-verified manifest); bumped together with the manifest's
-            # validation.format_version.
-            "format": 2,
-            "architecture": "phi3",
-        },
-        "wad": config.wad,
-        "wad_sha256": _file_sha256(wad_path),
-        "map": config.map,
-        "region": asdict(config.region),
-        "wall_names": list(config.textures.wall),
-        "flat_names": list(config.textures.flat),
-        "model": asdict(config.model),
-        "screen": {"width": config.screen[0], "height": config.screen[1]},
-        # These do not alter weights, but they do alter files inside the exact
-        # complete bundle (the executable prompt and example generation bound).
-        "bundle": {
-            "prompt_pose": asdict(config.run.pose),
-            "max_new_tokens": config.run.max_new_tokens,
-        },
-    }
-
-
-def validate_compile_payload(
-    payload: dict[str, Any], config: RenderConfig, wad_path: str | Path
-) -> None:
-    handed_domain = {key: value for key, value in payload.items() if key != "git"}
-    expected = compile_payload_domain(config, wad_path)
-    if handed_domain != expected:
-        raise ValueError(
-            "handed compile payload does not match the loaded config/WAD; "
-            "refusing to publish an artifact under a false cache identity"
-        )
-    git = payload.get("git")
-    if not isinstance(git, dict) or set(git) != {"torchwright", "torchwright_doom"}:
-        raise ValueError("compile payload has no complete source-revision identity")
-
-
-def canonical_onnx_debug_payload(
-    config: RenderConfig, wad_path: str | Path, *, cache_stride: int = 12288
-) -> dict[str, Any]:
-    if not (1 <= cache_stride <= config.model.max_seq_len):
-        raise ValueError(
-            f"ONNX diagnostic cache_stride {cache_stride} must be in "
-            f"[1, max_seq_len={config.model.max_seq_len}]"
-        )
-    payload = canonical_compile_payload(config, wad_path)
-    payload["artifact"] = {
-        "kind": "onnx_debug",
-        "format": 1,
-        "architecture": "phi3",
-        "cache_stride": int(cache_stride),
-    }
-    return payload
 
 
 def _validate_config(config: RenderConfig) -> None:
@@ -539,55 +431,3 @@ def _quote_bare_words(text: str) -> str:
             token.append(ch)
     flush()
     return "".join(out)
-
-
-def _git_sha(repo: Path) -> str:
-    """Committed HEAD sha, extended with a working-tree digest when dirty.
-
-    The compile cache key embeds this. Without the dirty suffix, an
-    uncommitted edit ships to the compile (``add_local_python_source`` sends
-    the working tree) while the key stays pinned at HEAD — every edit-run
-    cycle silently HITs the artifact compiled from the *first* iteration and
-    the gate "validates" code that was never compiled.  sha256 of
-    ``git diff HEAD`` covers tracked edits; untracked non-ignored file names and
-    contents are hashed too, so iterating on a newly added bundle module cannot
-    silently reuse the first artifact compiled from that path.
-    """
-    git = ["git", "-C", str(repo)]
-    try:
-        head = subprocess.check_output(
-            [*git, "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
-        ).strip()
-    except Exception:
-        return "unknown"
-    try:
-        diff = subprocess.check_output(
-            [*git, "diff", "HEAD"], text=True, stderr=subprocess.DEVNULL
-        )
-        status = subprocess.check_output(
-            [*git, "status", "--porcelain"], text=True, stderr=subprocess.DEVNULL
-        )
-    except Exception:
-        return f"{head}-dirty.unknown"
-    if not diff and not status:
-        return head
-    dirty = hashlib.sha256((diff + "\0" + status).encode("utf-8"))
-    for line in status.splitlines():
-        if not line.startswith("?? "):
-            continue
-        path = repo / line[3:]
-        if path.is_file():
-            dirty.update(line[3:].encode("utf-8"))
-            with path.open("rb") as handle:
-                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                    dirty.update(chunk)
-    digest = dirty.hexdigest()[:12]
-    return f"{head}-dirty.{digest}"
-
-
-def _file_sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()

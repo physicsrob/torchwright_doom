@@ -14,10 +14,8 @@ from torchwright_doom.inference.hf_bundle import (
     is_complete_hf_bundle,
     validate_bundle_manifest,
 )
-from torchwright_doom.inference.config import (
-    RenderConfig,
-    compile_payload_domain,
-)
+from torchwright_doom.config import RenderConfig
+from torchwright_doom.identity import compile_payload_domain
 
 
 def _fake_bundle(path: Path, payload: dict, *, complete: bool = True) -> None:

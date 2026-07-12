@@ -12,7 +12,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from ..inference.config import RenderConfig
+from ..config import RenderConfig
 
 _TOOLS_README = """# Reproduce the Doom render
 

@@ -8,20 +8,45 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..asset_config import MISSING_TEXTURE_ID
+from ..config import RenderConfig, resolve_wad_path
+from ..identity import cache_key_from_payload, canonical_compile_payload
 from ..tokenizer.rows import row_index
 from ..vocab import DONE, PIXEL
 from .compiled_model import compile_onnx_debug_path
-from .config import (
-    RenderConfig,
-    canonical_onnx_debug_payload,
-    onnx_debug_cache_dir,
-    resolve_wad_path,
-)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from torchwright.debug.onnx_debug import OnnxDebugSession
 
 _ONNX_DEBUG_CACHE_STRIDE = 12288
+
+
+def canonical_onnx_debug_payload(
+    config: RenderConfig, wad_path: str | Path, *, cache_stride: int = 12288
+) -> dict[str, Any]:
+    """Diagnostic-artifact identity (parked here until the diagnostics merge)."""
+    if not (1 <= cache_stride <= config.model.max_seq_len):
+        raise ValueError(
+            f"ONNX diagnostic cache_stride {cache_stride} must be in "
+            f"[1, max_seq_len={config.model.max_seq_len}]"
+        )
+    payload = canonical_compile_payload(config, wad_path)
+    payload["artifact"] = {
+        "kind": "onnx_debug",
+        "format": 1,
+        "architecture": "phi3",
+        "cache_stride": int(cache_stride),
+    }
+    return payload
+
+
+def onnx_debug_cache_dir(config: RenderConfig, wad_path: str | Path) -> Path:
+    return (
+        Path.home()
+        / ".cache"
+        / "torchwright_doom"
+        / "onnx_debug"
+        / cache_key_from_payload(canonical_onnx_debug_payload(config, wad_path))
+    )
 
 
 def compile_onnx_debug_cached(

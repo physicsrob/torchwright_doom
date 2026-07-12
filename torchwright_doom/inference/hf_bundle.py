@@ -12,7 +12,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
-from .config import RenderConfig, resolve_wad_path, validate_compile_payload
+from ..config import RenderConfig, resolve_wad_path
+from ..identity import validate_compile_payload
 
 _MANIFEST = "doom_bundle_manifest.json"
 _FORMAT = "torchwright_doom.phi3.v1"

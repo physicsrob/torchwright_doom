@@ -11,8 +11,8 @@ from ..prompt.build import build_prompt
 from ..prompt.subset import subset_by_bbox
 from ..prompt.types import GameState, MapData
 from ..prompt.wad import WADReader
+from ..config import RenderConfig, resolve_wad_path
 from ..wad_assets import AssetBook, load_asset_book
-from .config import RenderConfig, resolve_wad_path
 
 
 @dataclass(frozen=True)
