@@ -4,7 +4,7 @@ and the low-detail width slot (paint W cells, advance by counting)."""
 from __future__ import annotations
 
 from torchwright_doom.asset_banks import PLAYPAL
-from torchwright_doom.inference.decode import (
+from torchwright_doom.interpret.decode import (
     decode_rows_to_pixels,
     pixel_color_index,
 )

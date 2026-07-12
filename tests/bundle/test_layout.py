@@ -19,7 +19,7 @@ import torch
 from torchwright_doom.asset_banks import PLAYPAL
 from torchwright_doom.asset_config import DEFAULT_ASSET_CONFIG
 from torchwright_doom.bundle.layout import write_bundle_layout
-from torchwright_doom.inference.decode import decode_rows_to_pixels
+from torchwright_doom.interpret.decode import decode_rows_to_pixels
 from torchwright_doom.tokenizer.rows import row_index
 from torchwright_doom.portable.txt_to_png import _pixels, _write_png
 from torchwright_doom.tokenizer.freeze import build_vocab_blob

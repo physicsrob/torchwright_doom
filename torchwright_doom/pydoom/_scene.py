@@ -8,7 +8,7 @@ and ``.test_poses``, which the native scene does not), its ``TextureImage`` and
 
 The heavy map types (``MapData`` / ``Sector`` / ``Seg`` / ``SUBSECTOR_FLAG``)
 are deliberately NOT vendored — they retarget to ``..prompt.types``, a proven
-field-identical mirror (``inference/wad_scene`` already round-trips
+field-identical mirror (``interpret/reference`` already round-trips
 native<->pydoom through ``model_dump``). So one ``MapData`` threads through the
 renderer, ``bake_segments``, and the BSP scalars.
 """

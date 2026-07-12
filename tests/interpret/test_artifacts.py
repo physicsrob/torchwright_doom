@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from torchwright_doom.inference import artifacts
+from torchwright_doom.interpret import artifacts
 from torchwright_doom.tokenizer.rows import row_index
 from torchwright_doom.vocab import BEGIN, PIXEL, SET_CURSOR_DIRECTION_Y
 

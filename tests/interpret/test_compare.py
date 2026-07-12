@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from torchwright_doom.inference import compare
+from torchwright_doom.interpret import compare
 
 
 def test_compare_stats():

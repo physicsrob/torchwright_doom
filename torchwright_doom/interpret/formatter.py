@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .portable.pretty_text import DoomTextFormatter
+from ..portable.pretty_text import DoomTextFormatter
 
 
 class DoomFormatter(DoomTextFormatter):

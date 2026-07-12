@@ -2,7 +2,8 @@
 
 The tokenizer is intentionally context free: every model row has one compact
 semantic word and whitespace is the only token boundary.  Contextual carrier
-folding and presentation layout belong to :class:`torchwright_doom.formatter.DoomFormatter`.
+folding and presentation layout belong to
+:class:`torchwright_doom.interpret.formatter.DoomFormatter`.
 """
 
 from __future__ import annotations

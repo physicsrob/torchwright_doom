@@ -51,7 +51,7 @@ PORTABLE_SOURCES = (
 # (Decision 12: the formatter wrapper and staged bundle validation; tests are
 # exempt by scope).
 PORTABLE_IMPORTERS = (
-    "torchwright_doom/formatter.py",
+    "torchwright_doom/interpret/formatter.py",
     "torchwright_doom/inference/hf_bundle.py",
 )
 
