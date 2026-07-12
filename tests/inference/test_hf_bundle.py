@@ -211,7 +211,7 @@ def test_direct_builder_passes_exact_graph_embedding_and_phi3_contract(
     from torchwright_doom import embedding as embedding_mod
     from torchwright_doom.asset_banks import PLAYPAL
     from torchwright_doom.inference import compiled_model, hf_bundle, wad_scene
-    from torchwright_doom.inference.tokens_bridge import row_index
+    from torchwright_doom.tokenizer.rows import row_index
     from torchwright_doom.vocab import BOS, DONE
 
     config = RenderConfig()

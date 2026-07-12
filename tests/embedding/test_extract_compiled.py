@@ -51,7 +51,7 @@ def _row_index(token_type, slot_values: dict[str, int | float]) -> int:
     ``slot_values``.
 
     Deliberately an independent recomputation, NOT an import of
-    ``inference.tokens_bridge.row_index``: this test cross-checks the row
+    ``tokenizer.rows.row_index``: this test cross-checks the row
     enumeration, so sharing the implementation under test would make the
     check tautological.
     """

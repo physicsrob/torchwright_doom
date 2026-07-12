@@ -299,8 +299,8 @@ def test_two_digit_boundary_sliver_snaps_to_one_step() -> None:
     lands), so a fractional hi cannot leak ×BASE into the low byte (the
     unsnapped failure mode: a 192-row emitted error)."""
     from torchwright_doom.emit import _DQ_HI_SHARPNESS
-    from torchwright_doom.inference.diagnostic import carrier_delta
-    from torchwright_doom.inference.tokens_bridge import row_index
+    from torchwright_doom.tokenizer.rows import carrier_delta
+    from torchwright_doom.tokenizer.rows import row_index
 
     slot = _value_slot()
     span = slot.hi - slot.lo

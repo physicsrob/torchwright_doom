@@ -25,6 +25,6 @@ Dataflow (one direction, top to bottom):
   subset frame. The test-fixture entry point.
 
 The production entry point is ``inference.wad_scene.prefill_rows_for``; the
-prefill ``list[Token]`` becomes row indices via ``inference.tokens_bridge``.
+prefill ``list[Token]`` becomes row indices via ``tokenizer.rows``.
 This package re-exports nothing; ``doom_sandbox`` is never imported here.
 """

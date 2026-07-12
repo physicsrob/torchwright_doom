@@ -8,7 +8,7 @@ from torchwright_doom.inference.decode import (
     decode_rows_to_pixels,
     pixel_color_index,
 )
-from torchwright_doom.inference.tokens_bridge import row_index
+from torchwright_doom.tokenizer.rows import row_index
 from torchwright_doom.vocab import (
     PIXEL,
     SET_CURSOR_DIRECTION_X,

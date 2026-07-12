@@ -8,7 +8,7 @@ pytest.importorskip("tokenizers")
 from transformers import AutoTokenizer
 
 from torchwright_doom.embedding import TOKEN_VOCAB
-from torchwright_doom.inference.tokens_bridge import row_index
+from torchwright_doom.tokenizer.rows import row_index
 from torchwright_doom.tokenizer import display
 from torchwright_doom.tokenizer.standard import (
     build_standard_tokenizer,

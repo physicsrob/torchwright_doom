@@ -1,4 +1,4 @@
-"""Token <-> ``W_EMBED``-row encode/decode helpers.
+"""Row arithmetic of the token contract: token <-> ``W_EMBED``-row crossings.
 
 All compute is pure host arithmetic over the static vocab; **no graph nodes are
 created at import or call time** (the import-time-node-free rule, twdoom
@@ -12,6 +12,11 @@ via ``TOKEN_VOCAB.row_to_token``.
 Native ``Token`` <-> row crossings (:func:`token_to_row`, :func:`row_to_token`)
 are a direct structural round-trip with no name bridge — used by the standard
 tokenizer, formatter, and special-token resolution.
+
+:func:`carrier_delta` is vocab-derived contract math too: the canonical
+encoded-value distance for a carrier row, shared by the graph-gate oracles.
+This module must not acquire bundle, run, CLI, or Transformers
+responsibilities.
 """
 
 from __future__ import annotations
@@ -21,6 +26,7 @@ import torch
 from ..embedding import TOKEN_VOCAB, W_EMBED
 from ..tokens import IntSlot, Token, TokenType
 from ..value_ranges import ValueRange, encode_float
+from ..vocab import ANGLE_VALUE, VALUE
 
 # --- row <-> (type, slot_values) ------------------------------------------
 
@@ -79,8 +85,6 @@ def tokens_to_input(tokens) -> torch.Tensor:
 
 def value(range_id: ValueRange, physical: float) -> tuple[TokenType, dict]:
     """A compact ``VALUE`` carrier row encoding ``physical`` in ``range_id``."""
-    from ..vocab import VALUE
-
     return (VALUE, {"v": encode_float(range_id, physical)})
 
 
@@ -113,3 +117,36 @@ def row_to_token(row: int) -> Token:
     """
     rtype, values = TOKEN_VOCAB.row_to_token[row]
     return Token(rtype, dict(values))
+
+
+# --- carrier distance ------------------------------------------------------
+#
+# Carrier row ranges, derived from the vocab (not hardcoded) so a layout change
+# can't silently break the delta math.
+
+_VALUE_START, _VALUE_END = TOKEN_VOCAB.type_to_row_range[VALUE]
+_VALUE_LEVELS = _VALUE_END - _VALUE_START
+_ANGLE_START, _ANGLE_END = TOKEN_VOCAB.type_to_row_range[ANGLE_VALUE]
+_ANGLE_LEVELS = _ANGLE_END - _ANGLE_START
+_ANGLE_LO = -_ANGLE_LEVELS // 2  # angle slot is centered (IntSlot(-N/2, N/2))
+
+
+def carrier_delta(name: str, predicted_row: int, expected_row: int):
+    """Encoded-value distance for a carrier; None if the prediction isn't even
+    the right carrier type (a hard divergence).
+
+    The canonical definition — the scene and emit graph-gate oracles import it
+    (per-test copies previously hardcoded the vocab row ranges; these derive
+    from ``TOKEN_VOCAB`` so a layout change can't silently break the delta
+    math).
+    """
+    if name == "angleValue":
+        if not (_ANGLE_START <= predicted_row < _ANGLE_END):
+            return None
+        pa = predicted_row - _ANGLE_START + _ANGLE_LO
+        ea = expected_row - _ANGLE_START + _ANGLE_LO
+        half = _ANGLE_LEVELS // 2
+        return abs(((pa - ea + half) % _ANGLE_LEVELS) - half)
+    if not (_VALUE_START <= predicted_row < _VALUE_END):
+        return None
+    return abs(predicted_row - expected_row) * 2.0 / (_VALUE_LEVELS - 1)

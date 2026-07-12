@@ -15,7 +15,7 @@ from typing import Sequence
 
 from ..asset_config import DEFAULT_ASSET_CONFIG, AssetConfig
 from ..embedding import TOKEN_VOCAB
-from ..inference.tokens_bridge import row_index
+from .rows import row_index
 from ..vocab import BOS, DONE
 from .display import token_word
 

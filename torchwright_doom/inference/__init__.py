@@ -2,7 +2,7 @@
 
 Submodules (the import graph runs one direction, top to bottom):
 
-- ``tokens_bridge`` — token <-> W_EMBED-row encode/decode.
+- ``../tokenizer/rows.py`` — token <-> W_EMBED-row encode/decode (moved out).
 - ``hf_bundle`` — compile a complete stock ``Phi3ForCausalLM`` bundle directly
   from ``build_graph``, validate it, and publish it atomically.
 - ``../infer.py`` — the isolated ``model.generate`` CLI copied to each
@@ -21,7 +21,7 @@ Submodules (the import graph runs one direction, top to bottom):
 
 This package deliberately re-exports nothing: ``embedding`` builds the
 screen-sized vocab AT IMPORT, so callers must ``apply_screen_env(config)``
-before importing the modules that reach it (``tokens_bridge``,
+before importing the modules that reach it (``tokenizer.rows``,
 ``compiled_model``, ``compile_cache``, ``hf_bundle``). The reference renderer +
 token state machine are the in-tree ``torchwright_doom.pydoom`` package; no
 external checkout is required.

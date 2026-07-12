@@ -1,7 +1,7 @@
 """Shared test helpers for the Plan D renderer-reads port.
 
 The token -> ``W_EMBED``-row helpers live in
-``torchwright_doom.inference.tokens_bridge`` (their public home); this module
+``torchwright_doom.tokenizer.rows`` (their public home); this module
 re-exports them for the oracle harness plus the tiny shared scene fixture.
 """
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import torch
 
-from torchwright_doom.inference.tokens_bridge import (  # noqa: F401  (re-exports)
+from torchwright_doom.tokenizer.rows import (  # noqa: F401  (re-exports)
     row_index,
     token_row,
     tokens_to_input,

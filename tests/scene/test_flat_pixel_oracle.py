@@ -35,10 +35,10 @@ from torchwright.ops.inout_nodes import create_input, create_rope_config
 
 from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
 from torchwright_doom.graph_debug import silenced_graph_asserts
-from torchwright_doom.inference.diagnostic import carrier_delta as _carrier_delta
+from torchwright_doom.tokenizer.rows import carrier_delta as _carrier_delta
 from torchwright_doom.past import GraphPast
 from torchwright_doom.render_main import forward
-from torchwright_doom.inference.tokens_bridge import row_index, tokens_to_input
+from torchwright_doom.tokenizer.rows import row_index, tokens_to_input
 from torchwright_doom.vocab import PIXEL
 
 _CARRIERS = {"value", "angleValue"}

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..asset_config import MISSING_TEXTURE_ID
+from ..tokenizer.rows import row_index
 from ..vocab import DONE, PIXEL
 from .compiled_model import compile_onnx_debug_path
 from .config import (
@@ -16,7 +17,6 @@ from .config import (
     onnx_debug_cache_dir,
     resolve_wad_path,
 )
-from .tokens_bridge import row_index
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from torchwright.debug.onnx_debug import OnnxDebugSession

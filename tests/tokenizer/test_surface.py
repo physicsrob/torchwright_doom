@@ -16,7 +16,7 @@ from typing import Any
 
 from torchwright_doom.asset_config import DEFAULT_ASSET_CONFIG
 from torchwright_doom.embedding import TOKEN_VOCAB
-from torchwright_doom.inference.tokens_bridge import row_to_token, token_to_row
+from torchwright_doom.tokenizer.rows import row_to_token, token_to_row
 from torchwright_doom.marker_ranges import ANGLE_MARKERS, MARKER_RANGE
 from torchwright_doom.tokens import IntSlot, Token
 from torchwright_doom.tokenizer import display, surface

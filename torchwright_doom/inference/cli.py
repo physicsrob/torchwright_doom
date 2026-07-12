@@ -114,11 +114,11 @@ def run_config(
     max_new_tokens = args.max_new_tokens
 
     from ..tokenizer.codec import raw_text_from_rows, rows_from_raw_text
+    from ..tokenizer.rows import row_index
     from ..vocab import DONE
     from . import artifacts, compare as compare_mod
     from .decode import decode_rows_to_pixels
     from .hf_bundle import validate_bundle_manifest
-    from .tokens_bridge import row_index
     from .wad_scene import (
         load_render_scene,
         pose_from_world,

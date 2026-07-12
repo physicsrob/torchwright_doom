@@ -75,7 +75,7 @@ def pose_from_world(
 
 
 def prefill_rows_for(scene: LoadedRenderScene, pose: GameState) -> list[int]:
-    from .tokens_bridge import row_index
+    from ..tokenizer.rows import row_index
 
     tokens = build_prompt(scene.map_data, pose, asset_config=scene.asset_config)
     return [row_index(t.type, dict(t.values)) for t in tokens]
