@@ -20,11 +20,14 @@ Dataflow (one direction, top to bottom):
 - ``build`` — :func:`build_prompt`: emit the flat ``list[Token]`` prefill
   (player state -> per-node -> per-subsector/seg -> visplane defs -> ``BEGIN``),
   mirroring the original ``get_prefill`` order.
+- ``scene`` — the production entry point: :func:`load_render_scene` (WAD +
+  config region + asset book), :func:`pose_from_world` (world pose into the
+  subset frame), and :func:`prefill_rows_for` (prompt row ids, via
+  ``tokenizer.rows``).
 - ``scenes`` — a :class:`Scene` (WAD path, subset box, initial pose) and
   :func:`load`, which opens the WAD, subsets it, and shifts the pose into the
   subset frame. The test-fixture entry point.
 
-The production entry point is ``inference.wad_scene.prefill_rows_for``; the
-prefill ``list[Token]`` becomes row indices via ``tokenizer.rows``.
+The production entry point is ``prompt.scene.prefill_rows_for``.
 This package re-exports nothing; ``doom_sandbox`` is never imported here.
 """

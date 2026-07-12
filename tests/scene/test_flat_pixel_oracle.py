@@ -116,11 +116,8 @@ def flat_pixel_eval():
     import torchwright_doom.asset_banks as asset_banks
     import torchwright_doom.pydoom as pydoom
     from torchwright_doom.config import load_render_config
-    from torchwright_doom.inference.wad_scene import (
-        load_render_scene,
-        pose_from_world,
-        pydoom_scene_for,
-    )
+    from torchwright_doom.inference.wad_scene import pydoom_scene_for
+    from torchwright_doom.prompt.scene import load_render_scene, pose_from_world
     from torchwright_doom.prompt.build import build_prompt
 
     submodule_root = Path(__file__).resolve().parents[2]

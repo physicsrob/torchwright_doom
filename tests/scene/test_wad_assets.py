@@ -16,7 +16,7 @@ from pathlib import Path
 from torchwright_doom import asset_banks as ab
 from torchwright_doom.asset_config import FLAT_NAMES, WALL_TEXTURE_NAMES
 from torchwright_doom.config import load_render_config
-from torchwright_doom.inference.wad_scene import load_render_scene
+from torchwright_doom.prompt.scene import load_render_scene
 
 _SUBMODULE_ROOT = Path(__file__).resolve().parents[2]
 

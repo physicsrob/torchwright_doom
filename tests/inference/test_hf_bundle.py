@@ -208,7 +208,8 @@ def test_direct_builder_passes_exact_graph_embedding_and_phi3_contract(
     from torchwright_doom import constants
     from torchwright_doom import embedding as embedding_mod
     from torchwright_doom.asset_banks import PLAYPAL
-    from torchwright_doom.inference import compiled_model, hf_bundle, wad_scene
+    from torchwright_doom.inference import compiled_model, hf_bundle
+    from torchwright_doom.prompt import scene as prompt_scene
     from torchwright_doom.tokenizer.rows import row_index
     from torchwright_doom.vocab import BOS, DONE
 
@@ -234,10 +235,14 @@ def test_direct_builder_passes_exact_graph_embedding_and_phi3_contract(
         lambda **kwargs: (graph_output, object(), exact_embedding, banks),
     )
     scene = SimpleNamespace(origin=(0.0, 0.0))
-    monkeypatch.setattr(wad_scene, "load_render_scene", lambda *args, **kwargs: scene)
-    monkeypatch.setattr(wad_scene, "pose_from_world", lambda scene: object())
+    monkeypatch.setattr(
+        prompt_scene, "load_render_scene", lambda *args, **kwargs: scene
+    )
+    monkeypatch.setattr(prompt_scene, "pose_from_world", lambda scene: object())
     prompt_rows = [row_index(BOS, {}), row_index(DONE, {})]
-    monkeypatch.setattr(wad_scene, "prefill_rows_for", lambda scene, pose: prompt_rows)
+    monkeypatch.setattr(
+        prompt_scene, "prefill_rows_for", lambda scene, pose: prompt_rows
+    )
     monkeypatch.setattr(
         hf_bundle, "_validate_complete_staged_bundle", lambda *args: None
     )

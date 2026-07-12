@@ -450,6 +450,7 @@ def compile_phi3_bundle(
     from torchwright.compiler import CompileProfile, compile_hf_bundle
 
     from ..bundle.layout import write_bundle_layout, write_model_card
+    from ..prompt.scene import load_render_scene, pose_from_world, prefill_rows_for
     from ..tokenizer.codec import raw_text_from_rows
     from ..tokenizer.freeze import write_frozen_data
     from ..tokenizer.identity import vocab_fingerprint
@@ -460,7 +461,6 @@ def compile_phi3_bundle(
         ordered_words_sha256,
     )
     from .compiled_model import build_graph
-    from .wad_scene import load_render_scene, pose_from_world, prefill_rows_for
 
     next_token, _rope, embedding, asset_banks = build_graph(
         d_head=config.model.d_head,

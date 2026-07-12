@@ -26,7 +26,7 @@ from torchwright_doom.config import (
     resolve_run_args,
     resolve_wad_path,
 )
-from torchwright_doom.inference.wad_scene import default_pose_world
+from torchwright_doom.prompt.scene import default_pose_world
 
 ROOT = Path(__file__).resolve().parents[1]
 
