@@ -36,7 +36,7 @@ from torchwright.ops.inout_nodes import create_input, create_rope_config
 
 from torchwright_doom.embedding import TOKEN_VOCAB, W_EMBED
 from torchwright_doom.past import GraphPast
-from torchwright_doom.inference.compiled_model import build_graph
+from torchwright_doom.model_graph import build_graph
 from torchwright_doom.tokenizer.rows import rows_to_input
 from torchwright_doom.render_main import forward
 from torchwright_doom.vocab import NO_OP

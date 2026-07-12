@@ -460,7 +460,7 @@ def compile_phi3_bundle(
         doom_special_tokens,
         ordered_words_sha256,
     )
-    from .compiled_model import build_graph
+    from ..model_graph import build_graph
 
     next_token, _rope, embedding, asset_banks = build_graph(
         d_head=config.model.d_head,

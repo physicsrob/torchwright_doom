@@ -12,7 +12,7 @@ It also reports scheduling slack for the expensive operation families: how
 many layers each site can move before it would extend the depth floor.
 
 It is faithful to production: it builds the graph through
-``inference.compiled_model.build_graph`` (which passes ``asset_index``, unlike
+``model_graph.build_graph`` (which passes ``asset_index``, unlike
 ``analyze_forward_cost``) and applies the same width-safe linear-fusion gate
 (``skip_relu_ejecting=True``).  Width is irrelevant here — this is a pure DAG
 property, memory-safe, CPU, seconds.
@@ -256,7 +256,7 @@ def reconstruct_path(gm, es, edges, node_modes):
 def main():
     fuse = os.environ.get("FUSE", "1") == "1"
 
-    from torchwright_doom.inference.compiled_model import build_graph
+    from torchwright_doom.model_graph import build_graph
     from torchwright_doom import constants as C
 
     next_token, pos, emb, _banks = build_graph()

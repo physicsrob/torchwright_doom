@@ -151,7 +151,7 @@ def load_onnx_debug_session(
     with the recompile recipe instead — production compiles are
     Modal-scale jobs, not something to trigger from a debug session.
     """
-    from .compiled_model import build_graph
+    from ..model_graph import build_graph
 
     wad_path = resolve_wad_path(config, base_dir=base_dir)
     if cache_dir is None:

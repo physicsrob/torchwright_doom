@@ -208,7 +208,8 @@ def test_direct_builder_passes_exact_graph_embedding_and_phi3_contract(
     from torchwright_doom import constants
     from torchwright_doom import embedding as embedding_mod
     from torchwright_doom.asset_banks import PLAYPAL
-    from torchwright_doom.inference import compiled_model, hf_bundle
+    from torchwright_doom import model_graph
+    from torchwright_doom.inference import hf_bundle
     from torchwright_doom.prompt import scene as prompt_scene
     from torchwright_doom.tokenizer.rows import row_index
     from torchwright_doom.vocab import BOS, DONE
@@ -230,7 +231,7 @@ def test_direct_builder_passes_exact_graph_embedding_and_phi3_contract(
     graph_output = object()
     banks = SimpleNamespace(playpal=PLAYPAL)
     monkeypatch.setattr(
-        compiled_model,
+        model_graph,
         "build_graph",
         lambda **kwargs: (graph_output, object(), exact_embedding, banks),
     )
