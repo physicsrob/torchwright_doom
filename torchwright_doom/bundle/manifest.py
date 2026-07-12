@@ -204,7 +204,19 @@ def validate_bundle_manifest(
             raise ValueError(f"Doom bundle declares a missing file: {name}")
         if file_path.stat().st_size != facts.get("size"):
             raise ValueError(f"Doom bundle file size mismatch: {name}")
-        if "sha256" in facts and sha256_file(file_path) != facts["sha256"]:
+        if name.endswith(".safetensors"):
+            # Shards are the only hash-exempt entries (the index binds their
+            # tensors; sizes are still checked). Verify a digest if one is
+            # present anyway.
+            if "sha256" in facts and sha256_file(file_path) != facts["sha256"]:
+                raise ValueError(f"Doom bundle file hash mismatch: {name}")
+            continue
+        # Every other entry MUST carry a digest: a manifest that omits one
+        # would otherwise silently downgrade validation to size-only —
+        # fail closed instead.
+        if "sha256" not in facts:
+            raise ValueError(f"Doom bundle manifest lacks a digest for: {name}")
+        if sha256_file(file_path) != facts["sha256"]:
             raise ValueError(f"Doom bundle file hash mismatch: {name}")
     index = json.loads((bundle / "model.safetensors.index.json").read_text())
     shards = set(index.get("weight_map", {}).values())

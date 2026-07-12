@@ -136,6 +136,19 @@ def test_altered_hash_bearing_file_fails(tmp_path: Path) -> None:
         validate_bundle_manifest(bundle)
 
 
+def test_missing_digest_for_hash_bearing_file_fails(tmp_path: Path) -> None:
+    """A manifest entry without sha256 must fail closed, not silently
+    downgrade that file's validation to size-only. Shards are the only
+    hash-exempt entries."""
+    payload = {"artifact": {"kind": "hf_phi3_bundle"}}
+    bundle = tmp_path / "bundle"
+    _fake_bundle(bundle, payload)
+    _edit_manifest(bundle, lambda m: m["files"]["infer.py"].pop("sha256"))
+    with pytest.raises(ValueError, match="lacks a digest"):
+        validate_bundle_manifest(bundle)
+    assert not is_complete_hf_bundle(bundle)
+
+
 def test_indexed_but_undeclared_shard_fails(tmp_path: Path) -> None:
     payload = {"artifact": {"kind": "hf_phi3_bundle"}}
     bundle = tmp_path / "bundle"
