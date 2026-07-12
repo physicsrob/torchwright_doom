@@ -1,28 +1,23 @@
-"""Direct-HF compilation, portable stock-Phi-3 inference, and diagnostics.
+"""Transitional home of the render-job orchestration and bundle builder.
 
-Submodules (the import graph runs one direction, top to bottom):
+This package is being dissolved by the production-path cleanup
+(plan_cleanup_v2.md); what remains here moves out at the end:
 
-- ``../tokenizer/rows.py`` — token <-> W_EMBED-row encode/decode (moved out).
-- ``hf_bundle`` — compile a complete stock ``Phi3ForCausalLM`` bundle directly
-  from ``build_graph``, validate it, and publish it atomically.
-- ``../infer.py`` — the isolated ``model.generate`` CLI copied to each
-  bundle's root and executed verbatim by production rendering.
-- ``compiled_model`` — the sole source graph builder plus explicit ONNX debug
-  compilation.
-- ``compile_cache`` — diagnostic-only ONNX cache and ``OnnxDebugSession`` loader.
-- ``config`` / ``wad_scene`` — YAML job config; WAD-backed scene + the in-tree
-  pydoom adapter (``pydoom_scene_for``).
-- ``decode`` — generated token stream -> screen pixel buffer (dumb host).
-- ``compare`` — fetch the reference render + report image-level agreement stats.
-- ``artifacts`` — write ``token_dump.json`` + the PNGs.
-- ``diagnostic`` — chunked teacher-forced divergence localizer.
-- ``cli`` — argparse entrypoint over all of the above
-  (``python -m torchwright_doom.inference``).
+- ``hf_bundle`` — the bundle builder (compile + staged publication);
+  becomes ``bundle/build.py``. Manifest schema/validation already live in
+  ``bundle/manifest.py``.
+- ``cli`` — argparse entrypoint (``python -m torchwright_doom.inference``);
+  ``run_config`` becomes root ``run.py`` and the argparse shell root
+  ``cli.py``.
+
+Everything else has moved to its lifecycle-stage package: the token contract
+to ``tokenizer/`` (``rows``, ``codec``), the input side to ``prompt/scene``,
+the output side to ``interpret/``, the job spec to root ``config.py`` /
+``identity.py``, the graph authority to root ``model_graph.py``, and the
+ONNX diagnostics to ``diagnostics/onnx.py``.
 
 This package deliberately re-exports nothing: ``embedding`` builds the
 screen-sized vocab AT IMPORT, so callers must ``apply_screen_env(config)``
 before importing the modules that reach it (``tokenizer.rows``,
-``compiled_model``, ``compile_cache``, ``hf_bundle``). The reference renderer +
-token state machine are the in-tree ``torchwright_doom.pydoom`` package; no
-external checkout is required.
+``model_graph``, ``hf_bundle``).
 """

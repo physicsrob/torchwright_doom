@@ -1,21 +1,30 @@
-"""Explicit ONNX diagnostic cache; never a production render input."""
+"""Explicit ONNX diagnostic backend; never a production render input.
+
+The single retained diagnostic command is
+
+    python -m torchwright_doom compile-onnx-debug --config configs/e1m1.yaml
+
+It emits an explicitly diagnostic artifact and never populates or satisfies
+the HF bundle cache. The module top level is graph-free (only the root job
+spec and identity); every graph-reaching import happens inside a business
+function after ``apply_screen_env`` has run.
+"""
 
 from __future__ import annotations
 
 import json
 from dataclasses import asdict
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from ..asset_config import MISSING_TEXTURE_ID
-from ..config import RenderConfig, resolve_wad_path
+from ..asset_config import MISSING_TEXTURE_ID, AssetConfig
+from ..config import (
+    RenderConfig,
+    apply_screen_env,
+    load_render_config,
+    resolve_wad_path,
+)
 from ..identity import cache_key_from_payload, canonical_compile_payload
-from ..tokenizer.rows import row_index
-from ..vocab import DONE, PIXEL
-from .compiled_model import compile_onnx_debug_path
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from torchwright.debug.onnx_debug import OnnxDebugSession
 
 _ONNX_DEBUG_CACHE_STRIDE = 12288
 
@@ -23,7 +32,6 @@ _ONNX_DEBUG_CACHE_STRIDE = 12288
 def canonical_onnx_debug_payload(
     config: RenderConfig, wad_path: str | Path, *, cache_stride: int = 12288
 ) -> dict[str, Any]:
-    """Diagnostic-artifact identity (parked here until the diagnostics merge)."""
     if not (1 <= cache_stride <= config.model.max_seq_len):
         raise ValueError(
             f"ONNX diagnostic cache_stride {cache_stride} must be in "
@@ -47,6 +55,20 @@ def onnx_debug_cache_dir(config: RenderConfig, wad_path: str | Path) -> Path:
         / "onnx_debug"
         / cache_key_from_payload(canonical_onnx_debug_payload(config, wad_path))
     )
+
+
+def compile_onnx_debug_config(
+    *, config_path: str | Path, verbose_compile: bool = False
+) -> dict[str, Any]:
+    """Explicit diagnostic backend dispatch; output is never accepted by
+    rendering."""
+    config_path = Path(config_path)
+    config = load_render_config(config_path)
+    apply_screen_env(config)
+    cache_dir = compile_onnx_debug_cached(
+        config, base_dir=config_path.parent, verbose=verbose_compile
+    )
+    return {"cache_dir": str(cache_dir), "artifact_kind": "onnx_debug"}
 
 
 def compile_onnx_debug_cached(
@@ -133,73 +155,89 @@ def compile_onnx_debug_cached(
     return cache_dir
 
 
-def load_onnx_debug_session(
-    cache_dir: str | Path | None,
-    config: RenderConfig,
+def compile_onnx_debug_path(
+    output_path: str | Path,
     *,
-    base_dir: str | Path | None = None,
-    providers=None,
-) -> "OnnxDebugSession":
-    """Open an :class:`OnnxDebugSession` over a cached compiled artifact.
+    d: int = 4096,
+    d_head: int = 32,
+    d_rot: int | None = None,
+    max_layers: int = 200,
+    max_seq_len: int = 65536,
+    cache_stride: int = 12288,
+    verbose: bool = False,
+    trim_heads: bool = True,
+    optimize: int = 0,
+    d_hidden: int | None = None,
+    rms_norm_const_exp: int = 63,
+    asset_config: AssetConfig | None = None,
+    wad_path: str | Path | None = None,
+    extra_metadata: dict[str, Any] | None = None,
+    profile=None,
+) -> dict[str, Any]:
+    """Compile the token-id forward to a diagnostic ONNX artifact.
 
-    Rebuilds the forward graph deterministically (``build_graph``) and pairs
-    it with ``<cache_dir>/model.onnx`` — the session's fingerprint check
-    fails loud if the rebuilt graph differs from the one the artifact was
-    compiled from.  ``cache_dir=None`` resolves the config's own cache entry.
+    ``cache_stride`` sets the diagnostic ONNX static KV-cache slot count S. It
+    is intentionally absent from production ``ModelConfig`` because direct HF
+    uses a growing ``DynamicCache``.
 
-    This NEVER compiles: a missing artifact (or its debug sidecar) raises
-    with the recompile recipe instead — production compiles are
-    Modal-scale jobs, not something to trigger from a debug session.
+    ``rms_norm_const_exp`` (``q``) is the pinned-constant exponent for the
+    identity RMSNorm (on by default at the production power-of-two ``d``).  The
+    doom forward carries fixed-point coordinates, so its residual energy bound
+    is ~2^99.6 — far above the calculator's ~2^44 default.  ``q=63`` is the
+    largest the fp32 pinned energy allows (2^127 at the production odd
+    ``b=log2(8192)=13``); its budget ``2^(2q-24)=2^102`` clears the doom energy
+    with ~5x margin.  A future residual-energy increase past 2^102 would make
+    the identity infeasible (q can't go higher) and re-break the compile with a
+    clear "rms_norm identity not certified" error.
     """
+    from torchwright.compiler.export import compile_to_onnx
+
+    from ..embedding import TOKEN_VOCAB
     from ..model_graph import build_graph
 
-    wad_path = resolve_wad_path(config, base_dir=base_dir)
-    if cache_dir is None:
-        cache_dir = onnx_debug_cache_dir(config, wad_path)
-    else:
-        cache_dir = Path(cache_dir)
-    onnx_path = cache_dir / "model.onnx"
-    sidecar_path = cache_dir / "model.debug.json"
-    recipe = (
-        f"recompile via `python -m torchwright_doom.inference compile "
-        f"--config <yaml>` (delete {cache_dir} first if it exists; "
-        f"compile_to_onnx writes the debug sidecar by default)"
-    )
-    if not onnx_path.exists():
-        raise FileNotFoundError(f"no cached artifact at {onnx_path} — {recipe}")
-    if not sidecar_path.exists():
-        raise FileNotFoundError(
-            f"cached artifact {onnx_path} has no debug sidecar "
-            f"{sidecar_path.name} (pre-sidecar cache entry?) — {recipe}"
-        )
-    # The graph rebuild must see the same screen dims the artifact was
-    # compiled at; constants.py reads them from env at import, so a caller
-    # that skipped apply_screen_env() would otherwise surface as an opaque
-    # fingerprint mismatch.
-    from ..constants import SCREEN_HEIGHT, SCREEN_WIDTH
-
-    if (SCREEN_WIDTH, SCREEN_HEIGHT) != config.screen:
-        raise RuntimeError(
-            f"screen dims {SCREEN_WIDTH}x{SCREEN_HEIGHT} were imported before "
-            f"this config's {config.screen[0]}x{config.screen[1]} was applied "
-            f"— call apply_screen_env(config) before importing graph modules"
-        )
-    from torchwright.debug.onnx_debug import OnnxDebugSession
-
-    next_token, _rope, _emb, _banks = build_graph(
-        d_head=config.model.d_head,
-        max_positions=config.model.max_seq_len,
-        d_rot=config.model.d_rot,
-        asset_config=config.asset_config(),
+    next_token, rope, emb, asset_banks = build_graph(
+        d_head=d_head,
+        max_positions=max_seq_len,
+        d_rot=d_rot,
+        asset_config=asset_config,
         wad_path=wad_path,
     )
-    # Linear fusion is owned by the compiler: ``lower()`` fuses on its
-    # compiler-private copy (torchwright eb4a0f8), so the artifact's
-    # sidecar fingerprint is of the UNfused source graph and the rebuild
-    # here must stay unfused to match.  (The explicit pre-fuse that used
-    # to mirror the old compile-side pre-pass also mutated doom's source
-    # graph in place — removed with it.)
-    return OnnxDebugSession(str(onnx_path), next_token, providers=providers)
+    # Linear-layer fusion is owned by the compiler: ``lower()`` runs
+    # ``fuse_consecutive_linears`` on its compiler-private copy of the
+    # graph (torchwright eb4a0f8).  The explicit pre-pass that used to
+    # live here was redundant with that AND mutated doom's source graph
+    # in place — removed.
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    kwargs: dict[str, Any] = {
+        "d": d,
+        "d_head": d_head,
+        "max_seq_len": max_seq_len,
+        "max_layers": max_layers,
+        "verbose": verbose,
+        "trim_heads": trim_heads,
+        "optimize": optimize,
+        "cache_stride": cache_stride,
+        "rms_norm_const_exp": rms_norm_const_exp,
+        "bias": False,
+    }
+    if profile is not None:
+        kwargs["profile"] = profile
+    if d_hidden is not None:
+        kwargs["d_hidden"] = d_hidden
+    if extra_metadata is not None:
+        kwargs["extra_metadata"] = extra_metadata
+    compile_to_onnx(
+        next_token,
+        embedding=emb,
+        output_path=str(output_path),
+        **kwargs,
+    )
+    return {
+        "n_rows": TOKEN_VOCAB.n_rows,
+        "d_embed": TOKEN_VOCAB.layout.d_embed,
+        "asset_banks": asset_banks,
+    }
 
 
 def _write_render_meta(
@@ -211,6 +249,8 @@ def _write_render_meta(
     compile_payload: dict[str, Any] | None = None,
 ) -> None:
     from ..embedding import TOKEN_VOCAB
+    from ..tokenizer.rows import row_index
+    from ..vocab import DONE, PIXEL
 
     asset_config = config.asset_config()
     existing = json.loads(path.read_text()) if path.exists() else {}

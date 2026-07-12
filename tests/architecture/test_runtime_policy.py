@@ -57,7 +57,11 @@ PORTABLE_IMPORTERS = (
 
 # Package files allowed to import onnx / onnxruntime (diagnostic-only;
 # scripts/compile_report.py is the explicit non-package exception).
-ONNX_IMPORTERS = ("torchwright_doom/inference/compile_cache.py",)
+ONNX_IMPORTERS = ("torchwright_doom/diagnostics/onnx.py",)
+
+# The one production file allowed to (lazily) import diagnostics/ — the CLI's
+# compile-onnx-debug dispatch path. Flips to the root cli.py in Workstream 10.
+DIAGNOSTICS_IMPORTERS = ("torchwright_doom/inference/cli.py",)
 
 # Root dispatch-only CLI; None until Workstream 10 creates it.
 CLI_PATH: str | None = None
@@ -227,7 +231,7 @@ def test_onnx_imports_are_confined() -> None:
 
 
 def test_diagnostics_imports_are_confined_to_lazy_cli_dispatch() -> None:
-    allowed = {ROOT / CLI_PATH} if CLI_PATH is not None else set()
+    allowed = {ROOT / rel for rel in DIAGNOSTICS_IMPORTERS}
     diagnostics_dir = PACKAGE / "diagnostics"
     offenders = [
         path
@@ -237,8 +241,8 @@ def test_diagnostics_imports_are_confined_to_lazy_cli_dispatch() -> None:
         and _imports_module(path, "torchwright_doom.diagnostics")
     ]
     assert not offenders, offenders
-    if CLI_PATH is not None:
-        for node in _tree(ROOT / CLI_PATH).body:  # module top level: must be lazy
+    for rel in DIAGNOSTICS_IMPORTERS:
+        for node in _tree(ROOT / rel).body:  # module top level: must be lazy
             assert all("diagnostics" not in name for name in _statement_names(node))
 
 

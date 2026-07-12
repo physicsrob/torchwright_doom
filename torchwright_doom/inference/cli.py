@@ -69,16 +69,10 @@ def compile_config(
 def compile_onnx_debug_config(
     *, config_path: str | Path, verbose_compile: bool = False
 ) -> dict[str, Any]:
-    """Explicit diagnostic backend; its output is never accepted by rendering."""
-    config_path = Path(config_path)
-    config = load_render_config(config_path)
-    apply_screen_env(config)
-    from .compile_cache import compile_onnx_debug_cached
+    """Explicit diagnostic backend; lazy dispatch into diagnostics.onnx."""
+    from ..diagnostics.onnx import compile_onnx_debug_config as diagnostic
 
-    cache_dir = compile_onnx_debug_cached(
-        config, base_dir=config_path.parent, verbose=verbose_compile
-    )
-    return {"cache_dir": str(cache_dir), "artifact_kind": "onnx_debug"}
+    return diagnostic(config_path=config_path, verbose_compile=verbose_compile)
 
 
 def run_config(

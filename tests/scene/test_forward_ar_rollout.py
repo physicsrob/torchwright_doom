@@ -95,7 +95,7 @@ def _build_compiled(device, *, d: int, d_head: int, max_layers: int = 200):
     This test is the one place a compiled doom forward still runs in-process:
     production inference is the cached ONNX artifact, so the in-process compile
     lives here (the graph construction is shared via
-    ``inference.compiled_model.build_graph``; torchwright's ``compile_headless``
+    ``model_graph.build_graph``; torchwright's ``compile_headless``
     is its in-process debug/test reference compiler).
     """
     from torchwright.compiler.export import compile_headless
