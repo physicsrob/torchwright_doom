@@ -1,14 +1,25 @@
-"""YAML-config render CLI.
+"""Render-job orchestration: the end-to-end ``run_config`` driver.
 
-Commands:
+The conductor may see everything; nothing sees the conductor. Its phases:
 
-``python -m torchwright_doom.inference compile --config job.yaml``
-``python -m torchwright_doom.inference run --config job.yaml --x 1056 --y -3616 --angle 64``
+    load config -> load WAD scene and pose -> construct prompt row ids
+    -> rows to canonical prompt text (tokenizer/codec + bundle vocab)
+    -> execute <bundle>/infer.py as a subprocess
+    -> validate output.ids.json / output.txt
+    -> interpret: decode / compare / write optional artifacts
+
+It never loads a model or tokenizer through Transformers, never calls
+``.generate()``, never compiles, never imports diagnostics, and never
+modifies the canonical inference artifacts after the subprocess returns.
+Prompt text, ``output.ids.json``, and ``output.txt`` are the retained
+artifacts; everything else is reproducible downstream.
+
+Graph-reaching imports stay inside ``run_config`` after
+``apply_screen_env`` (the import-time screen-environment rule).
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import subprocess
 import sys
@@ -16,40 +27,13 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from ..config import (
+from .config import (
     apply_screen_env,
     load_render_config,
     resolve_run_args,
     resolve_wad_path,
 )
-from ..identity import hf_bundle_cache_dir
-
-
-def compile_config(
-    *,
-    config_path: str | Path,
-    verbose_compile: bool = False,
-    cache_dir: str | Path | None = None,
-    compile_payload: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Publication moved to bundle.build; lazy dispatch."""
-    from ..bundle.build import compile_config as build_compile_config
-
-    return build_compile_config(
-        config_path=config_path,
-        verbose_compile=verbose_compile,
-        cache_dir=cache_dir,
-        compile_payload=compile_payload,
-    )
-
-
-def compile_onnx_debug_config(
-    *, config_path: str | Path, verbose_compile: bool = False
-) -> dict[str, Any]:
-    """Explicit diagnostic backend; lazy dispatch into diagnostics.onnx."""
-    from ..diagnostics.onnx import compile_onnx_debug_config as diagnostic
-
-    return diagnostic(config_path=config_path, verbose_compile=verbose_compile)
+from .identity import hf_bundle_cache_dir
 
 
 def run_config(
@@ -83,14 +67,14 @@ def run_config(
     x, y, angle, viewz = args.x, args.y, args.angle, args.viewz
     max_new_tokens = args.max_new_tokens
 
-    from ..bundle.manifest import validate_bundle_manifest
-    from ..interpret import artifacts, compare as compare_mod
-    from ..interpret.decode import decode_rows_to_pixels
-    from ..interpret.reference import pydoom_scene_for
-    from ..prompt.scene import load_render_scene, pose_from_world, prefill_rows_for
-    from ..tokenizer.codec import raw_text_from_rows, rows_from_raw_text
-    from ..tokenizer.rows import row_index
-    from ..vocab import DONE
+    from .bundle.manifest import validate_bundle_manifest
+    from .interpret import artifacts, compare as compare_mod
+    from .interpret.decode import decode_rows_to_pixels
+    from .interpret.reference import pydoom_scene_for
+    from .prompt.scene import load_render_scene, pose_from_world, prefill_rows_for
+    from .tokenizer.codec import raw_text_from_rows, rows_from_raw_text
+    from .tokenizer.rows import row_index
+    from .vocab import DONE
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -237,55 +221,3 @@ def run_config(
         "cache_dir": str(cache_dir),
         "out_dir": str(out_dir),
     }
-
-
-def main(argv: list[str] | None = None) -> int:
-    argv = list(sys.argv[1:] if argv is None else argv)
-    p = argparse.ArgumentParser(description="Compile and run YAML DOOM render jobs")
-    sub = p.add_subparsers(dest="command", required=True)
-
-    pc = sub.add_parser("compile", help="compile config to a complete Phi-3 bundle")
-    pc.add_argument("--config", required=True, dest="config_path")
-    pc.add_argument("--verbose-compile", action="store_true", dest="verbose_compile")
-
-    pod = sub.add_parser(
-        "compile-onnx-debug", help="compile the explicit diagnostic ONNX artifact"
-    )
-    pod.add_argument("--config", required=True, dest="config_path")
-    pod.add_argument("--verbose-compile", action="store_true", dest="verbose_compile")
-
-    pr = sub.add_parser("run", help="render one pose from a YAML config")
-    pr.add_argument("--config", required=True, dest="config_path")
-    pr.add_argument("--x", type=float)
-    pr.add_argument("--y", type=float)
-    pr.add_argument("--angle", type=int)
-    pr.add_argument("--viewz", type=float)
-    # Run-knob defaults live in the config's ``run:`` section (run_config
-    # resolves None there) — argparse must NOT restate them.
-    pr.add_argument("--out-dir", default="out/render", dest="out_dir")
-    pr.add_argument("--max-new-tokens", type=int, default=None, dest="max_new_tokens")
-    pr.add_argument("--png", action="store_true")
-    pr.add_argument("--compare", action="store_true", dest="compare_images")
-    pr.add_argument("--png-zoom", type=int, default=8, dest="png_zoom")
-    pr.add_argument(
-        "--device",
-        default="cpu",
-        help="torch device for the HF model (cpu | cuda); the full frame "
-        "needs a big GPU",
-    )
-
-    args = p.parse_args(argv)
-    command = args.command
-    values = vars(args)
-    values.pop("command", None)
-    if command == "compile":
-        compile_config(**values)
-    elif command == "compile-onnx-debug":
-        compile_onnx_debug_config(**values)
-    else:
-        run_config(**values)
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

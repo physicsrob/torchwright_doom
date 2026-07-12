@@ -79,7 +79,7 @@ render-compile compile:
 
 .PHONY: compile-onnx-debug
 compile-onnx-debug:
-	uv run python -m torchwright_doom.inference compile-onnx-debug \
+	uv run python -m torchwright_doom compile-onnx-debug \
 		--config $(CONFIG) $(_RENDER_VERBOSE_COMPILE)
 
 .PHONY: probe-volume-publication

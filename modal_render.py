@@ -397,7 +397,7 @@ def render_remote(
 
     import torch
 
-    from torchwright_doom.inference.cli import run_config
+    from torchwright_doom.run import run_config
 
     kwargs = {**kwargs, "config_path": _write_shipped_config(config_name, config_text)}
 

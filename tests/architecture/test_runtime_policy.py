@@ -60,11 +60,11 @@ PORTABLE_IMPORTERS = (
 ONNX_IMPORTERS = ("torchwright_doom/diagnostics/onnx.py",)
 
 # The one production file allowed to (lazily) import diagnostics/ — the CLI's
-# compile-onnx-debug dispatch path. Flips to the root cli.py in Workstream 10.
-DIAGNOSTICS_IMPORTERS = ("torchwright_doom/inference/cli.py",)
+# compile-onnx-debug dispatch path.
+DIAGNOSTICS_IMPORTERS = ("torchwright_doom/cli.py",)
 
-# Root dispatch-only CLI; None until Workstream 10 creates it.
-CLI_PATH: str | None = None
+# The root dispatch-only CLI.
+CLI_PATH: str | None = "torchwright_doom/cli.py"
 
 # Flips True in the Workstream 2 commit that establishes bundle layout v2
 # (root infer.py + tools/) — afterwards no legacy layout name may remain.
