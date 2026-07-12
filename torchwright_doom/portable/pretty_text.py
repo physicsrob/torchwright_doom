@@ -168,10 +168,19 @@ class DoomTextFormatter:
         return rows
 
     def raw_text_from_rows(self, rows: list[int]) -> str:
-        try:
-            return " ".join(self.words[int(row)] for row in rows)
-        except (IndexError, TypeError):
-            raise ValueError("Doom row outside frozen vocabulary") from None
+        # Same explicit non-negative contract as tokenizer/codec.py (the
+        # project-side codec): reject negative rows rather than inheriting
+        # Python list wraparound. Parity tests pin the two implementations.
+        out = []
+        for row in rows:
+            try:
+                index = int(row)
+            except (TypeError, ValueError):
+                raise ValueError("Doom row outside frozen vocabulary") from None
+            if not 0 <= index < len(self.words):
+                raise ValueError("Doom row outside frozen vocabulary")
+            out.append(self.words[index])
+        return " ".join(out)
 
     def _carrier_kind(self, row: int) -> str | None:
         if self.value_start <= row < self.value_start + self.value_size:

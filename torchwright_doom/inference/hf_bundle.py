@@ -329,7 +329,10 @@ def _validate_complete_staged_bundle(
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer, DynamicCache
 
-    from ..formatter import DoomFormatter
+    # Decision 8: staged validation smoke-tests the exact shipped prettifier
+    # (the portable kernel), not the project wrapper — publication has no
+    # edge into interpret/.
+    from ..portable.pretty_text import DoomTextFormatter
 
     manifest = validate_bundle_manifest(bundle, allow_incomplete=True)
     tokenizer = AutoTokenizer.from_pretrained(bundle)
@@ -345,7 +348,7 @@ def _validate_complete_staged_bundle(
     actual_prompt = tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
     if actual_prompt != prompt_rows:
         raise ValueError("bundled prompt text does not reproduce build-time rows")
-    formatter = DoomFormatter.from_bundle(bundle, allow_incomplete=True)
+    formatter = DoomTextFormatter.from_bundle(bundle, allow_incomplete=True)
     raw_prompt = tokenizer.decode(
         prompt_rows, skip_special_tokens=False, clean_up_tokenization_spaces=False
     )
@@ -446,6 +449,7 @@ def compile_phi3_bundle(
     from torchwright.compiler import CompileProfile, compile_hf_bundle
 
     from ..bundle.layout import write_bundle_layout, write_model_card
+    from ..tokenizer.codec import raw_text_from_rows
     from ..tokenizer.freeze import write_frozen_data
     from ..tokenizer.identity import vocab_fingerprint
     from ..tokenizer.standard import (
@@ -472,7 +476,7 @@ def compile_phi3_bundle(
     scene = load_render_scene(config, base_dir=wad_path.parent)
     pose = pose_from_world(scene)
     prompt_rows = prefill_rows_for(scene, pose)
-    prompt_text = " ".join(words[row] for row in prompt_rows) + "\n"
+    prompt_text = raw_text_from_rows(words, prompt_rows) + "\n"
 
     with _outer_bundle_transaction(destination) as stage:
         report = compile_hf_bundle(

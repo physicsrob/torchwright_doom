@@ -113,6 +113,7 @@ def run_config(
     x, y, angle, viewz = args.x, args.y, args.angle, args.viewz
     max_new_tokens = args.max_new_tokens
 
+    from ..tokenizer.codec import raw_text_from_rows, rows_from_raw_text
     from ..vocab import DONE
     from . import artifacts, compare as compare_mod
     from .decode import decode_rows_to_pixels
@@ -160,10 +161,7 @@ def run_config(
     # retained as a run artifact.
     vocab = json.loads((cache_dir / "doom_vocab.json").read_text(encoding="utf-8"))
     words = list(vocab["words"])
-    try:
-        prompt_text = " ".join(words[row] for row in prefill_ids) + "\n"
-    except IndexError:
-        raise ValueError("render prompt contains a row outside the bundle vocabulary")
+    prompt_text = raw_text_from_rows(words, prefill_ids) + "\n"
     prompt_path = out_dir / "prompt.txt"
     prompt_path.write_text(prompt_text, encoding="utf-8")
 
@@ -205,11 +203,9 @@ def run_config(
         raise ValueError("portable inference claimed terminal without the DONE row")
     if termination == "cap" and len(emitted_rows) != max_new_tokens:
         raise ValueError("portable inference claimed cap at the wrong row count")
-    from ..formatter import DoomFormatter
-
-    text_rows = DoomFormatter.from_bundle(cache_dir).rows_from_raw_text(
-        raw_text_path.read_text(encoding="utf-8")
-    )
+    # Protocol validation goes through the contract (the raw-word codec over
+    # the bundle's frozen words), not the prettifier.
+    text_rows = rows_from_raw_text(words, raw_text_path.read_text(encoding="utf-8"))
     if text_rows != emitted_rows:
         raise ValueError("portable output.txt differs from output.ids.json")
     print(
