@@ -4,10 +4,10 @@
     uv run modal run modal_render.py --config configs/e1m1.yaml --png --compare
 
 Two remote stages: ``compile_remote`` (CPU-only, 64 cores so CP-SAT's parallel
-search gets real width; writes the ONNX into the cache volume) and
-``render_remote`` (a big GPU — the native HF model is ~28 GB fp32 weights plus
-an unbounded KV cache over the full frame). The render loads the artifact as a
-native ``TorchwrightForCausalLM`` (the production runtime). The compile cache
+search gets real width; writes a complete direct-HF bundle into its volume) and
+``render_remote`` (a big GPU — the dense native HF checkpoint is ~98 GB fp32
+plus the generation cache over the full frame). The render executes the
+artifact's isolated stock-Transformers ``examples/infer.py``. The compile cache
 key is computed on the LOCAL machine because it embeds submodule git SHAs that
 don't exist inside a Modal container.
 Artifacts (generated/reference/diff PNGs + token_dump.json) are written to a
@@ -29,7 +29,7 @@ from pathlib import Path
 
 import modal
 
-from modal_image import ASSETS_IMAGE, CACHE_VOLUME
+from modal_image import ASSETS_IMAGE, HF_BUNDLE_VOLUME
 
 _HERE = Path(__file__).resolve().parent
 
@@ -52,25 +52,85 @@ _COMPILE_CPUS = 64
 # Render GPU — an env var (NOT a config field) because it parameterizes the
 # ``@app.function(gpu=...)`` decorator at module-import time, before --config
 # is parsed.  The Makefile exports it (``RENDER_GPU ?= b200``); the fallback
-# here must match.  B200 is the default: the captured decode step is
-# KV-bandwidth-bound, so GPU HBM bandwidth maps ~directly to step time
-# (A100-80GB ~2 TB/s; B200 ~8 TB/s and 192 GB fits the 64k cache + 1024-row
-# prefill chunks comfortably).  The A100 also has slack for the windowed
-# production config (~11.4 GB KV + ~17 GB weights): RENDER_GPU=a100-80gb.
+# here must match. B200 is the default: its 192 GB HBM fits the ~98 GB dense
+# fp32 model plus the growing stock generation cache, and its high bandwidth
+# makes autoregressive decode fast.
 import os as _os
 
 _RENDER_GPU = _os.environ.get("RENDER_GPU", "b200")
 
 
 @app.function(
+    cpu=1,
+    volumes={"/bundle-volume": HF_BUNDLE_VOLUME},
+)
+def _volume_publication_probe_write(token: str) -> str:
+    """Exercise the exact non-empty-directory replacement used by publication."""
+    import os
+    import shutil
+    from pathlib import Path
+
+    HF_BUNDLE_VOLUME.reload()
+    root = Path("/bundle-volume/.publication-probe") / token
+    current, staging, backup = root / "current", root / "staging", root / "backup"
+    root.mkdir(parents=True)
+    current.mkdir()
+    staging.mkdir()
+    (current / "identity").write_text("old")
+    (staging / "identity").write_text("new")
+    os.replace(current, backup)
+    try:
+        os.replace(staging, current)
+        if (current / "identity").read_text() != "new":
+            raise RuntimeError("directory replacement did not expose staged content")
+        # Simulate rollback of the newly published directory.
+        os.replace(current, staging)
+        os.replace(backup, current)
+        if (current / "identity").read_text() != "old":
+            raise RuntimeError("directory rollback did not restore prior content")
+        shutil.rmtree(staging)
+        (root / "committed").write_text("visible")
+        HF_BUNDLE_VOLUME.commit()
+    except BaseException:
+        shutil.rmtree(root, ignore_errors=True)
+        raise
+    return str(root)
+
+
+@app.function(
+    cpu=1,
+    volumes={"/bundle-volume": HF_BUNDLE_VOLUME},
+)
+def _volume_publication_probe_read(token: str) -> None:
+    import shutil
+    from pathlib import Path
+
+    HF_BUNDLE_VOLUME.reload()
+    root = Path("/bundle-volume/.publication-probe") / token
+    if (root / "committed").read_text() != "visible":
+        raise RuntimeError("committed publication probe is not visible after reload")
+    shutil.rmtree(root)
+    HF_BUNDLE_VOLUME.commit()
+
+
+@app.local_entrypoint()
+def probe_volume_publication():
+    """One-off production-volume rename/rollback/commit/reload gate."""
+    import uuid
+
+    token = uuid.uuid4().hex
+    _volume_publication_probe_write.remote(token)
+    _volume_publication_probe_read.remote(token)
+    print("Modal HF bundle volume publication semantics: PASS")
+
+
+@app.function(
     cpu=_COMPILE_CPUS,
-    # Building + exporting holds the full weight set plus the ONNX
-    # serialization copy in RAM: ~23 GB fp32 at d=4096, ~4x that at the
-    # d=8192/h16384 flagship config — size for the latter.
+    # Direct bundle compilation streams each completed layer to its final shard.
     memory=262144,
     timeout=10800,
     volumes={
-        "/root/.cache/torchwright_doom/compiled": CACHE_VOLUME,
+        "/root/.cache/torchwright_doom/hf_phi3": HF_BUNDLE_VOLUME,
         "/root/.cache/torchwright_doom/schedules": SCHEDULE_VOLUME,
     },
 )
@@ -95,7 +155,7 @@ def compile_remote(
     os.environ["TW_CPSAT_WORKERS"] = str(_COMPILE_CPUS)
     if disable_cache:
         # DISABLE_CACHE: neither durable cache is read or written.  Both the
-        # ONNX artifact and the schedule entry go to a per-call scratch dir
+        # HF bundle and the schedule entry go to a per-call scratch dir
         # (mkdtemp, not a fixed path: a warm container must not hand a later
         # no-cache run an earlier one's artifact or schedule as a hit), and
         # the volume reload/commit pairs are skipped — the mounts stay
@@ -104,7 +164,7 @@ def compile_remote(
 
         scratch = tempfile.mkdtemp(prefix="compile-nocache-", dir="/tmp")
         os.environ["TW_SCHEDULE_CACHE_DIR"] = f"{scratch}/schedules"
-        cache_dir = f"{scratch}/compiled/{cache_subdir}"
+        cache_dir = f"{scratch}/hf_phi3/{cache_subdir}"
         print(f"[compile] [nocache] volumes bypassed; scratch={scratch}", flush=True)
     else:
         # Durable schedule cache (see SCHEDULE_VOLUME above).
@@ -112,9 +172,9 @@ def compile_remote(
         # The cache key + payload come from the LOCAL machine: this container
         # has no ``.git``, so deriving them here would collapse the git SHAs
         # to "unknown" and silently reuse a stale model across code changes.
-        CACHE_VOLUME.reload()
+        HF_BUNDLE_VOLUME.reload()
         SCHEDULE_VOLUME.reload()
-        cache_dir = f"/root/.cache/torchwright_doom/compiled/{cache_subdir}"
+        cache_dir = f"/root/.cache/torchwright_doom/hf_phi3/{cache_subdir}"
 
     from torchwright_doom.inference.cli import compile_config
 
@@ -140,7 +200,7 @@ def compile_remote(
             flush=True,
         )
     else:
-        CACHE_VOLUME.commit()
+        HF_BUNDLE_VOLUME.commit()
         SCHEDULE_VOLUME.commit()
     return result
 
@@ -163,25 +223,21 @@ def _write_shipped_config(config_name: str, config_text: str) -> str:
     return str(dest)
 
 
-def _volume_has_compiled(cache_subdir: str) -> bool:
-    """Local cache-hit probe so a hit skips the compile container entirely."""
-    try:
-        names = {
-            entry.path.rsplit("/", 1)[-1]
-            for entry in CACHE_VOLUME.listdir(f"/{cache_subdir}")
-        }
-    except (FileNotFoundError, modal.exception.NotFoundError):
-        return False  # genuinely no entry under that key
-    except Exception as exc:
-        # A volume/auth failure is NOT a cache miss — treating it as one
-        # spins up a 64-CPU compile container that immediately rediscovers
-        # the hit.  Degrade, but say what happened.
-        print(
-            f"[local] volume cache probe failed ({exc!r}) — treating as miss",
-            flush=True,
-        )
-        return False
-    return {"model.onnx", "model.meta.json"} <= names
+@app.function(
+    cpu=1,
+    volumes={"/root/.cache/torchwright_doom/hf_phi3": HF_BUNDLE_VOLUME},
+)
+def _bundle_cache_probe_remote(cache_subdir: str, compile_payload: dict) -> bool:
+    """Parse the manifest and structural index before declaring a cache hit."""
+    import sys
+
+    if "/root" not in sys.path:
+        sys.path.insert(0, "/root")
+    from torchwright_doom.inference.hf_bundle import is_complete_hf_bundle
+
+    HF_BUNDLE_VOLUME.reload()
+    directory = f"/root/.cache/torchwright_doom/hf_phi3/{cache_subdir}"
+    return is_complete_hf_bundle(directory, expected_payload=compile_payload)
 
 
 def _save_nocache_schedules(result: dict) -> None:
@@ -219,13 +275,13 @@ def _compile_on_modal(
     entrypoint (``compile_only``), so ``make compile`` and the implicit
     compile inside ``make run`` are byte-for-byte the same job: the same
     64-CPU ``compile_remote`` container, the same key, the same artifact in
-    CACHE_VOLUME.
+    HF_BUNDLE_VOLUME.
 
     The key embeds the submodule git SHAs, and Modal containers have no
     ``.git`` (``_git_sha`` collapses to "unknown" there, so a remotely-derived
     key would never change on a code edit — silently reusing a stale model).
     The local machine computes the canonical payload + key and hands both to
-    ``compile_remote``, which compiles straight into CACHE_VOLUME under that
+    ``compile_remote``, which compiles straight into HF_BUNDLE_VOLUME under that
     key with CP-SAT fanned out across the container's 64 CPUs.
 
     Importing ``inference.config`` here is safe: it has no dependency on the
@@ -235,7 +291,7 @@ def _compile_on_modal(
 
     ``disable_cache`` (the ``DISABLE_CACHE=1 make compile`` path) skips the
     HIT probe (a volume read), compiles into container-local scratch instead
-    of CACHE_VOLUME, and mirrors the sampled schedule to local /tmp — the
+    of HF_BUNDLE_VOLUME, and mirrors the sampled schedule to local /tmp — the
     durable caches are neither read nor written.
 
     Returns the cache subdir (the volume-relative key).
@@ -271,12 +327,12 @@ def _compile_on_modal(
             True,
         )
         _save_nocache_schedules(result)
-    elif _volume_has_compiled(cache_subdir):
-        print(f"[local] compile cache HIT CACHE_VOLUME:/{cache_subdir}", flush=True)
+    elif _bundle_cache_probe_remote.remote(cache_subdir, compile_payload):
+        print(f"[local] compile cache HIT HF_BUNDLE_VOLUME:/{cache_subdir}", flush=True)
     else:
         print(
             f"[local] compile cache MISS — compiling {config_path} on Modal "
-            f"({_COMPILE_CPUS} CPUs) -> CACHE_VOLUME:/{cache_subdir}",
+            f"({_COMPILE_CPUS} CPUs) -> HF_BUNDLE_VOLUME:/{cache_subdir}",
             flush=True,
         )
         compile_remote.remote(
@@ -299,25 +355,27 @@ def compile_only(
 
     Runs the SAME 64-CPU ``compile_remote`` path ``make run`` uses on a cache
     miss, so the production artifact is built once with the wide CP-SAT search
-    and a later ``make run`` is a cache hit.  The compiled ONNX lives in
-    CACHE_VOLUME (durable), exactly where ``render_remote`` reads it — there is
-    no local-disk copy (that is what ``make run-local`` would build instead).
+    and a later ``make run`` is a cache hit. The complete Phi-3 bundle lives in
+    HF_BUNDLE_VOLUME (durable), exactly where ``render_remote`` reads it.
 
     ``--disable-cache`` (``DISABLE_CACHE=1 make compile``) runs the same
     production compile but touches neither durable cache: no HIT probe, the
-    artifact dies with the container, and the sampled schedule is mirrored to
+    bundle dies with the container, and the sampled schedule is mirrored to
     local /tmp instead of SCHEDULE_VOLUME (see _save_nocache_schedules).
     """
     config_path = Path(config)
     cache_subdir = _compile_on_modal(config_path, verbose_compile, disable_cache)
     if disable_cache:
         print(
-            "[local] [nocache] compile complete — CACHE_VOLUME/SCHEDULE_VOLUME "
+            "[local] [nocache] compile complete — HF_BUNDLE_VOLUME/SCHEDULE_VOLUME "
             "untouched (artifact discarded with the container)",
             flush=True,
         )
     else:
-        print(f"[local] compile complete -> CACHE_VOLUME:/{cache_subdir}", flush=True)
+        print(
+            f"[local] compile complete -> HF_BUNDLE_VOLUME:/{cache_subdir}",
+            flush=True,
+        )
 
 
 @app.function(
@@ -327,7 +385,7 @@ def compile_only(
     timeout=5400,
     volumes={
         "/artifacts": RENDER_VOLUME,
-        "/root/.cache/torchwright_doom/compiled": CACHE_VOLUME,
+        "/root/.cache/torchwright_doom/hf_phi3": HF_BUNDLE_VOLUME,
     },
 )
 def render_remote(
@@ -345,11 +403,11 @@ def render_remote(
     kwargs = {**kwargs, "config_path": _write_shipped_config(config_name, config_text)}
 
     # Compilation happens in ``compile_remote`` (a separate 64-CPU container),
-    # which writes the ONNX into CACHE_VOLUME under ``cache_subdir``. Reload so
+    # which writes the validated bundle under ``cache_subdir``. Reload so
     # those files are visible, then point the renderer straight at them — this
     # container is render-only and never compiles.
-    CACHE_VOLUME.reload()
-    cache_dir = f"/root/.cache/torchwright_doom/compiled/{cache_subdir}"
+    HF_BUNDLE_VOLUME.reload()
+    cache_dir = f"/root/.cache/torchwright_doom/hf_phi3/{cache_subdir}"
     device = "cuda" if torch.cuda.is_available() else "cpu"
     kwargs = {**kwargs, "cache_dir": cache_dir, "device": device}
 
@@ -363,107 +421,6 @@ def render_remote(
     return {"summary": summary, "files": files}
 
 
-@app.function(
-    gpu=_RENDER_GPU,
-    cpu=8,
-    memory=131072,
-    timeout=5400,
-    volumes={
-        "/artifacts": RENDER_VOLUME,
-        "/root/.cache/torchwright_doom/compiled": CACHE_VOLUME,
-    },
-)
-def hf_export_remote(
-    config_name: str,
-    config_text: str,
-    cache_subdir: str,
-) -> dict:
-    """Convert the compiled DOOM artifact to a native HF bundle.
-
-    Runs on the render GPU: the densified fp32 weights (~28 GB) need a big card.
-    The full bundle (safetensors) is written to RENDER_VOLUME (durable, ~28 GB —
-    never synced back); only ``config.json`` and the export report return to the
-    local entrypoint.
-    """
-    import sys
-
-    if "/root" not in sys.path:
-        sys.path.insert(0, "/root")
-
-    from torchwright_doom.inference.config import (
-        apply_screen_env,
-        load_render_config,
-    )
-
-    config_path = _write_shipped_config(config_name, config_text)
-    config = load_render_config(config_path)
-    # Screen env BEFORE any vocab/embedding/scene/fixture import (the DOOM vocab
-    # is screen-sized at import time).
-    apply_screen_env(config)
-
-    from torchwright_doom.inference import hf_export
-
-    CACHE_VOLUME.reload()
-    cache_dir = f"/root/.cache/torchwright_doom/compiled/{cache_subdir}"
-    onnx_path = f"{cache_dir}/model.onnx"
-    save_dir = f"/artifacts/hf/{cache_subdir}"
-
-    export = hf_export.export_bundle(onnx_path, save_dir, config)
-    RENDER_VOLUME.commit()
-
-    from pathlib import Path as _P
-
-    config_json = (_P(save_dir) / "config.json").read_text()
-    files = sorted(p.name for p in _P(save_dir).glob("*") if p.is_file())
-    return {
-        "export": export,
-        "config_json": config_json,
-        "bundle_files": files,
-        "remote_bundle": save_dir,
-    }
-
-
-@app.local_entrypoint()
-def hf_export(
-    config: str = "configs/e1m1.yaml",
-    out_dir: str = "out/hf_export",
-    verbose_compile: bool = False,
-):
-    """``make hf-export`` — convert the compiled DOOM artifact to a native HF
-    bundle on Modal (the Hub publish path).
-
-    Compiles on a cache miss (same 64-CPU path as ``make compile``), then runs
-    the GPU export. The 28 GB safetensors bundle stays in RENDER_VOLUME;
-    ``config.json`` + the report mirror to ``out_dir`` locally. Correctness is
-    gated separately by ``make hf-render`` (the full render vs pydoom).
-    """
-    config_path = Path(config)
-    config_text = config_path.read_text()
-    cache_subdir = _compile_on_modal(config_path, verbose_compile)
-
-    print(f"[local] launching hf_export_remote cache_subdir={cache_subdir}")
-    result = hf_export_remote.remote(config_path.name, config_text, cache_subdir)
-
-    local_dir = _HERE / out_dir
-    local_dir.mkdir(parents=True, exist_ok=True)
-    (local_dir / "config.json").write_text(result["config_json"])
-    import json as _json
-
-    (local_dir / "report.json").write_text(
-        _json.dumps({"export": result["export"]}, indent=2)
-    )
-    print("\n=== HF export ===")
-    export = result["export"]
-    print(f"  vocab_size: {export['vocab_size']}  n_layers: {export['n_layers']}")
-    print(
-        f"  bos_token_id: {export['bos_token_id']}  eos_token_id: {export['eos_token_id']}"
-    )
-    print(
-        f"\n[local] bundle files (remote {result['remote_bundle']}): {result['bundle_files']}"
-    )
-    print(f"[local] config.json + report.json -> {local_dir}")
-
-
 @app.local_entrypoint()
 def main(
     # Run-knob defaults live in the config's ``run:`` section — run_config
@@ -475,9 +432,7 @@ def main(
     viewz: float | None = None,
     out_dir: str = "out/render",
     run_name: str = "",
-    max_positions: int | None = None,
-    prefill_chunk_size: int | None = None,
-    progress_every: int = 250,
+    max_new_tokens: int | None = None,
     png: bool = False,
     compare: bool = False,
     png_zoom: int = 8,
@@ -514,13 +469,10 @@ def main(
         y=y,
         angle=angle,
         viewz=viewz,
-        max_positions=max_positions,
-        prefill_chunk_size=prefill_chunk_size,
-        progress_every=progress_every,
+        max_new_tokens=max_new_tokens,
         png=png,
         compare_images=compare,
         png_zoom=png_zoom,
-        verbose_compile=verbose_compile,
     )
     print(f"[local] launching render_remote run_id={run_id} kwargs={kwargs}")
     result = render_remote.remote(

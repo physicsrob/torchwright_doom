@@ -32,6 +32,7 @@ def _row_entry(pos: int, row: int, phase: str) -> dict[str, Any]:
         text = rtype.name
     return {
         "pos": pos,
+        "row_id": int(row),
         "type": rtype.name,
         "values": vals,
         "text": text,
@@ -49,6 +50,7 @@ def build_token_dump(
     mode: str,
     label: str | None = None,
     config: dict[str, Any] | None = None,
+    bundle_manifest: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the K ``token_dump`` payload (one case)."""
     n_prefill = len(prefill_rows)
@@ -67,12 +69,23 @@ def build_token_dump(
             "rollout_positions": len(emitted_rows),
             "predicted_positions": n_prefill + len(emitted_rows),
         },
+        "prefill_row_ids": [int(row) for row in prefill_rows],
+        "emitted_row_ids": [int(row) for row in emitted_rows],
         "prefill_input_tokens": prefill_entries,
         "predicted_next_tokens": rollout_entries,
         "rollout_output_tokens": rollout_entries,
     }
     if config is not None:
         case["config"] = config
+    if bundle_manifest is not None:
+        case["bundle"] = {
+            "identity": bundle_manifest.get("bundle_identity"),
+            "compile_payload_sha256": bundle_manifest.get("compile_payload_sha256"),
+            "row_vocab_fingerprint": bundle_manifest.get("row_vocab_fingerprint"),
+            "screen": bundle_manifest.get("screen"),
+            "wad": bundle_manifest.get("wad"),
+            "map": bundle_manifest.get("map"),
+        }
     return {
         "schema_version": 1,
         "implementation": "torchwright_doom_compiled",

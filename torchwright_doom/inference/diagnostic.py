@@ -21,7 +21,6 @@ from typing import TYPE_CHECKING
 
 from ..embedding import TOKEN_VOCAB
 from ..vocab import ANGLE_VALUE, PIXEL, VALUE
-from .generation import argmax_rows
 from .decode import decode_xy_by_position, pixel_color_index
 from .tokens_bridge import rows_to_input
 
@@ -42,6 +41,10 @@ _VALUE_LEVELS = _VALUE_END - _VALUE_START
 _ANGLE_START, _ANGLE_END = TOKEN_VOCAB.type_to_row_range[ANGLE_VALUE]
 _ANGLE_LEVELS = _ANGLE_END - _ANGLE_START
 _ANGLE_LO = -_ANGLE_LEVELS // 2  # angle slot is centered (IntSlot(-N/2, N/2))
+
+
+def _argmax_rows(outputs):
+    return outputs.detach().argmax(dim=-1).cpu().tolist()
 
 
 def carrier_delta(name: str, predicted_row: int, expected_row: int):
@@ -111,7 +114,7 @@ def teacher_forced_scan(
         out, past = compiled.step(rows_to_input(chunk), past, past_len=offset)
         outs.append(out)
         offset += len(chunk)
-    predicted = argmax_rows(torch.cat(outs))  # one argmax per fed position
+    predicted = _argmax_rows(torch.cat(outs))  # one argmax per fed position
     pixel_xy = decode_xy_by_position(full_rows[:n])
 
     divergences: list[Divergence] = []

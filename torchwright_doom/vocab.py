@@ -27,7 +27,7 @@ attention-keyed addressing.
 
 ``tests/protocol/test_protocol_registry.py`` pins the contract (every vocab
 type is registered exactly once, and the registry size tracks ``VOCAB_TYPES``);
-the tokenizer's ``vocab_fingerprint`` (``tokenizer/hf_tokenizer.py``) catches
+the tokenizer's ``vocab_fingerprint`` (``tokenizer/identity.py``) catches
 any type/slot/screen drift in a saved bundle.
 """
 

@@ -16,7 +16,7 @@
 # Certified against the pydoom reference at 320x200: 100% pixel coverage,
 # ~99.99% within-option color (96.5% exact), ~53,748-token rollout.
 wad: doom1.wad
-model: {d: 8192, d_head: 128, d_rot: 64, scale: 1, detail: low, hud: true, d_hidden: 16384, optimize: 3, bias: false}
+model: {d: 8192, d_head: 128, d_rot: 64, scale: 1, detail: low, hud: true, d_hidden: 16384, optimize: 3}
 region: {x1: 627.2, y1: -3760.0, x2: 1395.2, y2: -2800.0}
 textures:
   wall: [BROWN1, BROWN144, COMPUTE2, DOOR3, DOORSTOP, LITE3, STARTAN3, STEP6, SUPPORT2]
@@ -27,11 +27,8 @@ run:
   # Covers the full 320x200 low-detail frame (~53,748 tokens) with headroom;
   # the cap sizes the RoPE global-position recovery range (the BOS-weight PWL
   # in global_position_from_bos) and bounds content dominance for recency
-  # (match_gain > RECENCY_GAIN * max_positions); an oversized demand makes
-  # empty_past() reject before prefill.
-  max_positions: 61440
-  # Prefill chunk size: a memory knob bounding the per-pass transient
-  # activations; semantically identical to a single pass.
-  prefill_chunk_size: 128
+  # (match_gain > RECENCY_GAIN * max positions); the model's 65536-position
+  # capacity also bounds prompt length + generated length.
+  max_new_tokens: 61440
   # E1M1 start room, world coordinates (map data, like region:).
   pose: {x: 1056.0, y: -3616.0, angle: 64, viewz: 41.0}

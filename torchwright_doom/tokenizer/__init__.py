@@ -11,8 +11,10 @@ id<->label map at its core; the readability lives in the labels).
   ``parse(text) -> tokens``. Baked context-free labels, one contextual rule
   (de-quantize a ``VALUE`` by its preceding marker's range), header-break
   line layout. Works at the ``Token`` / ``(TokenType, values)`` level.
-* :mod:`.hf_tokenizer` — ``DoomTokenizer(PreTrainedTokenizer)`` wrapping
-  ``surface`` + ``tokens_bridge`` (the id<->token bijection).
+* :mod:`.standard` — the published stock fast WordLevel tokenizer.  It maps
+  one compact semantic word to each existing row and contains no custom code.
+* :mod:`.surface` — retained as the in-package presentation grammar behind
+  ``DoomFormatter``; it is not registered as a Hugging Face tokenizer.
 
 Sibling to ``inference/`` and subject to the same import-time-vocab caveat:
 ``embedding`` builds the screen-sized vocab AT IMPORT, so configure the screen

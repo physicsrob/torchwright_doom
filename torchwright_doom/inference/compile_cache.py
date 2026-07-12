@@ -1,4 +1,4 @@
-"""Compile-artifact cache for YAML render jobs (the KV cache lives in kv_cache.py)."""
+"""Explicit ONNX diagnostic cache; never a production render input."""
 
 from __future__ import annotations
 
@@ -9,11 +9,11 @@ from typing import TYPE_CHECKING, Any
 
 from ..asset_config import MISSING_TEXTURE_ID
 from ..vocab import DONE, PIXEL
-from .compiled_model import compile_to_onnx_path
+from .compiled_model import compile_onnx_debug_path
 from .config import (
     RenderConfig,
-    canonical_compile_payload,
-    compile_cache_dir,
+    canonical_onnx_debug_payload,
+    onnx_debug_cache_dir,
     resolve_wad_path,
 )
 from .tokens_bridge import row_index
@@ -21,8 +21,10 @@ from .tokens_bridge import row_index
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from torchwright.debug.onnx_debug import OnnxDebugSession
 
+_ONNX_DEBUG_CACHE_STRIDE = 12288
 
-def compile_cached(
+
+def compile_onnx_debug_cached(
     config: RenderConfig,
     *,
     base_dir: str | Path | None = None,
@@ -30,7 +32,7 @@ def compile_cached(
     cache_dir: str | Path | None = None,
     compile_payload: dict[str, Any] | None = None,
 ) -> Path:
-    """Compile ``config`` into the ONNX cache (skipping on a cache hit).
+    """Compile ``config`` into the ONNX diagnostic cache on a miss.
 
     ``cache_dir`` / ``compile_payload`` exist for the Modal compile path:
     the cache key embeds git SHAs that are unresolvable inside a Modal
@@ -38,8 +40,10 @@ def compile_cached(
     hands them over — the container must never derive its own key.
     """
     wad_path = resolve_wad_path(config, base_dir=base_dir)
+    from torchwright.compiler import CompileProfile
+
     if cache_dir is None:
-        cache_dir = compile_cache_dir(config, wad_path)
+        cache_dir = onnx_debug_cache_dir(config, wad_path)
     else:
         cache_dir = Path(cache_dir)
     onnx_path = cache_dir / "model.onnx"
@@ -50,7 +54,7 @@ def compile_cached(
 
     cache_dir.mkdir(parents=True, exist_ok=True)
     print(f"[compile] cache miss {cache_dir}", flush=True)
-    build_info = compile_to_onnx_path(
+    build_info = compile_onnx_debug_path(
         onnx_path,
         d=config.model.d,
         d_head=config.model.d_head,
@@ -58,10 +62,10 @@ def compile_cached(
         d_hidden=config.model.d_hidden,
         max_layers=config.model.max_layers,
         max_seq_len=config.model.max_seq_len,
-        cache_stride=config.model.cache_stride,
+        cache_stride=_ONNX_DEBUG_CACHE_STRIDE,
         trim_heads=config.model.trim_heads,
         optimize=config.model.optimize,
-        bias=config.model.bias,
+        profile=CompileProfile.PHI3,
         verbose=verbose,
         asset_config=config.asset_config(),
         wad_path=wad_path,
@@ -85,18 +89,17 @@ def compile_cached(
     # from the meta just written so the number is the artifact's, not a
     # build-info guess.
     meta = json.loads(meta_path.read_text())
-    # Schedule provenance next to the optimize level, unconditionally: a
-    # CACHED replay or a heuristic fallback prints a depth that the
-    # configured optimize level had no part in producing, and without the
-    # status that number reads as the level's result (it has).  Values per
-    # torchwright's _schedule_provenance: OPTIMAL / FEASIBLE = a real solve
-    # at this level, CACHED = schedule-cache replay, UNKNOWN / INFEASIBLE =
-    # heuristic fallback, heuristic = solver never ran (optimize=0).
-    sched_status = (meta.get("schedule") or {}).get("status") or "heuristic"
+    # Lead with the schedule actually emitted. Solver-attempt status is a
+    # separate diagnostic and must not be mistaken for artifact identity.
+    schedule = meta.get("schedule") or {}
+    selected_origin = schedule.get("selected_origin") or "heuristic"
+    delivery = schedule.get("delivery") or "fresh"
+    selected_objective = schedule.get("selected_objective")
     print(
         f"[compile] {meta.get('n_layers')} layers "
         f"(d={config.model.d}, d_hidden={config.model.d_hidden or config.model.d}, "
-        f"optimize={config.model.optimize}, schedule={sched_status}, "
+        f"optimize={config.model.optimize}, selected={selected_origin}, "
+        f"delivery={delivery}, objective={selected_objective}, "
         f"scale={config.model.scale}, "
         f"d_embed={meta.get('d_embed')}, vocab_rows={meta.get('n_vocab_rows')}) "
         f"-> {cache_dir}",
@@ -105,7 +108,7 @@ def compile_cached(
     return cache_dir
 
 
-def load_debug_session(
+def load_onnx_debug_session(
     cache_dir: str | Path | None,
     config: RenderConfig,
     *,
@@ -127,7 +130,7 @@ def load_debug_session(
 
     wad_path = resolve_wad_path(config, base_dir=base_dir)
     if cache_dir is None:
-        cache_dir = compile_cache_dir(config, wad_path)
+        cache_dir = onnx_debug_cache_dir(config, wad_path)
     else:
         cache_dir = Path(cache_dir)
     onnx_path = cache_dir / "model.onnx"
@@ -196,11 +199,13 @@ def _write_render_meta(
         **existing,
         "render_meta_format": "torchwright_doom.inference.v1",
         # Prefer the handed-over payload: computed remotely it would carry
-        # "unknown" git SHAs (see compile_cached docstring).
+        # "unknown" git SHAs (see compile_onnx_debug_cached docstring).
         "compile_payload": (
             compile_payload
             if compile_payload is not None
-            else canonical_compile_payload(config, wad_path)
+            else canonical_onnx_debug_payload(
+                config, wad_path, cache_stride=_ONNX_DEBUG_CACHE_STRIDE
+            )
         ),
         "model": asdict(config.model),
         "screen": {"width": config.screen[0], "height": config.screen[1]},

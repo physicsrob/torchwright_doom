@@ -2,9 +2,9 @@
 
 ``build_graph`` is the one place the doom forward graph is constructed for
 compilation and for artifact debugging (asset banks -> ``AssetIndex`` ->
-``build_doom_embedding("token_ids")`` -> ``forward``).  ``compile_to_onnx_path``
-compiles that graph to the production ONNX artifact; ``OnnxDebugSession`` over
-the cached artifact (see ``compile_cache.load_debug_session``) reuses the same
+``build_doom_embedding("token_ids")`` -> ``forward``).  ``compile_onnx_debug_path``
+compiles that graph to a diagnostic ONNX artifact; ``OnnxDebugSession`` over
+the cached artifact (see ``compile_cache.load_onnx_debug_session``) reuses the same
 construction, which is what its graph-fingerprint check requires.  Graph nodes
 are built **inside** ``build_graph`` — never at import (the
 import-time-node-free rule, twdoom CLAUDE.md).
@@ -67,7 +67,7 @@ def build_graph(
     return next_token, rope, emb, asset_banks
 
 
-def compile_to_onnx_path(
+def compile_onnx_debug_path(
     output_path: str | Path,
     *,
     d: int = 4096,
@@ -81,15 +81,16 @@ def compile_to_onnx_path(
     optimize: int = 0,
     d_hidden: int | None = None,
     rms_norm_const_exp: int = 63,
-    bias: bool = True,
     asset_config: AssetConfig | None = None,
     wad_path: str | Path | None = None,
     extra_metadata: dict[str, Any] | None = None,
+    profile=None,
 ) -> dict[str, Any]:
-    """Compile the token-id forward to ONNX and return basic build metadata.
+    """Compile the token-id forward to a diagnostic ONNX artifact.
 
-    ``cache_stride`` sets the static KV-cache slot count S baked into the
-    exported graph (see ModelConfig.cache_stride); the cache is unbounded.
+    ``cache_stride`` sets the diagnostic ONNX static KV-cache slot count S. It
+    is intentionally absent from production ``ModelConfig`` because direct HF
+    uses a growing ``DynamicCache``.
 
     ``rms_norm_const_exp`` (``q``) is the pinned-constant exponent for the
     identity RMSNorm (on by default at the production power-of-two ``d``).  The
@@ -129,8 +130,10 @@ def compile_to_onnx_path(
         "optimize": optimize,
         "cache_stride": cache_stride,
         "rms_norm_const_exp": rms_norm_const_exp,
-        "bias": bias,
+        "bias": False,
     }
+    if profile is not None:
+        kwargs["profile"] = profile
     if d_hidden is not None:
         kwargs["d_hidden"] = d_hidden
     if extra_metadata is not None:

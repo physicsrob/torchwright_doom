@@ -228,11 +228,11 @@ def compile_capture(
     """Compile once; return (compiled, node_to_layer, peak_width, peak_live).
 
     ``run_optimize_graph`` applies ``optimize_graph`` (``fuse_consecutive_linears``)
-    in place BEFORE compiling.  The production ONNX pipeline
-    (``compile_to_onnx_path``) applies this pre-pass ALWAYS-ON (656 fused
+    in place BEFORE compiling. The ONNX diagnostic pipeline
+    (``compile_onnx_debug_path``) applies this pre-pass ALWAYS-ON (656 fused
     pairs on the production graph — see the swiglu cutover record, find #4,
     and ``inference/compile_cache.py``'s debug-session mirror), so
-    production-comparable depth/width numbers need ``OPT_GRAPH=1``;
+    backend-comparable depth/width numbers need ``OPT_GRAPH=1``;
     without it you are measuring the unfused topology.
     ``d_hidden`` caps MLP weight memory (must be >= the widest single-layer MLP op).
     """

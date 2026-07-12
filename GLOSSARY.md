@@ -280,19 +280,16 @@ the graph by `table_lookup_2d`.
 
 ## Runtime
 
-The production runtime (`inference/`) loads the compiled artifact as a
-native HuggingFace `TorchwrightForCausalLM` and drives it through the same
-autoregressive loop any chat model uses; these terms name its host-side
-machinery.
+The production runtime executes the validated bundle's isolated
+`examples/infer.py`. That one script loads the stock model/tokenizer, accepts a
+text prompt, calls stock `model.generate()`, and writes canonical ids plus raw
+text.
+Everything Doom-specific after generation consumes those artifacts.
 
-- **HF runtime** — `inference/hf_runtime.py` (`HfTokenRuntime`): the sole
-  production renderer. It converts the ONNX artifact to a standard
-  `transformers` causal LM (`convert_onnx_to_hf`) and steps it greedily over
-  a stock unbounded `DynamicCache` (the duck-typed `HfCache`), behind the
-  `generation.TokenRuntime` row-id seam.
+- **Portable inference** — the bundle's `examples/infer.py`, copied verbatim
+  from `torchwright_doom/inference_example.py` and also used by production. It
+  is the only model-loading and generation path.
 
-- **KV cache** — the unbounded host-owned key/value cache: slot == position,
-  the committed prefix is `[:length]`, committing raises `length`
-  (`kv_cache.py`). The earlier windowed / expiring / speculative-decode
-  machinery was retired with the move to the HF runtime (see `CLAUDE.md`,
-  "Production runtime").
+- **KV cache** — Transformers' stock generation cache, wholly owned by
+  stock `Phi3ForCausalLM.generate()`. Doom has no second host-side inference
+  implementation.

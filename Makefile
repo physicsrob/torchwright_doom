@@ -1,18 +1,16 @@
-# THE config — the single committed configuration (see CLAUDE.md, "One
-# configuration").  Experiments copy it to /tmp and override CONFIG=.
+# THE production config. The only other maintained YAML is the low-resolution
+# validation config; experiments copy one to /tmp and override CONFIG=.
 #
-# Render-job defaults (pose, max positions, prefill chunk) live in the
+# Render-job defaults (pose and max new tokens) live in the
 # config's `run:` section — NOT here.  The Makefile passes a flag only when
-# the variable is set explicitly (e.g. `make run RENDER_MAX_POSITIONS=8000`),
+# the variable is set explicitly (e.g. `make run MAX_NEW_TOKENS=8000`),
 # so it can never hold a stale copy of a default.
 CONFIG ?= configs/e1m1.yaml
 OUT_DIR ?= out/render
 # Modal GPU for render_remote (read at modal_render.py import as an env
-# var).  b200 | a100-80gb — B200 is the default: the full frame is ~28 GB
-# fp32 weights plus a growing unbounded KV cache, and B200's 192 GB + high
-# HBM bandwidth render it fastest.
+# var). B200 is the default: the dense checkpoint is ~98 GB fp32 plus a growing
+# generation cache, and B200's 192 GB HBM fits it.
 RENDER_GPU ?= b200
-RENDER_PROGRESS_EVERY ?= 250
 PNG_ZOOM ?= 8
 
 # Verbose compile is ON by default (streams the compiler's per-layer detail +
@@ -20,7 +18,7 @@ PNG_ZOOM ?= 8
 VERBOSE_COMPILE ?= 1
 _RENDER_VERBOSE_COMPILE := $(if $(filter-out 0,$(VERBOSE_COMPILE)),--verbose-compile)
 # DISABLE_CACHE=1 make compile — production compile that neither reads nor
-# writes the durable caches (compiled-ONNX CACHE_VOLUME + SCHEDULE_VOLUME);
+# writes the durable caches (complete HF_BUNDLE_VOLUME + SCHEDULE_VOLUME);
 # the sampled schedule is saved to local /tmp instead (path printed).  Any
 # non-empty, non-0 value enables it.  `compile` only.
 _RENDER_DISABLE_CACHE := $(if $(filter-out 0,$(DISABLE_CACHE)),--disable-cache)
@@ -38,9 +36,7 @@ _RENDER_RUN_ARGS = $(strip \
 	$(if $(RENDER_ANGLE),--angle $(RENDER_ANGLE)) \
 	$(if $(RENDER_VIEWZ),--viewz $(RENDER_VIEWZ)) \
 	--out-dir $(OUT_DIR) \
-	$(if $(RENDER_MAX_POSITIONS),--max-positions $(RENDER_MAX_POSITIONS)) \
-	$(if $(PREFILL_CHUNK_SIZE),--prefill-chunk-size $(PREFILL_CHUNK_SIZE)) \
-	--progress-every $(RENDER_PROGRESS_EVERY) \
+	$(if $(MAX_NEW_TOKENS),--max-new-tokens $(MAX_NEW_TOKENS)) \
 	--png-zoom $(PNG_ZOOM) \
 	$(_RENDER_PNG) \
 	$(_RENDER_COMPARE) \
@@ -61,8 +57,7 @@ lint:
 # Compile on Modal — the SAME 64-CPU compile_remote container `make run` uses
 # on a cache miss, so the wide CP-SAT search finds a better (fewer-layer)
 # schedule than a local box can in the time budget. The artifact lands in the
-# durable CACHE_VOLUME (not local disk); a later `make run` is a cache hit.
-# (Local compile still happens implicitly via `make run-local` on a miss.)
+# durable HF_BUNDLE_VOLUME (not local disk); a later `make run` is a cache hit.
 # The log file is timestamp+pid-unique so parallel invocations never share
 # one; the /tmp/torchwright_doom-compile.log symlink is last-wins.
 render-compile compile:
@@ -82,6 +77,15 @@ render-compile compile:
 		exit $$rc \
 	'
 
+.PHONY: compile-onnx-debug
+compile-onnx-debug:
+	uv run python -m torchwright_doom.inference compile-onnx-debug \
+		--config $(CONFIG) $(_RENDER_VERBOSE_COMPILE)
+
+.PHONY: probe-volume-publication
+probe-volume-publication:
+	uv run modal run modal_render.py::probe_volume_publication
+
 .PHONY: render-run run
 render-run run:
 	@bash -c ' \
@@ -100,34 +104,10 @@ render-run run:
 		exit $$rc \
 	'
 
-.PHONY: render-run-local run-local
-render-run-local run-local:
-	uv run python -m torchwright_doom.inference run $(_RENDER_RUN_ARGS)
-
 # The production correctness gate is `make run COMPARE=1` (it scores the HF
 # render's coverage / within-option color against the pydoom reference and
 # writes the diff PNG). ~30 min/frame on the render GPU; too heavy for
 # per-commit `make test`, run manually.
-
-# Convert the compiled artifact to a native HF bundle (safetensors +
-# trust-remote-code modeling/config + DoomTokenizer) on Modal; the bundle is
-# the Hub publish path.
-.PHONY: hf-export
-hf-export:
-	@bash -c ' \
-		LOGFILE=/tmp/torchwright_doom-hf-export-$$(date +%Y%m%d-%H%M%S).log ; \
-		ln -sfn "$$LOGFILE" /tmp/torchwright_doom-hf-export.log ; \
-		echo "=== Log file: $$LOGFILE ===" | tee "$$LOGFILE" ; \
-		echo "=== HF export on Modal ===" | tee -a "$$LOGFILE" ; \
-		start=$$(date +%s) ; \
-		RENDER_GPU=$(RENDER_GPU) uv run modal run modal_render.py::hf_export \
-			--config $(CONFIG) $(_RENDER_VERBOSE_COMPILE) \
-			2>&1 | tee -a "$$LOGFILE" ; \
-		rc=$${PIPESTATUS[0]} ; \
-		end=$$(date +%s) ; \
-		echo "=== HF export finished in $$((end - start))s (exit $$rc) ===" | tee -a "$$LOGFILE" ; \
-		exit $$rc \
-	'
 
 .PHONY: test
 test: lint

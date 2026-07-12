@@ -14,6 +14,7 @@ import os
 import onnx
 
 from torchwright.compiler.export import compile_to_onnx
+from torchwright.compiler import CompileProfile
 from torchwright.ops.inout_nodes import create_rope_config
 
 from torchwright_doom.embedding import build_doom_embedding
@@ -22,7 +23,7 @@ from torchwright_doom.render_main import forward
 
 # This lighter-than-production geometry keeps the structural compile gate
 # tractable while retaining enough residual and head width for the full graph.
-_D = 4608
+_D = 5120
 _D_HEAD = 64
 _D_ROT = 32
 
@@ -41,12 +42,11 @@ def test_forward_compiles_to_onnx(tmp_path) -> None:
         d_head=_D_HEAD,
         max_layers=400,
         verbose=False,
-        # d=4608 is not a power of two, so the pinned-constant identity
-        # RMSNorm cannot be emitted — export without the norm (the examples'
-        # convention for odd widths).  The production export (d=8192, power
-        # of two) keeps the norm with q=63; this gate validates the
-        # structural compile, not the norm.
-        rms_norm=False,
+        profile=CompileProfile.PHI3,
+        # d=5120 = 5*2^10 needs two distinct pinned columns. q=63 makes
+        # the larger column push their combined fp32 energy to ~2^128;
+        # q=62 is the largest certified exponent for this diagnostic width.
+        rms_norm_const_exp=62,
     )
 
     assert os.path.exists(onnx_path), "compile_to_onnx wrote no ONNX file"

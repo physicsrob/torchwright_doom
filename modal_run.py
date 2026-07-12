@@ -11,11 +11,11 @@ Direct:
 
 The GPU container mounts the compile cache volume (read-mostly) plus
 ``configs/`` and the WAD, so the artifact-debugging scripts run against the real
-compiled ONNX — the cache key must be computed LOCALLY (it embeds git SHAs the
+diagnostic ONNX — the cache key must be computed LOCALLY (it embeds git SHAs the
 container can't derive) and handed over explicitly:
 
     make modal-run MODULE=scripts.compile_report \\
-        ARGS="--config configs/e1m1.yaml --cache-dir /root/.cache/torchwright_doom/compiled/<key>"
+        ARGS="--config configs/e1m1.yaml --cache-dir /root/.cache/torchwright_doom/onnx_debug/<key>"
 
 The CPU-only container is sized via env vars read at (local) import time —
 they must be in the environment, not make variables:
@@ -32,7 +32,7 @@ import time
 
 import modal
 
-from modal_image import ASSETS_IMAGE, CACHE_VOLUME, IMAGE
+from modal_image import IMAGE, ONNX_DEBUG_VOLUME, ONNX_DIAGNOSTIC_IMAGE
 
 app = modal.App("torchwright-doom-run", image=IMAGE)
 
@@ -80,11 +80,11 @@ def _forwarded_env() -> dict[str, str]:
     timeout=_TIMEOUT,
     # The configs-augmented image: the artifact-debugging scripts need the
     # committed configs + WAD next to the mounted compile cache.
-    image=ASSETS_IMAGE,
-    volumes={"/root/.cache/torchwright_doom/compiled": CACHE_VOLUME},
+    image=ONNX_DIAGNOSTIC_IMAGE,
+    volumes={"/root/.cache/torchwright_doom/onnx_debug": ONNX_DEBUG_VOLUME},
 )
 def run_gpu(module: str, script: str, args: str, env: dict[str, str]) -> int:
-    CACHE_VOLUME.reload()
+    ONNX_DEBUG_VOLUME.reload()
     cmd = _build_cmd(module, script, args)
     if env:
         print(
@@ -103,7 +103,7 @@ def run_gpu(module: str, script: str, args: str, env: dict[str, str]) -> int:
     timeout=_TIMEOUT,
     # Same configs-augmented image as run_gpu: CPU scripts that rebuild the
     # production graph load configs/e1m1.yaml from /root/configs.
-    image=ASSETS_IMAGE,
+    image=ONNX_DIAGNOSTIC_IMAGE,
 )
 def run_cpu(module: str, script: str, args: str, env: dict[str, str]) -> int:
     cmd = _build_cmd(module, script, args)

@@ -91,11 +91,10 @@ Rough layout of `torchwright_doom/`:
   (light levels and colormaps).
 - **Graph infrastructure** — `past` / `attention_handles` (reading
   previously-emitted tokens) and `std` (the helper-op shim).
-- **Runtime** — `inference/` (the production runtime: the compiled ONNX
-  artifact is loaded as a native HuggingFace `TorchwrightForCausalLM` in
-  `hf_runtime`, driven by the generation loops in `generation` over the
-  unbounded `KVCache` in `kv_cache`; plus `hf_export` (HF bundle + the
-  render-vs-pydoom gate), compile cache, config, CLI) and `prompt/`
+- **Runtime** — `inference/` (direct stock-Phi-3 bundle compilation in
+  `hf_bundle`, production orchestration around the bundle's isolated
+  `examples/infer.py`, complete-bundle cache/config/CLI, and diagnostic-only ONNX)
+  and `prompt/`
   (prefill prompt construction from the WAD scene).
 
 **Reading path** for one `forward()` pass, read side → write side:
@@ -169,14 +168,18 @@ or the stale copy bites (it has).
 
 # Production runtime — a standard HuggingFace transformer
 
-The compiled artifact is rendered by loading it as a native
-HuggingFace `TorchwrightForCausalLM` (`inference/hf_runtime.py`,
-`HfTokenRuntime`) and running the validated generation loops in
-`inference/generation.py` over an unbounded KV cache. It is, with no
-asterisk, a standard `transformers` causal LM: integer `input_ids` in,
-logits out, greedy `argmax`, a stock `DynamicCache`. The host copies
-each output token to the next input and blits pixel tokens — the dumb
-host principle, unchanged.
+The complete direct-compiled bundle is rendered by executing its exact isolated
+`examples/infer.py`: text prompt -> stock tokenizer -> stock
+`Phi3ForCausalLM.generate()` -> `output.ids.json` plus raw `output.txt`. The
+script imports only standard Python, PyTorch, and Transformers. Production has
+no second model loader or generation loop; it resumes only after those two
+artifacts exist, then decodes/compares them as explicit post-processing.
+
+The compiled model uses default RoPE over one 65,536-position regime. Keep
+`original_max_position_embeddings == max_position_embeddings == max_seq_len`:
+Phi-3's GenerationMixin treats a smaller `original_...` value as a short/long
+RoPE transition and discards the KV cache at that boundary even when
+`rope_type` is `default`.
 
 The earlier production engine — an ONNX runtime with a windowed /
 circular KV cache, tier-1 expiry certification, speculative decode, and
@@ -184,15 +187,15 @@ CUDA-graph capture — was **retired**. The HF model is now the sole
 renderer. The trade-offs were accepted deliberately:
 
 - **greedy only** (no speculative decode),
-- an **unbounded KV cache** (no windowing / slot recycling),
-- **~30 min/frame** and **~28 GB dense fp32 weights**,
+- a stock Transformers generation cache (no Doom-owned cache implementation),
+- **~98 GB dense fp32 checkpoint**,
 
 in exchange for the large complexity reduction and the narrative win.
 
-**The compiler's ONNX export and the ONNX→HF convert step are
-unchanged** — the HF path still consumes the ONNX artifact; only the
-ONNX *runtime* went away. `expiring_types` is vestigial (parsed, unread),
-slated for removal in a follow-up.
+Hugging Face and ONNX are sibling compiler targets rebuilt independently from
+`inference.compiled_model.build_graph`. Production compilation calls
+`compile_hf_bundle(CompileProfile.PHI3)` directly. ONNX is retained only for
+debug sessions and backend investigations; it is never a production input.
 
 **Correctness gate.** The graph-level gates
 (`tests/scene/test_flat_pixel_oracle.py`, `test_forward_ar_rollout.py`)

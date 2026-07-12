@@ -10,8 +10,8 @@ Decode is ``argmax(out @ W_EMBED.t())`` -> a row index -> ``(TokenType, values)`
 via ``TOKEN_VOCAB.row_to_token``.
 
 Native ``Token`` <-> row crossings (:func:`token_to_row`, :func:`row_to_token`)
-are a direct structural round-trip with no name bridge — used by the
-``DoomTokenizer`` (encode/decode) and the bos/eos resolution in ``hf_export``.
+are a direct structural round-trip with no name bridge — used by the standard
+tokenizer, formatter, and special-token resolution.
 """
 
 from __future__ import annotations
@@ -97,7 +97,7 @@ def rows_to_input(rows) -> torch.Tensor:
 #
 # Token identity is by structure (same type + slot values), so the round-trip
 # between a native ``Token`` and its ``W_EMBED`` row index is direct. Used by
-# the ``DoomTokenizer`` and bos/eos resolution.
+# the standard tokenizer, formatter, and BOS/EOS resolution.
 
 
 def token_to_row(tok: Token) -> int:

@@ -449,6 +449,28 @@ def token_label(
     return name if not args else f"{name}({', '.join(args)})"
 
 
+def token_word(
+    ttype: TokenType,
+    values: Mapping[str, int | float],
+    *,
+    wall_names: Sequence[str] | None = None,
+    flat_names: Sequence[str] | None = None,
+) -> str:
+    """The canonical stock-WordLevel word for one token row.
+
+    This deliberately derives from :func:`token_fields`, exactly like
+    :func:`token_label`.  The only difference is lexical: commas carry no
+    following whitespace, so the complete row label is one unit under a
+    ``WhitespaceSplit`` pre-tokenizer.  Keeping both spellings on the same
+    field representation prevents the published tokenizer and the readable
+    formatter from developing separate naming systems.
+    """
+    name, args = token_fields(
+        ttype, values, wall_names=wall_names, flat_names=flat_names
+    )
+    return name if not args else f"{name}({','.join(args)})"
+
+
 def resolve_name(name: str) -> tuple[TokenType, dict[str, int]] | None:
     """Parse-side inverse of the display name: the ``TokenType`` a leading label
     word denotes, plus any slot values folded into that word (the value-in-name

@@ -1,8 +1,7 @@
-"""Save-time exporter: freeze the readable surface into a self-contained bundle.
+"""Freeze tokenizer, formatter, and decoder identity into data-only JSON.
 
-This runs in the **full renderer environment** (it imports ``torchwright_doom``
-freely) and writes the two JSON artifacts the shipped ``tokenization_doom``
-kernel reads on a stranger's torch-free machine:
+This runs in the full renderer environment and writes the JSON artifacts used
+by the stock tokenizer and standalone post-processing examples:
 
 * ``doom_vocab.json`` — the **pretty** ``{display_label: id}`` table (WAD texture
   names + decoded enums/bools/BSP-child-ids/bbox-codes baked into the label
@@ -14,21 +13,13 @@ kernel reads on a stranger's torch-free machine:
   the angle markers, the back-height sentinel, the carrier id ranges, the x/y
   coordinate-marker sets, ``ANGLE_BAM``).
 
-:func:`export_bundle` then instantiates the shipped ``DoomTokenizer`` over those
-artifacts and calls its ``save_pretrained`` — so ``custom_object_save`` copies the
-*standalone* ``tokenization_doom.py`` (never this module or ``hf_tokenizer.py``,
-which pull in torch) and writes ``auto_map`` pointing at it.
-
-The frozen tables are the single point of drift between the model-side
-``surface`` and the shipped kernel; the hermetic byte-exact test
-(``tests/tokenizer/test_shipped_tokenizer_standalone.py``) is the gate.
+No Transformers auto class points at local Python code. The files are consumed
+explicitly by ``DoomFormatter`` and ``txt_to_png.py`` after model inference.
 """
 
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from pathlib import Path
 from typing import Sequence
 
@@ -39,8 +30,8 @@ from ..tokens import FloatSlot, IntSlot
 from ..value_ranges import VALUE_RANGES
 from ..vocab import ANGLE_BAM, ANGLE_VALUE, BACK_HEIGHT_SENTINEL, VALUE, VOCAB_TYPES
 from . import display, surface
-from .display import DISPLAY_NAME, token_label
-from .hf_tokenizer import screen_config, vocab_fingerprint
+from .display import DISPLAY_NAME, token_label, token_word
+from .identity import screen_config, vocab_fingerprint
 
 _TYPE_BY_NAME = {t.name: t for t in VOCAB_TYPES}
 
@@ -121,50 +112,84 @@ def build_tables() -> dict:
 
 
 def build_vocab_blob(wall_names: Sequence[str], flat_names: Sequence[str]) -> dict:
-    """``doom_vocab.json`` contents: the frozen pretty table + identity card."""
+    """``doom_vocab.json`` contents for both tokenizer and formatter identity.
+
+    ``vocab`` remains during the migration for the retired custom tokenizer.
+    New consumers use the ordered ``words`` / ``labels`` arrays and the explicit
+    row records, whose positions are the model ids.
+    """
+    labels = [
+        token_label(ttype, values, wall_names=wall_names, flat_names=flat_names)
+        for ttype, values in TOKEN_VOCAB.row_to_token
+    ]
+    words = [
+        token_word(ttype, values, wall_names=wall_names, flat_names=flat_names)
+        for ttype, values in TOKEN_VOCAB.row_to_token
+    ]
+    if len(set(labels)) != len(labels) or len(set(words)) != len(words):
+        raise ValueError("frozen Doom vocabulary labels and words must be injective")
     return {
+        "format": "torchwright_doom.vocab.v2",
         "screen": screen_config(),
         "n_rows": int(TOKEN_VOCAB.n_rows),
         "fingerprint": vocab_fingerprint(),
-        "vocab": build_vocab(wall_names, flat_names),
+        "vocab": {label: row for row, label in enumerate(labels)},
+        "canonical_vocab": {word: row for row, word in enumerate(words)},
+        "words": words,
+        "labels": labels,
+        "rows": [
+            {
+                "row": row,
+                "type": ttype.name,
+                "values": dict(values),
+                "word": words[row],
+                "label": labels[row],
+            }
+            for row, (ttype, values) in enumerate(TOKEN_VOCAB.row_to_token)
+        ],
     }
 
 
-def export_bundle(
-    save_directory: str, *, asset_config: AssetConfig | None = None
-) -> list[str]:
-    """Write a self-contained, torch-free tokenizer directory at
-    ``save_directory``: the two frozen JSONs, the standalone
-    ``tokenization_doom.py`` (copied by ``custom_object_save``), and the
-    ``tokenizer_config.json`` wiring ``AutoTokenizer`` to it.
-
-    Returns the list of written file paths.
-    """
-    # Imported here (not at module scope) so this module stays importable for the
-    # in-process freeze checks without dragging the shipped class in early.
-    from .tokenization_doom import DoomTokenizer as ShippedDoomTokenizer
-
+def write_frozen_data(
+    save_directory: str | Path,
+    *,
+    asset_config: AssetConfig | None = None,
+    palette: Sequence[Sequence[int]],
+    origin: tuple[float, float] = (0.0, 0.0),
+) -> list[Path]:
+    """Write the data-only formatter and frame-decoder inputs."""
     config = asset_config or DEFAULT_ASSET_CONFIG
+    directory = Path(save_directory)
+    directory.mkdir(parents=True, exist_ok=True)
+
     vocab_blob = build_vocab_blob(config.wall_names, config.flat_names)
     tables = build_tables()
+    tables.update(
+        {
+            "format": "torchwright_doom.tables.v2",
+            "origin": [float(origin[0]), float(origin[1])],
+            "wall_names": list(config.wall_names),
+            "flat_names": list(config.flat_names),
+            "header_levels": dict(surface.HEADER_DISPLAY_LEVEL),
+            "layout": {"indent_unit": 2, "field_indent": 4},
+        }
+    )
+    palette_blob = {
+        "format": "torchwright_doom.palette.v1",
+        "colors": [[int(c) for c in rgb] for rgb in palette],
+    }
+    if len(palette_blob["colors"]) != 256:
+        raise ValueError("Doom palette must contain exactly 256 RGB entries")
+    if any(len(rgb) != 3 for rgb in palette_blob["colors"]):
+        raise ValueError("every Doom palette entry must be RGB")
 
-    os.makedirs(save_directory, exist_ok=True)
-    # Stage the artifacts, then let the shipped tokenizer's own save_pretrained
-    # emit the final bundle — this routes custom_object_save through the
-    # standalone class so the copied .py is tokenization_doom.py, not this file.
-    with tempfile.TemporaryDirectory() as staging:
-        vocab_path = (
-            Path(staging) / ShippedDoomTokenizer.vocab_files_names["vocab_file"]
+    paths = [
+        directory / "doom_vocab.json",
+        directory / "doom_tables.json",
+        directory / "doom_palette.json",
+    ]
+    for path, payload in zip(paths, (vocab_blob, tables, palette_blob), strict=True):
+        path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
-        tables_path = (
-            Path(staging) / ShippedDoomTokenizer.vocab_files_names["tables_file"]
-        )
-        vocab_path.write_text(json.dumps(vocab_blob))
-        tables_path.write_text(json.dumps(tables))
-
-        ShippedDoomTokenizer.register_for_auto_class("AutoTokenizer")
-        tokenizer = ShippedDoomTokenizer(
-            vocab_file=str(vocab_path), tables_file=str(tables_path)
-        )
-        saved = tokenizer.save_pretrained(save_directory)
-    return list(saved)
+    return paths

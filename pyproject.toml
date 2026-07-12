@@ -10,18 +10,16 @@ requires-python = ">=3.10"
 # code transitively imports. Sync with torchwright/pyproject.toml
 # when its runtime deps change.
 #
-# onnxruntime-gpu is PINNED in lockstep with torchwright's gpu extra
-# and modal_image.py: the CUDA-graph capture mechanics the render
-# runtime relies on are version-specific (verified against the 1.26.0
-# source; see torchwright/pyproject.toml for the marker-split rationale).
 dependencies = [
     "torch",
     "onnx",
-    "onnxruntime-gpu==1.26.0; python_version >= '3.11'",
-    "onnxruntime-gpu; python_version < '3.11'",
     "ortools>=9.10",
     "pydantic>=2.0",
     "numpy",
+    "transformers>=5.0",
+    "accelerate",
+    "safetensors",
+    "tokenizers",
 ]
 
 # black + mypy + ruff back the `make lint` gate (which gates `make
@@ -34,10 +32,13 @@ dev = [
     "black",
     "mypy",
     "ruff",
-    # The HuggingFace port: DoomTokenizer wraps the readable surface as a slow
-    # PreTrainedTokenizer (torchwright_doom/tokenizer/hf_tokenizer.py).
-    "transformers",
-    "tokenizers",
+]
+
+# ONNX Runtime is diagnostic/test-only. Production compilation and rendering
+# use direct safetensors + stock Transformers and never import ORT.
+test-onnx = [
+    "onnxruntime-gpu==1.26.0; python_version >= '3.11'",
+    "onnxruntime-gpu; python_version < '3.11'",
 ]
 
 [[tool.uv.index]]

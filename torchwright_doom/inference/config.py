@@ -51,26 +51,9 @@ class ModelConfig:
     trim_heads: bool = True
     max_seq_len: int = 65536
     optimize: int = 0
-    # Fold every bias into its matmul against the pinned constant-1 column
-    # (torchwright compile_to_onnx(..., bias=...)).  A ModelConfig field —
-    # not a hard-coded default inside compile_to_onnx_path — because the
-    # knob must be key-visible: a signature default can be overridden by
-    # any caller at runtime with no source diff, and two different
-    # artifacts would then map to one cache key.  Rides the key via
-    # asdict(config.model) (busts every cached artifact once, like
-    # cache_stride below).  bias=False is required to load a swish
-    # artifact as HF (the stock Phi3ForCausalLM target is the only swish
-    # conversion path); the True default keeps non-config compile paths on
-    # the layout they expect.
-    bias: bool = True
-    # Static KV-cache slot count S baked into the compiled ONNX (the
-    # arange_S mask constant + the past_K_i shapes).  A compiled model
-    # hard-caps at prefill + decode <= S.  12288 covers the e1m1 frame
-    # (~3613 prefill + 8000 decode + headroom); the L4 gate config uses a
-    # smaller stride.  Must be <= max_seq_len.  NOTE: adding this field
-    # busts every compile-cache key once (it enters the payload via
-    # asdict(config.model)) — intended.
-    cache_stride: int = 12288
+    # Production is one fixed physical contract: stock Phi-3, SwiGLU,
+    # biasless, RMSNorm-certified. Bias and ONNX static-cache settings are
+    # deliberately not configuration surfaces.
 
 
 @dataclass(frozen=True)
@@ -100,22 +83,16 @@ class PoseConfig:
 class RunConfig:
     """Render-job runtime defaults (the optional ``run:`` YAML section).
 
-    These are RUNTIME knobs — deliberately NOT part of
-    ``canonical_compile_payload``, so changing them never recompiles
-    (pinned by ``tests/inference/test_config.py``).  CLI flags override
-    field-by-field; the dataclass defaults apply when a config omits the
-    section.  Single-sourcing these here is what removed the Makefile /
-    cli.py / modal_render.py three-way default drift (a bare direct
-    invocation used to truncate the frame).
+    ``pose`` and ``max_new_tokens`` define the executable prompt and default
+    generation bound shipped inside a complete bundle, so both content-bearing
+    values are included in bundle identity. CLI flags remain render-only
+    overrides and never mutate the published bundle.
     """
 
     # 61440 covers a full 320x200 frame with ample headroom; the cap is the
     # pos-encoding table (max_seq_len 65536), and an oversized demand makes
     # empty_past() reject before prefill.
-    max_positions: int = 61440
-    # Prefill chunk size: a memory knob that bounds the per-pass transient
-    # activations.  Semantically identical to a single pass.
-    prefill_chunk_size: int = 128
+    max_new_tokens: int = 61440
     pose: PoseConfig = PoseConfig()
 
 
@@ -157,8 +134,7 @@ class ResolvedRunArgs:
     y: float
     angle: int
     viewz: float
-    max_positions: int
-    prefill_chunk_size: int
+    max_new_tokens: int
 
 
 def resolve_run_args(
@@ -168,8 +144,7 @@ def resolve_run_args(
     y: float | None = None,
     angle: int | None = None,
     viewz: float | None = None,
-    max_positions: int | None = None,
-    prefill_chunk_size: int | None = None,
+    max_new_tokens: int | None = None,
 ) -> ResolvedRunArgs:
     """Resolve render-job knobs: explicit caller value > config ``run:``.
 
@@ -183,13 +158,8 @@ def resolve_run_args(
         y=run.pose.y if y is None else float(y),
         angle=run.pose.angle if angle is None else int(angle),
         viewz=run.pose.viewz if viewz is None else float(viewz),
-        max_positions=(
-            run.max_positions if max_positions is None else int(max_positions)
-        ),
-        prefill_chunk_size=(
-            run.prefill_chunk_size
-            if prefill_chunk_size is None
-            else int(prefill_chunk_size)
+        max_new_tokens=(
+            run.max_new_tokens if max_new_tokens is None else int(max_new_tokens)
         ),
     )
 
@@ -220,6 +190,28 @@ def load_render_config(path: str | Path) -> RenderConfig:
     textures = _mapping(data.get("textures") or {}, "textures")
     run = _mapping(data.get("run") or {}, "run")
     pose = _mapping(run.get("pose") or {}, "run.pose")
+    _known_keys(data, {"wad", "map", "model", "region", "textures", "run"}, str(path))
+    _known_keys(
+        model,
+        {
+            "d",
+            "d_head",
+            "d_rot",
+            "scale",
+            "detail",
+            "hud",
+            "d_hidden",
+            "max_layers",
+            "trim_heads",
+            "max_seq_len",
+            "optimize",
+        },
+        "model",
+    )
+    _known_keys(region, {"x1", "y1", "x2", "y2"}, "region")
+    _known_keys(textures, {"wall", "flat"}, "textures")
+    _known_keys(run, {"max_new_tokens", "pose"}, "run")
+    _known_keys(pose, {"x", "y", "angle", "viewz"}, "run.pose")
     run_defaults = RunConfig()
     pose_defaults = PoseConfig()
     cfg = RenderConfig(
@@ -237,8 +229,6 @@ def load_render_config(path: str | Path) -> RenderConfig:
             trim_heads=bool(model.get("trim_heads", True)),
             max_seq_len=int(model.get("max_seq_len", 65536)),
             optimize=int(model.get("optimize", 0)),
-            bias=bool(model.get("bias", True)),
-            cache_stride=int(model.get("cache_stride", 12288)),
         ),
         region=RegionConfig(
             x1=float(region.get("x1", 627.2)),
@@ -251,10 +241,7 @@ def load_render_config(path: str | Path) -> RenderConfig:
             flat=tuple(str(v) for v in textures.get("flat", FLAT_NAMES)),
         ),
         run=RunConfig(
-            max_positions=int(run.get("max_positions", run_defaults.max_positions)),
-            prefill_chunk_size=int(
-                run.get("prefill_chunk_size", run_defaults.prefill_chunk_size)
-            ),
+            max_new_tokens=int(run.get("max_new_tokens", run_defaults.max_new_tokens)),
             pose=PoseConfig(
                 x=float(pose.get("x", pose_defaults.x)),
                 y=float(pose.get("y", pose_defaults.y)),
@@ -287,13 +274,24 @@ def resolve_wad_path(
     )
 
 
-def compile_cache_dir(config: RenderConfig, wad_path: str | Path) -> Path:
+def hf_bundle_cache_dir(config: RenderConfig, wad_path: str | Path) -> Path:
+    """Production direct-HF bundle directory."""
     return (
         Path.home()
         / ".cache"
         / "torchwright_doom"
-        / "compiled"
+        / "hf_phi3"
         / cache_key(config, wad_path)
+    )
+
+
+def onnx_debug_cache_dir(config: RenderConfig, wad_path: str | Path) -> Path:
+    return (
+        Path.home()
+        / ".cache"
+        / "torchwright_doom"
+        / "onnx_debug"
+        / cache_key_from_payload(canonical_onnx_debug_payload(config, wad_path))
     )
 
 
@@ -309,13 +307,12 @@ def cache_key_from_payload(payload: dict[str, Any]) -> str:
 def canonical_compile_payload(
     config: RenderConfig, wad_path: str | Path
 ) -> dict[str, Any]:
-    wad_path = Path(wad_path)
     git_shas = {
         "torchwright_doom": _git_sha(Path(__file__).resolve().parents[2]),
         "torchwright": _git_sha(Path(__file__).resolve().parents[3] / "torchwright"),
     }
-    # Enforce "the container must never derive its own key" (see
-    # compile_cached): a git-less caller would mint a fixed
+    # Enforce "the container must never derive its own key": a git-less caller
+    # would mint a fixed
     # "unknown"-keyed payload that never changes on a code edit, so the
     # cache would silently serve artifacts compiled from other code
     # states.  endswith also catches "<head>-dirty.unknown" (rev-parse
@@ -330,8 +327,21 @@ def canonical_compile_payload(
             f"for {sorted(unresolved)} — compute canonical_compile_payload "
             f"where .git is available and pass it through compile_payload=."
         )
+    return {**compile_payload_domain(config, wad_path), "git": git_shas}
+
+
+def compile_payload_domain(
+    config: RenderConfig, wad_path: str | Path
+) -> dict[str, Any]:
+    """Portable, remotely re-verifiable portion of the production cache key."""
+    wad_path = Path(wad_path)
     return {
-        "wad": str(wad_path.resolve()),
+        "artifact": {
+            "kind": "hf_phi3_bundle",
+            "format": 1,
+            "architecture": "phi3",
+        },
+        "wad": config.wad,
         "wad_sha256": _file_sha256(wad_path),
         "map": config.map,
         "region": asdict(config.region),
@@ -339,8 +349,46 @@ def canonical_compile_payload(
         "flat_names": list(config.textures.flat),
         "model": asdict(config.model),
         "screen": {"width": config.screen[0], "height": config.screen[1]},
-        "git": git_shas,
+        # These do not alter weights, but they do alter files inside the exact
+        # complete bundle (the executable prompt and example generation bound).
+        "bundle": {
+            "prompt_pose": asdict(config.run.pose),
+            "max_new_tokens": config.run.max_new_tokens,
+        },
     }
+
+
+def validate_compile_payload(
+    payload: dict[str, Any], config: RenderConfig, wad_path: str | Path
+) -> None:
+    handed_domain = {key: value for key, value in payload.items() if key != "git"}
+    expected = compile_payload_domain(config, wad_path)
+    if handed_domain != expected:
+        raise ValueError(
+            "handed compile payload does not match the loaded config/WAD; "
+            "refusing to publish an artifact under a false cache identity"
+        )
+    git = payload.get("git")
+    if not isinstance(git, dict) or set(git) != {"torchwright", "torchwright_doom"}:
+        raise ValueError("compile payload has no complete source-revision identity")
+
+
+def canonical_onnx_debug_payload(
+    config: RenderConfig, wad_path: str | Path, *, cache_stride: int = 12288
+) -> dict[str, Any]:
+    if not (1 <= cache_stride <= config.model.max_seq_len):
+        raise ValueError(
+            f"ONNX diagnostic cache_stride {cache_stride} must be in "
+            f"[1, max_seq_len={config.model.max_seq_len}]"
+        )
+    payload = canonical_compile_payload(config, wad_path)
+    payload["artifact"] = {
+        "kind": "onnx_debug",
+        "format": 1,
+        "architecture": "phi3",
+        "cache_stride": int(cache_stride),
+    }
+    return payload
 
 
 def _validate_config(config: RenderConfig) -> None:
@@ -349,17 +397,8 @@ def _validate_config(config: RenderConfig) -> None:
         raise ValueError(
             f"model.detail {config.model.detail!r} must be 'low' or 'high'"
         )
-    if config.run.max_positions < 1:
-        raise ValueError(f"run.max_positions {config.run.max_positions} must be >= 1")
-    if config.run.prefill_chunk_size < 1:
-        raise ValueError(
-            f"run.prefill_chunk_size {config.run.prefill_chunk_size} must be >= 1"
-        )
-    if not (1 <= config.model.cache_stride <= config.model.max_seq_len):
-        raise ValueError(
-            f"model.cache_stride {config.model.cache_stride} must be in "
-            f"[1, max_seq_len={config.model.max_seq_len}]"
-        )
+    if config.run.max_new_tokens < 1:
+        raise ValueError(f"run.max_new_tokens {config.run.max_new_tokens} must be >= 1")
     if len(config.textures.wall) != N_WALL_TEXTURES:
         raise ValueError(
             "this graph still requires exactly "
@@ -380,6 +419,12 @@ def _mapping(value: Any, name: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{name} must be a mapping")
     return value
+
+
+def _known_keys(value: dict[str, Any], allowed: set[str], name: str) -> None:
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise ValueError(f"{name}: unknown key(s): {', '.join(unknown)}")
 
 
 def _load_yaml_subset(path: Path) -> dict[str, Any]:
@@ -501,8 +546,9 @@ def _git_sha(repo: Path) -> str:
     the working tree) while the key stays pinned at HEAD — every edit-run
     cycle silently HITs the artifact compiled from the *first* iteration and
     the gate "validates" code that was never compiled.  sha256 of
-    ``git diff HEAD`` covers tracked edits; ``git status --porcelain`` adds
-    untracked (non-ignored) file *names* so new files also move the key.
+    ``git diff HEAD`` covers tracked edits; untracked non-ignored file names and
+    contents are hashed too, so iterating on a newly added bundle module cannot
+    silently reuse the first artifact compiled from that path.
     """
     git = ["git", "-C", str(repo)]
     try:
@@ -522,7 +568,17 @@ def _git_sha(repo: Path) -> str:
         return f"{head}-dirty.unknown"
     if not diff and not status:
         return head
-    digest = hashlib.sha256((diff + "\0" + status).encode("utf-8")).hexdigest()[:12]
+    dirty = hashlib.sha256((diff + "\0" + status).encode("utf-8"))
+    for line in status.splitlines():
+        if not line.startswith("?? "):
+            continue
+        path = repo / line[3:]
+        if path.is_file():
+            dirty.update(line[3:].encode("utf-8"))
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    dirty.update(chunk)
+    digest = dirty.hexdigest()[:12]
     return f"{head}-dirty.{digest}"
 
 

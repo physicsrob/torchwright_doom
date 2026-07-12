@@ -10,6 +10,12 @@ one discrete input token in, one output token out, per step, the same loop
 that drives any chat model. Output tokens carry pixel information; the host
 copies each output token to the next input and blits pixels to the screen.
 
+The production artifact is a stock Hugging Face `Phi3ForCausalLM`, compiled
+directly from the Doom graph into sharded fp32 safetensors. Both model and the
+data-only semantic WordLevel tokenizer load through ordinary auto classes with
+no custom model/tokenizer code and no `trust_remote_code=True`. ONNX remains an
+explicit diagnostic backend and is not a render or publication input.
+
 The **dumb-host principle** governs everything: all rendering logic — wall
 selection, visibility, distance, texture lookup, compositing — lives inside
 the transformer. The host only feeds tokens and writes pixels; it does no
@@ -49,5 +55,29 @@ geometry, sorting, or arithmetic. (See `CLAUDE.md`.)
 
 ## Running
 
-There is exactly one committed render config, `configs/e1m1.yaml`. Use
-`make run` (renders on Modal) and `make help` for the menu.
+`make compile` creates the complete validated Phi-3 bundle on Modal. `make run`
+resolves that same bundle and executes its exact `examples/infer.py` on the
+configured GPU; it never compiles, converts, or uses a private generation path
+inside the renderer. `configs/e1m1.yaml` is the sole
+full-resolution publication configuration, while `configs/e1m1_lowres.yaml`
+is retained for preview and validation.
+
+The published bundle's claim-bearing load path is ordinary Transformers:
+
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained(bundle)
+model = AutoModelForCausalLM.from_pretrained(
+    bundle,
+    attn_implementation="eager",
+    device_map="cuda",
+)
+```
+
+The bundle contains its executable E1M1 text prompt and `examples/infer.py`.
+That isolated script is the only inference program used by both downloaded and
+production renders. It writes canonical integer row ids and their raw
+standard-tokenizer text. `examples/pretty_text.py` formats that text for reading, and
+`examples/txt_to_png.py` independently turns the same text into a frame using
+only cursor bookkeeping, palette lookup, and last-write-wins blitting.
