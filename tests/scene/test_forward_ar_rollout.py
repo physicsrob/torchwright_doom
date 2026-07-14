@@ -93,14 +93,14 @@ def _build_compiled(device, *, d: int, d_head: int, max_layers: int = 200):
     """Compile the token-id forward in-process; returns ``(compiled, output_node)``.
 
     This test is the one place a compiled doom forward still runs in-process:
-    production inference is the cached ONNX artifact, so the in-process compile
+    production inference is the published HF bundle, so the in-process compile
     lives here (the graph construction is shared via
     ``model_graph.build_graph``; torchwright's ``compile_headless``
     is its in-process debug/test reference compiler).
     """
     from torchwright.compiler.export import compile_headless
 
-    next_token, _rope, _emb, _banks = build_graph(
+    next_token, _rope, emb, _banks = build_graph(
         d_head=d_head, max_positions=_MAX_POS, d_rot=_D_ROT
     )
     compiled = compile_headless(
@@ -110,6 +110,12 @@ def _build_compiled(device, *, d: int, d_head: int, max_layers: int = 200):
         max_layers=max_layers,
         verbose=False,
         device=str(device),
+        # Production compiles under the token.v6 held-bank contract (the
+        # output written into the embedding's exact ordered residual bank).
+        # Passing the graph embedding makes this gate solve the same tied
+        # schedule; omitting it would compile a structurally different
+        # untied schedule production never runs.
+        output_layout_source=emb,
     )
     return compiled, next_token
 

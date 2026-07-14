@@ -78,6 +78,23 @@ def test_forward_compiles_to_onnx(tmp_path) -> None:
         isinstance(sidecar.get("cache_stride"), int) and sidecar["cache_stride"] >= 1
     ), f"sidecar must carry the full cache_stride, got {sidecar.get('cache_stride')!r}"
 
+    # token.v6 tied artifact: the sidecar declares v6, and one physical
+    # embed_table serves both the input lookup (Gather) and the transposed
+    # final readout — there is no separate lm_head initializer.
+    assert sidecar.get("format") == "torchwright.token.v6", sidecar.get("format")
+    init_names = {x.name for x in model.graph.initializer}
+    init_names |= {x.values.name for x in model.graph.sparse_initializer}
+    assert "embed_table" in init_names, "artifact lacks the embed_table initializer"
+    assert "lm_head" not in init_names, "artifact carries an untied lm_head"
+    gather_sources = {n.input[0] for n in model.graph.node if n.op_type == "Gather"}
+    assert "embed_table" in gather_sources, "embed_table does not feed token lookup"
+    readout_sources = [
+        n.input[0]
+        for n in model.graph.node
+        if n.op_type == "Transpose" and list(n.output) == ["_embed_table_T"]
+    ]
+    assert readout_sources == ["embed_table"], "readout is not the transposed table"
+
     # Layer count: Phase J's flat pass lands the forward at 85 layers at d=4096
     # (H was ~45). The jump is the per-position flat-pass compute that was no_op
     # in H — the R_MapPlane cursor PWL chain, R_MakeSpans open/close, and the

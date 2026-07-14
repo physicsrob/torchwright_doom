@@ -245,6 +245,22 @@ def _validate_complete_staged_bundle(
     expected_partial = (config.model.d_rot or config.model.d_head) / config.model.d_head
     if partial != expected_partial:
         raise ValueError("stock Phi-3 partial-RoPE setting differs from the Doom graph")
+    # token.v6 tie: one serialized token table serves lookup and readout —
+    # the config declares the tie, the loaded parameters share storage, and
+    # the index carries no separate lm_head tensor.
+    if model.config.tie_word_embeddings is not True:
+        raise ValueError("Doom Phi-3 bundle must set tie_word_embeddings (token.v6)")
+    if model.lm_head.weight.data_ptr() != model.model.embed_tokens.weight.data_ptr():
+        raise ValueError(
+            "loaded Doom model's lm_head is not storage-tied to embed_tokens"
+        )
+    weight_map = json.loads((bundle / "model.safetensors.index.json").read_text())[
+        "weight_map"
+    ]
+    if "model.embed_tokens.weight" not in weight_map:
+        raise ValueError("Doom bundle index lacks model.embed_tokens.weight")
+    if "lm_head.weight" in weight_map:
+        raise ValueError("Doom bundle serializes an untied lm_head.weight")
     cache = DynamicCache()
     first = torch.tensor([[manifest["bos_token_id"]]], dtype=torch.long)
     with torch.no_grad():

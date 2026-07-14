@@ -261,6 +261,28 @@ def emit_derived_zero(suffix: str = "") -> Node:
 
 
 @annotated("emit")
+def emit_head_to_full_row(head: Node) -> Node:
+    """Pad a ``head_width()``-wide emit row to the full ``d_embed`` width
+    through one schedulable Linear whose derived-tail output columns are all
+    zero rows (matmul zeros are exact, so the row argmaxes identically to
+    ``concat(head, emit_derived_zero())``).
+
+    This shape is required by the tied token compile (token.v6): the final
+    output must be a single non-``Concatenate`` writer node so the compiler
+    can place it into the embedding's held residual bank. A ``Concatenate``
+    of head + literal-zero tail has no writer and is rejected at compile
+    time.
+    """
+    layout = TOKEN_VOCAB.layout
+    width = head_width()
+    if len(head) != width:
+        raise ValueError(f"emit head is {len(head)} wide, expected {width}")
+    weights = torch.zeros((width, layout.d_embed), dtype=torch.float32)
+    weights[:, :width] = torch.eye(width, dtype=torch.float32)
+    return Linear(head, weights, name="emit_full_row")
+
+
+@annotated("emit")
 def emit_token_head(
     token_type: TokenType,
     *,

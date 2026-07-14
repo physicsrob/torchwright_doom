@@ -11,8 +11,10 @@ residual and will not compile. The port replaces it (see ``dispatch_next_token``
 branches are built as emit *heads* (``head_width()`` — the constant derived tail
 dropped, ≈ 19 cols), transitions that select the same head are grouped with
 their predicates OR-ed, the distinct gated heads are summed (see
-``dispatch_next_token`` for the ``max_fanout`` depth/width trade-off), and one
-shared ``emit_derived_zero`` is concatenated at the end. The full row is
+``dispatch_next_token`` for the ``max_fanout`` depth/width trade-off), and the
+head is padded to the full row by ``emit_head_to_full_row``'s zero output
+columns (one schedulable writer — the token.v6 tied compile rejects a
+``Concatenate`` output). The full row is
 byte-identical to a per-transition ``make_token`` row, so the teacher-forced
 oracle is unchanged, and the dispatch width barely grows with the token count.
 
@@ -33,7 +35,7 @@ from torchwright.graph import annotate, annotated
 
 from .traversal.bsp_traversal import BspTraversal
 from .constants import HUD_ENABLED
-from .emit import emit_derived_zero
+from .emit import emit_head_to_full_row
 from .raster.flat_pass_renderer import FlatPassRenderer
 from .past import GraphPast, PastHandleScope
 from .raster.payload_router import PayloadRouter
@@ -156,10 +158,10 @@ def dispatch_next_token(
 
     1. **Gate over heads, stamp the tail once.** Each branch is built at
        ``head_width()`` (the constant derived tail dropped — ≈ 19 cols under the
-       shared-slot-column embedding); the sum runs over heads and one shared
-       :func:`emit_derived_zero` is concatenated afterward. The result is
-       byte-identical to the matching branch's full ``make_token`` row, so the
-       teacher-forced oracle is unchanged.
+       shared-slot-column embedding); the sum runs over heads and
+       :func:`emit_head_to_full_row` pads to ``d_embed`` through zero output
+       columns. The result is byte-identical to the matching branch's full
+       ``make_token`` row, so the teacher-forced oracle is unchanged.
     2. **One gated copy per *distinct* head, not per transition.** Every
        transition's predicate is read off ``inp``; transitions that select the
        *same* head node (all the deferred branches share one ``no_op`` head) are
@@ -189,7 +191,11 @@ def dispatch_next_token(
     # 16 keeps the sum single-level after the shared pixel branches' arms are
     # flattened into this switch (~15 distinct heads); 8 would re-add a level.
     head = type_switch(*_distinct_head_pairs(inp, branches), max_fanout=16)
-    return concat(head, emit_derived_zero())
+    # token.v6: the tied compile writes the output into the embedding's held
+    # residual bank through one realized writer node, so the derived-zero
+    # tail rides this Linear's zero output columns rather than a
+    # ``concat(head, emit_derived_zero())`` the contract would reject.
+    return emit_head_to_full_row(head)
 
 
 @annotated("dispatch")

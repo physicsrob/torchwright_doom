@@ -156,7 +156,7 @@ def test_indexed_but_undeclared_shard_fails(tmp_path: Path) -> None:
     index = {
         "weight_map": {
             "model.embed_tokens.weight": "model-00001.safetensors",
-            "lm_head.weight": "model-00002.safetensors",
+            "model.norm.weight": "model-00002.safetensors",
         }
     }
     (bundle / "model-00002.safetensors").write_text("fake")
