@@ -45,6 +45,9 @@ from modal_image import (
 RENDER_ARTIFACTS_VOLUME = modal.Volume.from_name(
     "torchwright-doom-render", create_if_missing=True
 )
+SCHEDULE_CACHE_VOLUME = modal.Volume.from_name(
+    "torchwright-doom-schedule-cache", create_if_missing=True
+)
 
 app = modal.App("torchwright-doom-run", image=IMAGE)
 
@@ -100,12 +103,18 @@ def _forwarded_env() -> dict[str, str]:
         "/root/.cache/torchwright_doom/onnx_debug": ONNX_DEBUG_VOLUME,
         "/root/.cache/torchwright_doom/hf_phi3": HF_BUNDLE_VOLUME,
         "/artifacts": RENDER_ARTIFACTS_VOLUME,
+        # Read-side only: debugging scripts COPY the entry they need to a
+        # container-local dir and point TW_SCHEDULE_CACHE_DIR there, so a
+        # replay can never write back (schedules enter this volume exactly
+        # one way — a `make compile` solve).
+        "/schedule-cache-ro": SCHEDULE_CACHE_VOLUME,
     },
 )
 def run_gpu(module: str, script: str, args: str, env: dict[str, str]) -> int:
     ONNX_DEBUG_VOLUME.reload()
     HF_BUNDLE_VOLUME.reload()
     RENDER_ARTIFACTS_VOLUME.reload()
+    SCHEDULE_CACHE_VOLUME.reload()
     cmd = _build_cmd(module, script, args)
     if env:
         print(
