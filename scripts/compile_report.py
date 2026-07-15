@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -42,8 +43,6 @@ os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
 for p in (_UMBRELLA, _UMBRELLA / "torchwright_doom"):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
-
-import onnx
 
 import torchwright.compiler.forward.compile as _cmp
 from torchwright.compiler.export import compile_to_onnx
@@ -62,7 +61,16 @@ def _build(d_head: int):
     return nt, rope, emb
 
 
-def compile_with_provenance(d: int, d_head: int, optimize: int, max_layers: int = 400):
+def compile_with_provenance(
+    d: int,
+    d_head: int,
+    optimize: int,
+    max_layers: int = 400,
+    *,
+    n_heads: int | None = None,
+    solver_seed: int | None = None,
+    rms_norm_const_exp: int | None = None,
+):
     """Compile once; return a dict capturing solver provenance.
 
     Hooks ``_run_heuristic_warm_start`` (the heuristic baseline / warm-start hint)
@@ -91,12 +99,13 @@ def compile_with_provenance(d: int, d_head: int, optimize: int, max_layers: int 
         return assignment, stats
 
     nt, rope, emb = _build(d_head)
-    path = os.path.join(tempfile.mkdtemp(), f"d{d}_o{optimize}.onnx")
+    tmp = tempfile.mkdtemp()
+    path = os.path.join(tmp, f"d{d}_o{optimize}.onnx")
     _cmp._run_heuristic_warm_start = warm_hook
     _cmp.solve_schedule = solve_hook
     t0 = time.perf_counter()
     try:
-        compile_to_onnx(
+        artifact = compile_to_onnx(
             nt,
             embedding=emb,
             output_path=path,
@@ -105,11 +114,12 @@ def compile_with_provenance(d: int, d_head: int, optimize: int, max_layers: int 
             max_layers=max_layers,
             optimize=optimize,
             verbose=False,
+            n_heads=n_heads,
+            _solver_seed=solver_seed,
+            rms_norm_const_exp=rms_norm_const_exp,
         )
-        m = onnx.load(path)
-        cap["final_layers"] = sum(
-            1 for i in m.graph.input if i.name.startswith("past_K_")
-        )
+        cap["final_layers"] = artifact.n_layers
+        cap["per_layer_heads"] = list(artifact.per_layer_n_heads)
         cap["error"] = None
     except Exception as e:  # noqa: BLE001 — surface, don't swallow
         cap["final_layers"] = None
@@ -118,6 +128,9 @@ def compile_with_provenance(d: int, d_head: int, optimize: int, max_layers: int 
         cap["wall"] = time.perf_counter() - t0
         _cmp._run_heuristic_warm_start = orig_warm
         _cmp.solve_schedule = orig_solve
+        # A d=8192 artifact is ~90 GB; a multi-seed sweep would fill the
+        # container's ephemeral disk if these accumulated.
+        shutil.rmtree(tmp, ignore_errors=True)
     return cap
 
 
@@ -156,14 +169,40 @@ def main() -> None:
     ap.add_argument("--optimize", type=int, nargs="+", default=[0, 2])
     ap.add_argument("--d-head", type=int, default=160)
     ap.add_argument(
+        "--n-heads",
+        type=int,
+        default=None,
+        help="decouple the per-layer head capacity from d // d_head",
+    )
+    ap.add_argument(
+        "--seeds",
+        type=int,
+        nargs="*",
+        default=None,
+        help="CP-SAT solver seeds; each seed runs one full compile per (d, opt)",
+    )
+    ap.add_argument(
+        "--rms-const-exp",
+        type=int,
+        default=None,
+        help="pinned RMS constant exponent (production e1m1 passes 63)",
+    )
+    ap.add_argument(
         "--solver-log",
         action="store_true",
         help="dump the CP-SAT solver log tail for each opt>0 run",
     )
     args = ap.parse_args()
 
-    print(f"compile provenance report (d_head={args.d_head})")
-    print(f"  {'d':>6} {'opt':>3}   layers + SOLVER PROVENANCE")
+    from torchwright_doom.model.constants import SCREEN_HEIGHT, SCREEN_WIDTH
+
+    seeds = list(args.seeds) if args.seeds else [None]
+    print(
+        f"compile provenance report (d_head={args.d_head} n_heads={args.n_heads} "
+        f"screen={SCREEN_WIDTH}x{SCREEN_HEIGHT} rms_const_exp={args.rms_const_exp})",
+        flush=True,
+    )
+    print(f"  {'d':>6} {'opt':>3}   layers + SOLVER PROVENANCE", flush=True)
     for d in args.d:
         if d % args.d_head != 0:
             print(
@@ -172,12 +211,30 @@ def main() -> None:
             )
             continue
         for opt in args.optimize:
-            cap = compile_with_provenance(d, args.d_head, opt)
-            print(_fmt_row(d, opt, cap))
-            if args.solver_log and cap.get("stats") is not None:
-                log = getattr(cap["stats"], "solver_log", "") or ""
-                for line in log.splitlines()[-8:]:
-                    print(f"        | {line}")
+            for seed in seeds:
+                cap = compile_with_provenance(
+                    d,
+                    args.d_head,
+                    opt,
+                    n_heads=args.n_heads,
+                    solver_seed=seed,
+                    rms_norm_const_exp=args.rms_const_exp,
+                )
+                tag = f"  seed={seed}" if seed is not None else ""
+                print(_fmt_row(d, opt, cap) + tag, flush=True)
+                heads = cap.get("per_layer_heads")
+                if heads:
+                    head_cap = args.n_heads or (d // args.d_head)
+                    at_cap = sum(1 for h in heads if h >= head_cap)
+                    print(
+                        f"        heads/layer: max={max(heads)} "
+                        f"at_cap={at_cap}/{len(heads)} total={sum(heads)}",
+                        flush=True,
+                    )
+                if args.solver_log and cap.get("stats") is not None:
+                    log = getattr(cap["stats"], "solver_log", "") or ""
+                    for line in log.splitlines()[-8:]:
+                        print(f"        | {line}")
 
 
 if __name__ == "__main__":
