@@ -32,7 +32,19 @@ import time
 
 import modal
 
-from modal_image import IMAGE, ONNX_DEBUG_VOLUME, ONNX_DIAGNOSTIC_IMAGE
+from modal_image import (
+    HF_BUNDLE_VOLUME,
+    IMAGE,
+    ONNX_DEBUG_VOLUME,
+    ONNX_DIAGNOSTIC_IMAGE,
+)
+
+# Per-run render artifacts (modal_render.py's RENDER_VOLUME): reference
+# token streams for bundle-debugging scripts.  from_name resolves the same
+# durable volume; modal dedupes by name.
+RENDER_ARTIFACTS_VOLUME = modal.Volume.from_name(
+    "torchwright-doom-render", create_if_missing=True
+)
 
 app = modal.App("torchwright-doom-run", image=IMAGE)
 
@@ -79,12 +91,21 @@ def _forwarded_env() -> dict[str, str]:
     memory=int(os.environ.get("MODAL_RUN_GPU_MEMORY", "32768")),
     timeout=_TIMEOUT,
     # The configs-augmented image: the artifact-debugging scripts need the
-    # committed configs + WAD next to the mounted compile cache.
+    # committed configs + WAD next to the mounted compile cache.  Production
+    # HF bundles and per-run render artifacts mount read-alongside at their
+    # production paths so bundle-debugging scripts (teacher forcing, logit
+    # probes) can load the exact published model and reference streams.
     image=ONNX_DIAGNOSTIC_IMAGE,
-    volumes={"/root/.cache/torchwright_doom/onnx_debug": ONNX_DEBUG_VOLUME},
+    volumes={
+        "/root/.cache/torchwright_doom/onnx_debug": ONNX_DEBUG_VOLUME,
+        "/root/.cache/torchwright_doom/hf_phi3": HF_BUNDLE_VOLUME,
+        "/artifacts": RENDER_ARTIFACTS_VOLUME,
+    },
 )
 def run_gpu(module: str, script: str, args: str, env: dict[str, str]) -> int:
     ONNX_DEBUG_VOLUME.reload()
+    HF_BUNDLE_VOLUME.reload()
+    RENDER_ARTIFACTS_VOLUME.reload()
     cmd = _build_cmd(module, script, args)
     if env:
         print(
