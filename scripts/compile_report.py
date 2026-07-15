@@ -81,27 +81,35 @@ def compile_with_provenance(
         "stats": None,
         "fell_back": None,
         "cpsat_layers": None,
+        "solve_calls": 0,
     }
 
-    orig_warm = _cmp._run_heuristic_warm_start
+    orig_warm = _cmp._build_heuristic_schedule_trace
     orig_solve = _cmp.solve_schedule
 
     def warm_hook(*a, **k):
-        res = orig_warm(*a, **k)
-        cap["heur_layers"] = res[3]  # hint_n_layers
-        return res
+        trace = orig_warm(*a, **k)
+        cap["heur_layers"] = trace.n_layers
+        return trace
 
     def solve_hook(*a, **k):
+        # optimize=3 iterated descent may invoke the solver several times per
+        # compile; keep the last stats, but count a fallback only if NO call
+        # ever produced an assignment.
         assignment, stats = orig_solve(*a, **k)
+        cap["solve_calls"] += 1
         cap["stats"] = stats
-        cap["fell_back"] = assignment is None
-        cap["cpsat_layers"] = getattr(assignment, "n_layers", None)
+        if assignment is not None:
+            cap["fell_back"] = False
+            cap["cpsat_layers"] = getattr(assignment, "n_layers", None)
+        elif cap["fell_back"] is None:
+            cap["fell_back"] = True
         return assignment, stats
 
     nt, rope, emb = _build(d_head)
     tmp = tempfile.mkdtemp()
     path = os.path.join(tmp, f"d{d}_o{optimize}.onnx")
-    _cmp._run_heuristic_warm_start = warm_hook
+    _cmp._build_heuristic_schedule_trace = warm_hook
     _cmp.solve_schedule = solve_hook
     t0 = time.perf_counter()
     try:
@@ -126,7 +134,7 @@ def compile_with_provenance(
         cap["error"] = f"{type(e).__name__}: {str(e).splitlines()[0][:60]}"
     finally:
         cap["wall"] = time.perf_counter() - t0
-        _cmp._run_heuristic_warm_start = orig_warm
+        _cmp._build_heuristic_schedule_trace = orig_warm
         _cmp.solve_schedule = orig_solve
         # A d=8192 artifact is ~90 GB; a multi-seed sweep would fill the
         # container's ephemeral disk if these accumulated.
