@@ -57,6 +57,13 @@ class ModelConfig:
     # geometry, so it rides the compile-cache key via asdict(config.model).
     hud: bool = False
     d_hidden: int | None = None
+    # Per-layer attention-head capacity cap (stock num_attention_heads is the
+    # max ACTUAL head count over layers, so this bounds the published global
+    # head width).  None = d // d_head.  The committed configs set 32 (with
+    # d_head 128): attention width 4096 halves the per-token KV footprint vs
+    # the 64-head schedule and is what fits the full 320x200 frame's cache on
+    # one render GPU.  Rides the compile-cache key via asdict(config.model).
+    n_heads: int | None = None
     max_layers: int = 200
     trim_heads: bool = True
     max_seq_len: int = 65536
@@ -211,6 +218,7 @@ def load_render_config(path: str | Path) -> RenderConfig:
             "detail",
             "hud",
             "d_hidden",
+            "n_heads",
             "max_layers",
             "trim_heads",
             "max_seq_len",
@@ -235,6 +243,7 @@ def load_render_config(path: str | Path) -> RenderConfig:
             detail=str(model.get("detail", "high")),
             hud=bool(model.get("hud", False)),
             d_hidden=_optional_int(model.get("d_hidden")),
+            n_heads=_optional_int(model.get("n_heads")),
             max_layers=int(model.get("max_layers", 200)),
             trim_heads=bool(model.get("trim_heads", True)),
             max_seq_len=int(model.get("max_seq_len", 65536)),

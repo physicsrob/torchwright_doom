@@ -41,13 +41,15 @@ _RUN_VARIANT = RunConfig(
     pose=PoseConfig(x=1.0, y=2.0, angle=3, viewz=4.0),
 )
 
-# Computed by the pre-move inference/config.py implementation with
-# _git_sha pinned to "pinned-test-sha" (plan_cleanup_v2 Workstream 5 gate:
-# cache keys for unchanged config content do not change because code moved).
+# Computed with _git_sha pinned to "pinned-test-sha" (plan_cleanup_v2
+# Workstream 5 gate: cache keys for unchanged config content do not change
+# because code moved).  Re-pinned 2026-07-14 when the committed configs
+# gained model.n_heads: 32 — a deliberate content change that must move
+# the key exactly once.
 _PINNED_KEYS = {
-    "e1m1.yaml": "81e93524781aec313568275ae30538bb2c9559624b4f8f17d919caf2fc24c80b",
+    "e1m1.yaml": "bfc3cfa363e4d069785acb6139e6c16c52cc9b44dfc4b0317c2c5c1a0e8b1b1a",
     "e1m1_lowres.yaml": (
-        "98767b7444ecb150c910f5b3d8c8745ec5179fea23e16920076470bc7b51d3eb"
+        "0b080be38300f32be3828f25829cb6af74cc8e5be1cdc5d784b8a179e07e72e5"
     ),
 }
 

@@ -348,6 +348,7 @@ def compile_phi3_bundle(
             stage,
             d=config.model.d,
             d_head=config.model.d_head,
+            n_heads=config.model.n_heads,
             max_seq_len=config.model.max_seq_len,
             max_layers=config.model.max_layers,
             optimize=config.model.optimize,
