@@ -21,6 +21,7 @@ Graph-reaching imports stay inside ``run_config`` after
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from dataclasses import asdict
@@ -134,7 +135,17 @@ def run_config(
         str(max_new_tokens),
     ]
     print(f"[run] executing portable inference: {infer_script}", flush=True)
-    subprocess.run(command, check=True)
+    # Host-side allocator config only (no computation moves): the stock
+    # DynamicCache grows by a per-layer torch.cat each step, whose transient
+    # second copy needs one layer's full K/V (~1 GiB at 320x200 end-of-frame)
+    # as a CONTIGUOUS block.  A full-resolution frame fills the render GPU to
+    # within a few GiB, and ~30 min of grow-free cycles fragments what's
+    # left — the 2026-07-14 production render died at ~61k/61,440 tokens with
+    # 5.2 GiB stranded in reserved-but-unallocated segments.  Expandable
+    # segments lets those segments grow in place instead.
+    env = dict(os.environ)
+    env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    subprocess.run(command, check=True, env=env)
 
     ids_path = out_dir / "output.ids.json"
     raw_text_path = out_dir / "output.txt"
