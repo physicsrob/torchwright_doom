@@ -26,6 +26,11 @@ from .extract import input_type_code, is_type
 from .render_constants import RECENCY_GAIN
 from .vocab import BOS
 
+# Build-time strategy flag for global_position(): True = the op's smoothed
+# path (exact causal mean of the raw recovery, ×2).  Exists only so probes
+# and A/B replays can rebuild the raw-tiebreak graph; production is True.
+_SMOOTHED_GLOBAL_POSITION = True
+
 
 @dataclass(frozen=True)
 class PastHandle:
@@ -66,11 +71,21 @@ class GraphPast:
         pixel-index math (``pos - marker``) and as the recency tiebreak in
         :meth:`pick_most_recent`.  Provenance-clean: derived from rotary attention,
         never host-seeded.
+
+        **Smoothed.**  The raw PWL recovery's compiled fp32 evaluation wanders
+        with position (measured ±0.5 at 3.7k → ±10.4 at 54k; adjacent steps
+        down to 0.53, which at ``RECENCY_GAIN=8`` left ~1.5% softmax leak on
+        recency reads — the n_heads=32 regression class).  Production
+        therefore takes the op's ``smoothed=True`` path: an exact uniform
+        causal mean of the recovery, ×2, which restores adjacent steps to
+        ≥0.965 at 54k and cuts the absolute envelope to ~±1.7 (receipts in
+        ``smooth_recency_rank_derisked.md``).  ``_SMOOTHED_GLOBAL_POSITION``
+        is a build-time A/B flag for probes; production keeps it True.
         """
         if self._global_position_node is None:
             bos_indicator = is_type(self._input_vec, BOS)
             self._global_position_node = global_position_from_bos(
-                self._rope, bos_indicator
+                self._rope, bos_indicator, smoothed=_SMOOTHED_GLOBAL_POSITION
             )
         return self._global_position_node
 
@@ -201,14 +216,21 @@ class GraphPast:
         torchwright op default ``recency_scale=1`` is far too soft (``exp(1)`` ⇒
         ~0.73 blend); DOOM threads ``8`` here.
 
+        The per-adjacent-position logit gap is ``recency_scale`` times the
+        position signal's real adjacent step.  The smoothed
+        :meth:`global_position` keeps that step ≥ 0.965 over a full-cap
+        rollout (measured; the raw recovery dipped to 0.53 at scale, leaking
+        ~1.5% of the softmax to the runner-up — the n_heads=32 regression
+        class; see ``smooth_recency_rank_derisked.md``).
+
         Content-dominance invariant (the caller must satisfy): a content-matched
         older key must beat an unmatched newer key, i.e.
         ``match_gain · min_match_dot_gap > recency_scale · max_positions``.  At
-        ``recency_scale=8`` and ``max_positions=61440`` that needs
-        ``match_gain · min_match_dot_gap > 491_520``; DOOM callers pass
-        ``MATCH_GAIN_LONG`` / ``MATCH_GAIN_CLIP`` sized for that.  The facade
-        default ``match_gain=200.0`` is the underlying op default and is not
-        relied on by any caller.
+        ``recency_scale=8`` and the ``max_positions=65536`` cap that needs
+        ``match_gain · min_match_dot_gap > 524_288``; DOOM callers pass
+        ``MATCH_GAIN_LONG`` / ``MATCH_GAIN_CLIP`` (600,000 — 12.6% headroom).
+        The facade default ``match_gain=200.0`` is the underlying op default
+        and is not relied on by any caller.
         """
         self._check_node(query, "pick_most_recent query")
         key_node = self._check_handle(key, "pick_most_recent key")

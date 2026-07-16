@@ -68,6 +68,7 @@ def compile_with_provenance(
     max_layers: int = 400,
     *,
     n_heads: int | None = None,
+    d_hidden: int | None = None,
     solver_seed: int | None = None,
     rms_norm_const_exp: int | None = None,
 ):
@@ -123,6 +124,7 @@ def compile_with_provenance(
             optimize=optimize,
             verbose=False,
             n_heads=n_heads,
+            d_hidden=d_hidden,
             _solver_seed=solver_seed,
             rms_norm_const_exp=rms_norm_const_exp,
         )
@@ -183,6 +185,13 @@ def main() -> None:
         help="decouple the per-layer head capacity from d // d_head",
     )
     ap.add_argument(
+        "--d-hidden",
+        type=int,
+        default=None,
+        help="MLP hidden width (production e1m1 passes 16384; omitting it "
+        "measures a different machine — the finding-14a sweep artifact)",
+    )
+    ap.add_argument(
         "--seeds",
         type=int,
         nargs="*",
@@ -207,7 +216,8 @@ def main() -> None:
     seeds = list(args.seeds) if args.seeds else [None]
     print(
         f"compile provenance report (d_head={args.d_head} n_heads={args.n_heads} "
-        f"screen={SCREEN_WIDTH}x{SCREEN_HEIGHT} rms_const_exp={args.rms_const_exp})",
+        f"d_hidden={args.d_hidden} screen={SCREEN_WIDTH}x{SCREEN_HEIGHT} "
+        f"rms_const_exp={args.rms_const_exp})",
         flush=True,
     )
     print(f"  {'d':>6} {'opt':>3}   layers + SOLVER PROVENANCE", flush=True)
@@ -225,6 +235,7 @@ def main() -> None:
                     args.d_head,
                     opt,
                     n_heads=args.n_heads,
+                    d_hidden=args.d_hidden,
                     solver_seed=seed,
                     rms_norm_const_exp=args.rms_const_exp,
                 )

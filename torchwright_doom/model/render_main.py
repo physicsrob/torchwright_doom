@@ -283,8 +283,11 @@ def forward(input_vec: Node, past: GraphPast, asset_index=None) -> Node:
     # pixel_index = pos - span_v0.pos - 1, and the span-v0 / flat-cursor publishes
     # stamp it. Under RoPE there is no host counter column; the graph-derived
     # absolute position (``GraphPast.global_position()`` — recovered from the inert
-    # BOS token via rotary attention, RoPE-clean) is the monotone position scalar
-    # that replaces it, used both here and as the recency tiebreak.
+    # BOS token via rotary attention and smoothed by an exact causal mean,
+    # RoPE-clean) is the monotone position scalar that replaces it, used both
+    # here and as the recency tiebreak. Both sides of the ``pos - marker``
+    # subtraction are this same node, so the recovery's slow fp32 wander
+    # cancels in the difference.
     with annotate("dispatch"):
         pos_scalar = past.global_position()
     protocols = publish_runtime_protocols(input_vec, scope, inp, scene, pos_scalar)

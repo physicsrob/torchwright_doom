@@ -13,11 +13,12 @@ from __future__ import annotations
 # hard to the one real 0/1 marker. Sized so a content-matched key beats an
 # unmatched newer key at any position:
 # ``match_gain * content_gap > RECENCY_GAIN * max_positions``. The marker
-# content gap is 1 (0/1 marker), so at ``RECENCY_GAIN = 8`` and
-# ``max_positions = 61440`` this needs ``match_gain > 491_520``; 600_000 clears
-# it with headroom. (Was 300_000 under the pre-RoPE ``SCORE_GAIN`` when the
-# dominance bound was the ~32768 rollout span, not the 61440 cache cap.) Safe
-# in fp32 (ULP at 600_000 ≈ 0.06, far below the gain-8 recency step). The
+# content gap is 1 (0/1 marker), so at ``RECENCY_GAIN = 8`` and the
+# ``max_positions = 65536`` RoPE cap this needs ``match_gain > 524_288``;
+# 600_000 clears it with 12.6% headroom. (Was 300_000 under the pre-RoPE
+# ``SCORE_GAIN`` when the dominance bound was the ~32768 rollout span, not
+# the position cap.) Safe in fp32 (ULP at 600_000 ≈ 0.07, far below the
+# gain-8 recency step). The
 # op/facade default stays 200.0; long-span callers thread this explicitly.
 MATCH_GAIN_LONG = 600_000.0
 
@@ -29,7 +30,7 @@ MATCH_GAIN_LONG = 600_000.0
 # must not overturn is full-vs-partial = 1 * match_gain, NOT 2 * match_gain: a
 # more-recent partial-match column must lose to the correct full match. With
 # RECENCY_GAIN = 8 that needs ``match_gain > RECENCY_GAIN * max_positions``
-# = 8 * 61440 = 491_520, so 600_000 (the old 300_000 cleared only the 2*gain
+# = 8 * 65536 = 524_288, so 600_000 (the old 300_000 cleared only the 2*gain
 # vs total-non-match case, which left a sibling-bucket column updated >37500
 # positions later able to win at full-res ~42k). The radix key has no fp32
 # cancellation, so any sufficiently large gain works.
@@ -46,8 +47,10 @@ MATCH_GAIN_CLIP = 600_000.0
 # is looser (``_MASK_TOL`` ≈ 0.0087, cond > ~0.9913). This mirrors
 # the pre-RoPE scheme's ``SCORE_GAIN = 8`` exactly: old recency was ``8*counter``
 # (a global absolute position × gain 8); the new mechanism recovers the same
-# global absolute position from the BOS softmax weight and applies the same gain,
-# so it is the same mechanism, not a softer one. torchwright's op default is 1.0
+# global absolute position from the BOS softmax weight (smoothed — an exact
+# causal mean of the recovery, so its adjacent step stays ≥ 0.965 over a
+# full-cap rollout where the raw recovery dipped to 0.53) and applies the same
+# gain, so it is the same mechanism, not a softer one. torchwright's op default is 1.0
 # (exp(1) ≈ 0.73 — far too soft for a boolean); DOOM threads this 8.0 through the
 # facade. Content dominance (a matched older key must beat an unmatched newer
 # key) requires ``match_gain * content_gap > RECENCY_GAIN * max_positions``; the
