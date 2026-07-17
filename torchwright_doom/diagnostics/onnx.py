@@ -106,6 +106,7 @@ def compile_onnx_debug_cached(
         d=config.model.d,
         d_head=config.model.d_head,
         d_rot=config.model.d_rot,
+        n_heads=config.model.n_heads,
         d_hidden=config.model.d_hidden,
         max_layers=config.model.max_layers,
         max_seq_len=config.model.max_seq_len,
@@ -161,6 +162,7 @@ def compile_onnx_debug_path(
     d: int = 4096,
     d_head: int = 32,
     d_rot: int | None = None,
+    n_heads: int | None = None,
     max_layers: int = 200,
     max_seq_len: int = 65536,
     cache_stride: int = 12288,
@@ -223,6 +225,8 @@ def compile_onnx_debug_path(
     }
     if profile is not None:
         kwargs["profile"] = profile
+    if n_heads is not None:
+        kwargs["n_heads"] = n_heads
     if d_hidden is not None:
         kwargs["d_hidden"] = d_hidden
     if extra_metadata is not None:
