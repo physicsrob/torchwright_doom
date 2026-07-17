@@ -1,12 +1,14 @@
-"""Write the K output artifact: ``token_dump.json`` (the PNGs live in ``compare``).
+"""Write the ``token_dump.json`` output artifact (the PNGs live in ``compare``).
 
 The dump records the *generated* token stream — the single source of truth for
-what the model rendered. Schema mirrors the original rollout dumps
-(``rollout_cache.case_json_dump``) closely enough that ``viewer.html`` can
-reconstruct the frame from it: ``predicted_next_tokens`` carries the rollout
-entries (``phase == "rollout"``), each with its palette/cursor slots, and the
-viewer walks them exactly as the host decode does. No precomputed pixel array —
-the tokens are the source of truth (matching the original dump convention).
+what the model rendered. The live consumer is the blog viz toolkit
+(``blog/pieces/doom/vizkit``, ``build.mjs --trace``), which reconstructs the
+frame by walking the rollout entries (``phase == "rollout"``, each with its
+palette/cursor slots) exactly as the host decode does. The same rollout list
+is written under two keys because trace consumers have read either name: the
+vizkit schema requires ``rollout_output_tokens`` and accepts
+``predicted_next_tokens`` as an optional alias. No precomputed pixel array —
+the tokens are the source of truth.
 """
 
 from __future__ import annotations
@@ -52,7 +54,7 @@ def build_token_dump(
     config: dict[str, Any] | None = None,
     bundle_manifest: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build the K ``token_dump`` payload (one case)."""
+    """Build the ``token_dump`` payload (one case)."""
     n_prefill = len(prefill_rows)
     prefill_entries = [_row_entry(i, r, "prefill") for i, r in enumerate(prefill_rows)]
     rollout_entries = [

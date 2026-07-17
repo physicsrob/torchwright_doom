@@ -1,5 +1,10 @@
 """Read-only branch owner for the status-bar pass (ST_Drawer).
 
+This module runs once at compile time: it builds part of the computation
+graph that torchwright lowers into the transformer's weights. Nothing here
+executes during inference — at render time, only the compiled transformer
+runs. Coined terms: see GLOSSARY.md.
+
 DOOM draws the status bar last, on top of everything, as a SEQUENCE of
 ``V_DrawPatch`` calls (st_stuff.c / st_lib.c): the plate, then the ammo/health/
 armor numbers, the ARMS panel + weapon numbers, the face. Each ``V_DrawPatch`` is
@@ -21,16 +26,20 @@ Token transitions (this module owns each arrow unless noted):
     [weapon pass end] -> ST_Drawer                     [psprite_renderer, HUD-gated]
     ST_Drawer -> HUD_ITEM(0)                            (first draw-list entry)
     HUD_ITEM(i) -> SET_CURSOR_X(origin_x[i])            (arm the patch's first col)
-    SET_CURSOR_X -> local_col >= width[i]
-                       ? (i last ? DONE : HUD_ITEM(i+1))   # patch done
-                       : SET_CURSOR_Y(origin_y[i])         # open the column
+    SET_CURSOR_X -> SET_CURSOR_Y(origin_y[i])            (open the column)
     SET_CURSOR_Y(r) -> D(i, r)
     PIXEL           -> D(i, current_row)
 
     D(i, y):                                   # the shared per-pixel decision
-      current_row > origin_y[i]+height[i]-1 ? SET_CURSOR_X(cursor_x+1)  # next col
+      current_row > origin_y[i]+height[i]-1              # column done
+        ? (local_col last ? (i last ? DONE : HUD_ITEM(i+1))   # patch done
+           : SET_CURSOR_X(cursor_x+1))                        # next col
        : transparent(i, local_col, v) ? SET_CURSOR_Y(current_row+1)     # skip
          : PIXEL(color, w=1)                                            # paint
+
+The item-done transition fires inside D, ON the last column finishing (never on
+the SET_CURSOR_X arrow), so the cursor never has to advance to ``width`` —
+see ``after_set_cursor_x_hud``.
 
 The cursor direction is Y, inherited from the weapon pass that always precedes
 the bar (both gated on the HUD). The bar paints at native screen resolution
@@ -75,8 +84,9 @@ class StatusBarRenderer:
 
     @property
     def _hud(self) -> "HudPassState":
-        # StatusBarRenderer is only built on the HUD_ENABLED path (the
-        # `if not HUD_ENABLED: return below` guards in pixel_dispatcher), where
+        # StatusBarRenderer is only built on the HUD_ENABLED path
+        # (pixel_dispatcher passes its `hud_arm=(... if HUD_ENABLED else None)`
+        # arguments, building this class only in the HUD_ENABLED case), where
         # the flats projection always carries a HudPassState -- never None here.
         hud = self.projection.flats.hud
         assert hud is not None

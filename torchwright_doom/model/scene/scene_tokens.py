@@ -1,17 +1,18 @@
 """Prefill token interpretation for scene indexing.
 
+This module runs once at compile time: it builds part of the computation graph
+that torchwright lowers into the transformer's weights. Nothing here executes
+during inference — at render time, only the compiled transformer runs. Coined
+terms: see GLOSSARY.md.
+
 The scene prefill stream is compact, so most facts are not self-contained
 tokens. Structural headers (`NODE`, `SS`, `SEG`) establish the current record,
 then marker tokens identify which field the following `VALUE` or `ANGLE_VALUE`
 payload belongs to. This module gives those raw token checks/extractions names
 that match the scene-index story.
 
-The only changes from the original are the import block (``Vec`` -> ``Node``; the
-std helpers + token declarations now come from the real-side shim / vocab) and
-the shared ``input_type_matches`` body (``type_matches``); the
-``@cached_property`` token accessors are a line-for-line port. Those names are
-the prefill protocol's documentation — keep them explicit even where
-repetitive.
+The ``@cached_property`` token accessor names are the prefill protocol's
+documentation — keep them explicit even where repetitive.
 """
 
 from __future__ import annotations

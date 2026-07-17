@@ -20,8 +20,9 @@ def silenced_graph_asserts() -> Iterator[None]:
     *discarded* branch can land inside a comparator ramp (e.g. ``gt_height``
     of two garbage recovered heights) and trip the gated ops' shared ±1
     assert during ``reference_eval``.  At the active row the cond is clean
-    (DOOM heights are integers).  The oracle gates and the Plan-K diagnostics
-    validate via next-token agreement, not the debug asserts — so exact-math
+    (DOOM heights are integers).  The oracle gate tests and the render
+    comparison (``interpret/compare``) validate via output agreement —
+    next-token and image-level — not the debug asserts, so exact-math
     passes silence the predicates instead.
 
     Checks are node metadata since the assert-metadata migration

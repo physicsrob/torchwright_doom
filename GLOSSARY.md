@@ -45,12 +45,70 @@ here.
   `SegProjection.publish`'s numbered `# Phase N` comments, which *are* its
   internal publish order (phases 1–13).
 
+- **the port (C → pydoom → graph)** — the lineage every renderer module
+  descends from: id Software's original C (`r_bsp.c`, `r_segs.c`, …) was
+  first ported to **pydoom**, the plain-Python reference renderer vendored
+  at `pydoom/` (also the oracle the tests and `make run COMPARE=1` score
+  against), and each pydoom module was then ported to a graph module under
+  `model/`. Docstring stamps like "ported from pydoom's `renderer.py`"
+  name the middle step; `# DOOM: R_*` comments name the C.
+
+- **data floor** — the imported-constant data the token contract's value
+  ranges rest on: the lighting tables and asset configuration
+  (`doom_lighting.py`, `asset_config.py`) whose extreme values determine
+  what the carriers must be able to encode (`model/__init__.py`).
+
 ## Tokens and emission
 
 - **token** — one discrete input/output of the autoregressive loop. Each
   token has a *type* and, for numeric types, a *payload* value. The host
   copies each output token to the next input (see `CLAUDE.md`, "Dumb host
   principle").
+
+- **row / row id** — a token's integer id: its row index in the frozen
+  vocabulary table (`tokenizer/`). The model emits rows; `infer.py`, the
+  interpretation tools, and the bundle artifacts all speak in row ids.
+  "Row" and "token id" are the same number.
+
+- **W_EMBED** — the embedding matrix (`model/embedding.py`): one row per
+  vocabulary token. Under the tied token contract (**token.v6**, below) it
+  is also the LM head, so the row the graph emits is scored against the
+  same table that encodes inputs.
+
+- **token.v6 / the tied token compile** — the versioned token↔residual
+  contract between the doom graph and the compiler (stamped
+  `torchwright.token.v6` in bundle manifests). The v6 tie: one serialized
+  token table serves both embedding lookup and readout
+  (`tie_word_embeddings`; `bundle/build.py` enforces the shared storage),
+  and the graph's final output must be a single writer node the compiler
+  can place into the embedding's residual bank (`emit.py`).
+
+- **range-encode** — mapping a value into a slot's declared range
+  normalized to `[-1, 1]` before quantization, so one shared digit-quad
+  head can carry any carrier's payload (`emit.py`, `std.clamp_to_slot`).
+
+- **BAM** — binary angle measurement: angles as integer turn fractions.
+  **This project's BAM is 8,192 units per revolution** (`vocab.ANGLE_BAM`)
+  — not the 2³²-based BAM of the original engine; carrier tolerances like
+  "±2 BAM" are in these units.
+
+- **`.den`** — the denominator companion token: a wall scale is emitted as
+  a `.den` token first, then the scale value derived from the recovered
+  denominator one step later (`ds.scale1.den` → `ds.scale1`;
+  `wall_range_builder.scale_from_recent_denominator`). Splits the division
+  across two serial steps.
+
+- **K-part / `segKpart`** — the wall-parts bitmask emitted at
+  `R_StoreWallRange` time: `4·mid + 2·upper + 1·lower` says which texture
+  parts this wall range draws, and the K-part tables map a span ordinal
+  (0, 1, 2) to its part in the wall-column loop (`wall_range_builder.py`,
+  `tokenizer/display.py`). The name is port vocabulary from pydoom's
+  drafter; the bitmask is what matters.
+
+- **sandbox token** — an invented protocol token with no DOOM counterpart
+  (lowerCamelCase by the naming convention below), added to make the
+  render expressible as an autoregressive stream — e.g. `noOp`,
+  `bspReturn`, `segKpart`.
 
 - **slot** — a named field of a token type with a declared range, e.g. a
   `NODE` token's `j` coordinate (`IntSlot`/`FloatSlot` in `tokens.py`).
@@ -71,6 +129,8 @@ here.
   derived columns. The dispatch builds every branch at head width and
   stamps the shared tail once after picking the winner, which keeps the
   live residual narrow enough to compile (`emit.py`, `render_main.py`).
+  **Not an attention head** — the two senses are unrelated; this one is a
+  row-layout term.
 
 - **derived column / derived tail** — columns holding precomputed
   functions of a token (e.g. an angle's sin/cos) that are constant-zero at
@@ -269,8 +329,13 @@ the graph by `table_lookup_2d`.
   before it starts generating.
 
 - **subset** — bbox-slicing a full WAD map down to the segs / subsectors /
-  minimal BSP subtree that the frame needs, renumbered to dense indices so
-  ids stay small (`prompt/subset.subset_by_bbox`).
+  minimal BSP subtree intersecting a **fixed world-space rectangle declared
+  once in the scene config** (`region:` in `configs/e1m1.yaml`), renumbered
+  to dense indices so ids stay small (`prompt/subset.subset_by_bbox`). The
+  rectangle is part of the compiled bundle's identity and is independent of
+  the camera: every pose within it reads the same prompt geometry. This is
+  input preparation (cropping the level file), not visibility work — all
+  per-view culling, ordering, and occlusion happen inside the model.
 
 - **mean-centred / `scene_origin`** — the subset step shifts every kept
   coordinate by the centroid of the kept vertices so values fit the
@@ -295,3 +360,19 @@ Everything Doom-specific after generation consumes those artifacts
 - **KV cache** — Transformers' stock generation cache, wholly owned by
   stock `Phi3ForCausalLM.generate()`. Doom has no second host-side inference
   implementation.
+
+- **drafter** — pydoom's reference state machine (`pydoom/drafter.py`)
+  that predicts the exact token order of a render: the **test-only
+  conformance oracle** the rollout is diffed against in the graph gates.
+  It is never on the generation path — at inference the transformer alone
+  produces tokens (production is stock `generate()`; see *Portable
+  inference*). The name survives from a retired speculative-decode
+  runtime, where it once drafted tokens; today it only checks them.
+
+- **within-option color** — the lenient half of the pixel score in
+  `make run COMPARE=1`: a generated pixel counts as correct if its color
+  is in that pixel's *accepted-option set* (the reference color plus its
+  texture-neighborhood and lighting-tolerance alternates,
+  `interpret/compare.py`). "Exact" counts only the reference color
+  itself. The production render scores ~99.99% within-option / 96.5%
+  exact (see `FACTS.md`).

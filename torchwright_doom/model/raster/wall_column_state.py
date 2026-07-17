@@ -1,4 +1,10 @@
-"""Wall-column runtime state for the SegProjection ``wall`` subcontext (Phase H).
+"""Wall-column runtime state for the SegProjection ``wall`` subcontext (Phase H —
+port-milestone tag; GLOSSARY: Phase letters).
+
+This module runs once at compile time: it builds part of the computation
+graph that torchwright lowers into the transformer's weights. Nothing here
+executes during inference — at render time, only the compiled transformer
+runs. Coined terms: see GLOSSARY.md.
 
 Sentinel/constant nodes are built inside the publish methods, not at module
 scope — see GLOSSARY.md 'the import-time-node rule'.
@@ -106,8 +112,9 @@ class ClipMemory:
     presence flag are exposed so depth-critical consumers can compute
     their recovered-clip and open-clip variants in parallel and pick once
     on ``present`` at the end, instead of chaining behind the resolved
-    selects (paint-cascade flatten). ``recovered_*`` are only meaningful
-    where ``present`` is +1.
+    selects — the "paint-cascade flatten" (this docstring is that term's
+    definition; other uses point back here). ``recovered_*`` are only
+    meaningful where ``present`` is +1.
     """
 
     ceiling: Node
@@ -287,9 +294,9 @@ class WallColumnState:
         # this x becomes wall_column.x / current_x, which the column advance
         # increments and re-emits through screen_x_from_column, so it must be a
         # column. Identity in high-detail; mirrors seg_projection.cursor_x_scalar.
-        # (On off-path speculative draft rows the picked value can be a FIND_RUN
-        # column sentinel rather than a screen-x; // PIXEL_WIDTH halves it but it
-        # stays in-range and off-path.)
+        # (On rows off the greedy path — e.g. teacher-forced diagnostic runs —
+        # the picked value can be a FIND_RUN column sentinel rather than a
+        # screen-x; // PIXEL_WIDTH halves it but it stays in-range and off-path.)
         x = SCREEN_X_CLAMP(
             column_from_screen_x(past.attend_to_offset(input_x_or_zero, delta_pos=-3))
         )
@@ -321,7 +328,7 @@ class WallColumnState:
         # bot_y_raw is very negative and yh should reflect that to make
         # le_span_y(yl, yh) correctly mark the middle span empty.
         yh_unclipped = FLOOR_Y_WIDE(bot_y_raw)
-        # Two-variant clip clamp (paint-cascade flatten): the resolved
+        # Two-variant clip clamp (paint-cascade flatten — see ClipMemory): the resolved
         # clip.ceiling/floor sit one select behind the clip pick, and the
         # sequential clamp (+-1 -> gt -> select) chained after them put the
         # span bounds four sublayers past the pick. Instead compute the
@@ -444,8 +451,9 @@ class WallColumnState:
             same_int(clip.ceiling, screen_height),
             same_int(clip.floor, clip_ceiling_initial),
         )
-        # The reference emits a clip-update record for every portal column,
-        # even when the updated values equal the prior clip arrays.
+        # The reference renderer (pydoom/renderer.py) emits a clip-update
+        # record for every portal column, even when the updated values equal
+        # the prior clip arrays.
         clip_changed = select(
             solid_or_closed,
             one_minus(solid_clip_same),
@@ -643,10 +651,11 @@ class WallColumnState:
     def span_values(self, past: PastHandleScope) -> WallColumnSpanValues:
         # Integer claims on all nine components: the ±1 visibility gates
         # and the per-tier pixel rows are integers up to the pick's
-        # softmax leak (atol 0.05 = the collapse pass's plateau band).
-        # The claims let the univariate collapse rebuild each split
-        # output's downstream texture chain as one staircase FFN
-        # (docs/univariate_collapse_plan.md — the split_7 winner).
+        # softmax leak (atol 0.05 = the plateau band of torchwright's
+        # univariate collapse pass, compiler/collapse.py). The claims let
+        # the collapse pass rebuild each split output's downstream texture
+        # chain as one staircase (stepwise-constant) FFN (torchwright's
+        # docs/univariate_collapse_plan.md — the split_7 winner).
         values = split(self.pick(past, self.span_state), [1] * 9)
         return WallColumnSpanValues(*(assert_integer(v, atol=0.05) for v in values))
 
@@ -739,11 +748,11 @@ class WallSpanRuntimeState:
         # flicker zones (~0.15 wide before each column boundary, value
         # flipping by half-steps at isolated fp32 points) that no PL
         # certificate can cover — the claim scopes them out as
-        # non-inputs (v2 plan pre-round forensics, 2026-07-06).
+        # non-inputs.
         # tex_id's claim is what lets the univariate collapse rebuild
         # the per-texture onehot_lookup_select chains as single
-        # staircase FFNs (docs/univariate_collapse_plan.md — the
-        # split_7 winner).
+        # staircase FFNs (torchwright's docs/univariate_collapse_plan.md
+        # — the split_7 winner).
         def _int(v: Node) -> Node:
             return assert_integer(v, atol=0.05)
 
@@ -781,7 +790,8 @@ class WallSpanRuntimeState:
 class WallSpanRuntimeDraft:
     """Wall-span runtime drafted at the WALL_SPAN_META row.
 
-    ``finish()`` gates the per-tier K-row y1 state at the SCREEN_Y_VALUE row and
+    ``finish()`` gates the per-tier K-row y1 state (one y1 per K-part wall
+    tier — see GLOSSARY.md 'K-part') at the SCREEN_Y_VALUE row and
     publishes ``wallcol_k_y1``; it does not read flat-pass state.
     """
 
@@ -848,7 +858,8 @@ class WallSpanRuntimeDraft:
         k1_y1_value = y_start_for_part(part_oh_1)
         k2_y1_value = y_start_for_part(part_oh_2)
 
-        # --- Flat candidate-visibility masks (paint-cascade flatten) ---
+        # --- Flat candidate-visibility masks (paint-cascade flatten — see
+        # ClipMemory) ---
         # A candidate k_j is visible iff it exists (k_part_j != PART_NONE)
         # and its part's span is ok. The old per-part has_* conjunction is
         # structural here: vocab._K_PART_TABLES only lists parts whose
@@ -858,8 +869,9 @@ class WallSpanRuntimeDraft:
         # m_j is a 0/1 slot mask over (mid, upper, lower), all-zero when
         # the candidate is absent. Everything below that depends on the
         # span-state read resolves through ONE gated slot-sum + compare —
-        # the read-to-publish depth this replaces was the compiled floor's
-        # binding chain (nested selects + two-layer or_).
+        # a nested-select + two-layer or_ chain here would instead set the
+        # compiled layer-count floor (the longest read-to-publish chain
+        # bounds how many layers the compile needs).
         #
         # Degenerate rows: this state is built eagerly at every position;
         # on non-span rows k_part_j / the ordinal are junk, so the one-hots

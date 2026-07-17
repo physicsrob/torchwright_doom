@@ -1,13 +1,15 @@
-"""Runtime helpers for DOOM wall COLORMAP application.
+"""In-graph DOOM wall COLORMAP application, built at compile time as 32
+per-row PWLs.
+
+This module runs once at compile time: it builds part of the computation graph that torchwright lowers into the transformer's weights. Nothing here executes during inference — at render time, only the compiled transformer runs. Coined terms: see GLOSSARY.md.
 
 The in-graph ``256x32`` ``COLORMAP[row][palette_index]`` indirection (r_data.c
 colormaps, r_main.c, r_draw.c). The COLORMAP-row *selection* math
-(``doom_wall_colormap_row`` / scalelight / ``NUMCOLORMAPS``) is the already-ported
+(``doom_wall_colormap_row`` / scalelight / ``NUMCOLORMAPS``) lives in
 :mod:`.doom_lighting`; this is the in-graph *application* of a chosen row.
 
-``Vec`` -> ``Node`` and the original ``...api`` imports become ``.std``. The 32
-per-row PWLs are built from ``pwl_def`` closures, so this tuple holds no graph
-node at import (``global_node_id`` stays ``0``).
+The 32 per-row PWLs are built from ``pwl_def`` closures, so this tuple holds
+no graph node at import (``global_node_id`` stays ``0``).
 """
 
 from __future__ import annotations

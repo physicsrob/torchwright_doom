@@ -4,8 +4,8 @@ Shared source-graph authority at the package root (like ``config.py`` /
 ``identity.py``): publication (``bundle/``) and the ONNX diagnostics both
 compile from this exact construction (asset banks -> ``AssetIndex`` ->
 ``build_doom_embedding("token_ids")`` -> ``forward``). Graph nodes are built
-**inside** ``build_graph`` — never at import (the import-time-node-free rule,
-twdoom CLAUDE.md).
+**inside** ``build_graph`` — never at import (the import-time-node rule;
+GLOSSARY.md, which also defines the other coined terms used here).
 """
 
 from __future__ import annotations
@@ -32,15 +32,22 @@ def build_graph(
 ) -> tuple["Node", "RopeConfig", "Node", Any]:
     """Construct the token-id forward graph.
 
-    Returns ``(next_token, rope, emb, asset_banks)`` — the output node, the RoPE
-    config the graph was built against, the embedding input node, and the asset
-    banks.  ``d_head`` MUST equal the ``d_head`` the compile entry point is
-    called with (the compiler asserts it); ``max_positions`` sizes the
-    graph-derived absolute-position scalar (``global_position_from_bos``) and
-    must cover the longest rollout (pass ``max_seq_len``).  ``d_rot`` is the
-    partial-rotary width (``None`` = full rotary); the production configs pass
-    ``64`` so wide content rides the NoPE tail and the position tiebreak rides a
-    rotated plane.
+    Returns ``(next_token, rope, emb, asset_banks)`` — the output node, the
+    RoPE config the graph was built against, the embedding input node, and the
+    numpy asset-bank set (returned for host-side consumers: the interpret
+    palette and the model card).  ``d_head`` MUST equal the ``d_head`` that the
+    compile entries — ``compile_hf_bundle`` via ``bundle/build.py``, and
+    ``diagnostics/onnx.py`` — are called with (the compiler asserts it).
+    ``max_positions`` sizes the graph-derived absolute-position scalar
+    (``global_position_from_bos``; the BOS-recovered position in
+    ``model/past.py``) and must cover the longest rollout (pass
+    ``max_seq_len``).  ``d_rot`` is the partial-rotary width (``None`` = full
+    rotary); the production configs pass ``64``, splitting each head's
+    dimensions so the first 64 rotate with position (carrying the recency
+    tiebreak) while the unrotated tail carries position-independent content.
+
+    ``wad_path=None`` (or an empty string) falls back to the repo-root
+    ``doom1.wad`` (``DOOM1_WAD_PATH``).
     """
     from torchwright.ops.inout_nodes import create_rope_config
 

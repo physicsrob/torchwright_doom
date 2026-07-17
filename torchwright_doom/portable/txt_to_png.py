@@ -1,4 +1,16 @@
-"""Pure-stdlib canonical Doom text to PNG decoder shipped with bundles."""
+"""Pure-stdlib canonical Doom text to PNG decoder shipped with bundles.
+
+What this tool does: execute the cursor/pixel protocol the model emitted —
+every cursor set, direction mark, and run width in the stream is a model
+output token; the tool applies them (cursor bookkeeping), looks each color
+up in the bundled palette, and blits last-write-wins. The cursor's default
+advance is +Y (wall columns) until a ``setCursorDirectionX`` token flips it
+to +X (flat spans), exactly as PROTOCOL.md specifies.
+
+What this tool never does: geometry, visibility, ordering, lighting, or
+texture selection — those all happened inside the transformer before this
+tool ever runs.
+"""
 
 from __future__ import annotations
 
@@ -57,6 +69,10 @@ def _pixels(rows: list[int], vocab: dict, palette: list[list[int]]):
         elif kind == "setCursorY":
             y = int(values["y"])
         elif kind == "pixel" and x is not None and y is not None:
+            # A healthy stream always sets the cursor before its first pixel
+            # (PROTOCOL.md); the None-guard only tolerates truncated streams.
+            # Every cursor set, direction mark, and width applied here is a
+            # model-emitted token — this tool just executes them.
             width = int(values["w"])
             channels = palette[int(values["color"])]
             if len(channels) != 3:

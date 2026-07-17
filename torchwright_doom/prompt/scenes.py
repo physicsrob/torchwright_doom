@@ -1,5 +1,8 @@
 """Scene declarations — WAD path, subset box, initial player pose.
 
+Fixture-style scene declarations used only by the oracle/prompt tests;
+the production input path is ``scene.py`` (:func:`scene.load_render_scene`).
+
 A :class:`Scene` ties together everything needed to run the renderer
 on a specific slice of a DOOM map: which WAD, which map marker, which
 world-space region to subset, and where the player starts. The

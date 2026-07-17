@@ -1,17 +1,18 @@
 """Compiled texture and flat lookup helpers.
 
+This module runs once at compile time: it builds part of the computation graph that torchwright lowers into the transformer's weights. Nothing here executes during inference — at render time, only the compiled transformer runs. Coined terms: see GLOSSARY.md.
+
 The
 ``WallAssets`` / ``FlatAssets`` metadata accessors and full-resolution
 ``palette_index`` lookups, wired onto the zero-``past.publish`` ``AssetIndex``
 shell that ``scene_index.py`` constructs.
 
-``Vec`` -> ``Node`` and the original ``...api`` imports become ``.std``; the
-compiled banks come from :mod:`.asset_banks` (data-source **B**). Per the
+The compiled banks come from :mod:`.asset_banks`. Per the
 no-import-time-nodes rule, module-level state is **raw data only** — numpy
 ``table`` reshapes, row-address lists, and ``pwl_def`` closures (which build no
-node until called). The original module-level ``constant(...)`` selection
-tables are instead wrapped *inside* the accessor methods, so ``global_node_id``
-stays ``0`` after import.
+node until called). Selection tables are built inside the accessor methods
+(baked into ``pick_const_by_index`` selection weights, no ``constant`` node),
+so ``global_node_id`` stays ``0`` after import.
 """
 
 from __future__ import annotations
@@ -47,17 +48,6 @@ def _python_floor_mod(v: float, h: int) -> float:
     return float(iv - h * math.floor(iv / h))
 
 
-# ``pwl_def`` returns a closure, so this tuple builds no graph node at import.
-_U_MOD_BY_BANK = tuple(
-    pwl_def(
-        (lambda v, width=bank.width: _python_floor_mod(v, width)),
-        breakpoints=2049,
-        input_range=(-1024.0, 1024.0),
-    )
-    for bank in DEFAULT_ASSET_BANKS.wall_banks
-)
-
-
 def _snap_index(index: Node, n: int, values: list[float]) -> Node:
     """Round ``index`` to its exact integer value via ``one_hot`` -> lookup.
 
@@ -75,6 +65,8 @@ class WallAssets:
     u_mod_by_bank: tuple = field(init=False)
 
     def __post_init__(self) -> None:
+        # ``pwl_def`` returns closures, so building this tuple creates no
+        # graph node.
         object.__setattr__(
             self,
             "u_mod_by_bank",

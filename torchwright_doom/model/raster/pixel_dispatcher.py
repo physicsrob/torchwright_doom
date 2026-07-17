@@ -1,5 +1,10 @@
 """Read-only mixed branch owner for wall/flat pixel transitions.
 
+This module runs once at compile time: it builds part of the computation
+graph that torchwright lowers into the transformer's weights. Nothing here
+executes during inference — at render time, only the compiled transformer
+runs. Coined terms: see GLOSSARY.md.
+
 The three shared pixel/cursor branches (``after_wall_column`` on SET_CURSOR_X,
 ``after_set_cursor_y`` on SET_CURSOR_Y, ``after_pixel_color`` on PIXEL) are
 **shared** between the wall and flat passes; each forks on the runtime boolean
@@ -8,13 +13,6 @@ before). ``SPAN_ROW`` is only emitted by ``FlatPassRenderer`` after the BSP walk
 so before the flat pass ``flat_span_seen`` is structurally false and every fork
 degenerates to the wall arm. The full flat-pass token sequence (where these
 shared branches sit in it) is mapped in ``flat_pass_renderer.py``.
-
-Changes from the original: ``Vec`` -> ``Node``; ``make_token`` ->
-``make_token_head``; ``make_value`` -> the eager R3 VALUE head (so the
-``after_set_cursor_y`` ``select`` chooses between two head ``Node``\\ s, not a head
-vs. a ``ScalarEmit``); ``ONE`` -> ``add_const(., -1.0)``; the module-level
-multiply / floor / zero nodes relocated to ``render_ops`` shims /
-inside-function ``constant`` (no import-time nodes).
 """
 
 from __future__ import annotations
@@ -75,21 +73,23 @@ class PixelDispatcher:
 
     # Each shared branch is a PRIORITY over the pass latch flags — hud (drawn
     # last) over weapon over flat over wall. The naive encoding is a select
-    # ladder, but a ladder's depth is the sum of its rungs and this one sits on
-    # the compiled critical path (layers 42-45 of the 49-layer spine). The flat
-    # form below derives mutually-exclusive masks from the latch flags in one
-    # parallel boolean layer and picks the winning arm with a single
-    # type_switch. The masks derive from flags that exist by layer ~1, so the
-    # mask network runs in parallel with the (much deeper) branch-arm chains
-    # and adds no depth of its own; measured DAG floor 49 -> 47.
+    # ladder, but a ladder's depth is the sum of its rungs and this branch
+    # sits on the compiled critical path. The flat form below derives
+    # mutually-exclusive masks from the latch flags in one parallel boolean
+    # layer and picks the winning arm with a single type_switch. The masks
+    # derive from flags available at the very start of the pass, so the mask
+    # network runs in parallel with the (much deeper) branch-arm chains and
+    # adds no critical-path depth of its own.
     #
-    # Numerically this extends the pattern the main dispatch already certifies
-    # (flat-folding emit heads through type_switch/cond_gate): at a clean +-1
-    # condition the losing branch contributes exactly zero in fp32. Every mask
-    # input here is a latch flag or a bool_* output, so all conds are snapped
-    # +-1 booleans. Degenerate case preserved: before the flat pass,
-    # flat_span_seen is structurally false, so m_wall is the one true mask and
-    # the switch degenerates to the wall arm — same behavior as the ladder.
+    # Numerically this is the same pattern as the main dispatch
+    # (render_main.dispatch_next_token builds every branch's emit head flat
+    # and gates the losers to exact zero through type_switch/cond_gate): at a
+    # clean +-1 condition the losing branch contributes exactly zero in fp32.
+    # Every mask input here is a latch flag or a bool_* output, so all conds
+    # are snapped +-1 booleans. Degenerate case preserved: before the flat
+    # pass, flat_span_seen is structurally false, so the wall mask is the one
+    # true mask and the switch degenerates to the wall arm — same behavior as
+    # the ladder.
 
     def _pixel_priority_switch(
         self,

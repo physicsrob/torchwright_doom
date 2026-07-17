@@ -1,11 +1,13 @@
 """Projection seg-cycle state records for the SegProjection ``seg`` subcontext.
 
+This module runs once at compile time: it builds part of the computation
+graph that torchwright lowers into the transformer's weights. Nothing here
+executes during inference — at render time, only the compiled transformer
+runs. Coined terms: see GLOSSARY.md.
+
 Each record is a frozen dataclass with a ``publish()`` classmethod that publishes the
 cross-position channels DOOM's ``R_Subsector`` / ``R_AddLine`` inner loop reads
 back at the current row, then recovers the value(s) the branch owner needs.
-
-Changes from the original: ``Vec`` -> ``Node``; the original ``api`` /
-``.ops`` imports map to the real ``std`` / ``past`` / ``render_ops`` shims.
 """
 
 from __future__ import annotations

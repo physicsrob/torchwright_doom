@@ -1,12 +1,18 @@
 """The sole Doom inference program: portable stock-Hugging-Face generation.
 
 This file is copied byte-identical to the root of every published Doom
-bundle (``<bundle>/infer.py``) and executed there as a subprocess — by a
-downloader and by production render orchestration alike.  It is executed,
-never imported.  It intentionally imports no TorchWright or
-``torchwright_doom`` code: text enters through the saved tokenizer, a stock
-``Phi3ForCausalLM`` produces rows, and the only outputs are canonical
-integer ids plus their raw tokenizer text.
+bundle (``<bundle>/infer.py``) and executed there as a subprocess — by
+anyone who downloads a bundle and by production render orchestration
+(``run.py``) alike.  It is executed, never imported.  It intentionally
+imports no TorchWright or ``torchwright_doom`` code: text enters through
+the saved tokenizer, a stock ``Phi3ForCausalLM`` produces rows (a "row" is
+one tokenizer id — one row of the tied embedding matrix, one sequence
+position), and the only outputs are canonical integer ids plus their raw
+tokenizer text.  No pixels are produced here: the bundle's standalone
+tools (``tools/txt_to_png.py``; token protocol in ``PROTOCOL.md`` in the
+source repo) decode those ids into a frame afterward and do no inference.
+The bundle manifest's schema, field meanings, and completeness gate live
+in ``torchwright_doom/bundle/manifest.py`` in the source repo.
 """
 
 from __future__ import annotations
@@ -123,13 +129,17 @@ def main(argv: list[str] | None = None) -> int:
         model_dir,
         attn_implementation="eager",
         dtype=torch.float32,
-        # Modal Volumes are distributed filesystems.  Read each bounded shard
-        # normally instead of deferring its bytes to mmap page faults.
+        # Read each shard's bytes eagerly: deferring them to mmap page
+        # faults stalls badly on network filesystems, and eager reads are
+        # harmless on local disks.
         disable_mmap=True,
         **load_kwargs,
     ).eval()
     attention_implementation = getattr(model.config, "_attn_implementation", None)
     if attention_implementation != "eager":
+        # Eager is the implementation the published render was validated
+        # under; fused kernels change fp accumulation order, and this check
+        # keeps every run on the validated numerics.
         raise RuntimeError(
             "Doom inference requires eager attention, got "
             f"{attention_implementation!r}"
@@ -153,6 +163,9 @@ def main(argv: list[str] | None = None) -> int:
     inputs = inputs.to(input_device)
     prompt_ids = [int(row) for row in inputs.input_ids[0].tolist()]
     prompt_ids_sha256 = _sha(_canonical_json(prompt_ids))
+    # Only the bundled prompt has a manifest row-id expectation; a custom
+    # prompt is permitted, never verified, and recorded in the payload as
+    # matches_bundled_prompt=false.
     if bundled_prompt and prompt_ids_sha256 != manifest["prompt"]["row_ids_sha256"]:
         raise ValueError("bundled prompt text does not reproduce its manifest rows")
 

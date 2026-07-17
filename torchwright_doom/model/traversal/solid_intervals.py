@@ -1,9 +1,21 @@
 """Past-published solid wall fragments used as horizontal occlusion state.
 
+This module runs once at compile time: it builds part of the computation graph
+that torchwright lowers into the transformer's weights. Nothing here executes
+during inference — at render time, only the compiled transformer runs. Coined
+terms: see GLOSSARY.md.
+
 The seg scan fills this channel at ``R_STORE_WALL_RANGE`` and queries it at
-``FIND_RUN`` to decide which screen columns a later seg may still draw —
-DOOM's ``solidsegs`` horizontal occlusion, expressed as a queryable union of
-prior one-sided drawseg fragments.
+``FIND_RUN`` (emitted as ``clipScan(x)``; see ``model/vocab.py``) to decide
+which screen columns a later seg may still draw — DOOM's ``solidsegs``
+horizontal occlusion, expressed as a queryable union of prior one-sided
+drawseg fragments.
+
+Fragments are stored unmerged. That still reproduces DOOM's merged-cliprange
+clipping because the scan loop (see PROTOCOL.md,
+``horizontal_visible_run_scan``) re-queries ``covered_and_end`` /
+``next_start_after`` after every covered jump, so point-coverage over the
+union of fragments is all the queries ever need.
 
 The query is a *radix successor* search: screen columns in ``[0, COLUMN_COUNT]``
 are split into a high *bucket* digit and a low digit (``_RADIX_BASE =
@@ -11,9 +23,6 @@ ceil(sqrt(width))``), so a "next occupied column after X" key fits ~``2*sqrt``
 columns instead of ``width``. The answer is the next occupied column in the same
 bucket, or — if that bucket is exhausted — the lowest in the next non-empty
 higher bucket (a *carry*). See ``GLOSSARY.md``.
-
-Changes from the original: ``Vec`` -> ``Node``; the original ``api``
-imports map to the real ``std`` / ``past`` / ``render_ops`` shims.
 
 Sentinel/constant nodes are built inside the publish methods, not at module
 scope — see GLOSSARY.md 'the import-time-node rule'.
@@ -58,13 +67,16 @@ from ..std import (
     split,
 )
 
-# Radix base/buckets are the shared screen-column scheme in render_ops
-# (imported above as the historical local names).
+# Radix base/buckets are the shared screen-column scheme in render_ops,
+# aliased locally for brevity.
 _INVALID_HI = _N_BUCKETS
 
 # Plain weight data (no graph nodes), so module scope is safe. The runtime graph
 # forms the row index with ``one_hot`` and uses these tables to publish the small
-# strict-above indicator bases that H1/H2 consume.
+# strict-above indicator bases consumed by the two successor lookups in
+# ``next_start_after``: H1, the same-bucket successor pick, and H2, the
+# next-non-empty-bucket carry pick (the H1/H2 names are defined in
+# ``raster/visplane_state.py``).
 _LO_ABOVE_TABLE = [
     [1.0 if lo > threshold else 0.0 for threshold in range(_RADIX_BASE)]
     for lo in range(_RADIX_BASE)
@@ -105,7 +117,8 @@ class SolidIntervals:
         """Publish the current input fragment if it is a solid drawseg."""
         # R_STORE_WALL_RANGE rows publish the completed fragment. The store row
         # carries the seg id directly; x1 is the most recent FIND_RUN column
-        # and x2 is recovered from the most recent semantic EMIT_X2 row.
+        # and x2 is recovered via a recency pick on the drawseg.x2 marker
+        # (EMIT_X2), not a fixed row offset from the store row.
         find_run_row = RecentMarkerHandle.publish(
             past,
             "solid_find_run",

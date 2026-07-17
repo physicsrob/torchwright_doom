@@ -1,20 +1,27 @@
 """Row arithmetic of the token contract: token <-> ``W_EMBED``-row crossings.
 
 All compute is pure host arithmetic over the static vocab; **no graph nodes are
-created at import or call time** (the import-time-node-free rule, twdoom
-CLAUDE.md).
+created at import or call time** (the import-time-node rule — see
+``GLOSSARY.md``).
 
-The compiled artifact reads a 1-wide integer ``token_ids`` input and re-embeds
-each id through its in-graph ``Embedding``; ``rows_to_input`` builds that input.
-Decode is ``argmax(out @ W_EMBED.t())`` -> a row index -> ``(TokenType, values)``
-via ``TOKEN_VOCAB.row_to_token``.
+Two runtimes cross here. In production these row indices *are* the stock HF
+tokenizer's token ids: ``run.py`` crosses rows -> prompt text
+(``tokenizer/codec.py``) before the model, and ``generate()`` returns ids that
+are rows again. The direct-compiled graph gates skip the text crossing: that
+artifact reads a 1-wide integer ``token_ids`` input and re-embeds each id
+through its in-graph ``Embedding``; ``rows_to_input`` builds that input for
+``compiled.step``. Decode is ``argmax(out @ W_EMBED.t())`` -> a row index ->
+``(TokenType, values)`` via ``TOKEN_VOCAB.row_to_token``.
 
 Native ``Token`` <-> row crossings (:func:`token_to_row`, :func:`row_to_token`)
-are a direct structural round-trip with no name bridge — used by the standard
-tokenizer, formatter, and special-token resolution.
+round-trip by structure — same type + slot values, never through label strings.
+Consumers: the bijection gate (``tests/tokenizer/test_surface.py``) and
+diagnostic scripts (``scripts/teacher_force_margins.py``).
 
 :func:`carrier_delta` is vocab-derived contract math too: the canonical
-encoded-value distance for a carrier row, shared by the graph-gate oracles.
+encoded-value distance for a carrier row, shared by the graph-level gate
+oracles (``tests/scene/test_flat_pixel_oracle.py``,
+``tests/embedding/test_emit_graph_correctness.py``).
 This module must not acquire bundle, run, CLI, or Transformers
 responsibilities.
 """
@@ -70,8 +77,9 @@ def tokens_to_input(tokens) -> torch.Tensor:
     """Stack a token sequence into an ``(n_pos, d_embed)`` pre-embedded input.
 
     Accepts ``Token`` instances or compact ``(type, slot_values)`` tuples. Used
-    by the teacher-forced diagnostic (the pre-embedded ``iv`` graph). The compiled
-    token-id artifact uses :func:`rows_to_input` instead.
+    by ``tests/prefill_fixture.py`` and the scene-oracle tests, which drive the
+    graph through ``iv`` (the pre-embedded input-vector slot) instead of token
+    ids. The compiled token-id artifact uses :func:`rows_to_input` instead.
     """
     rows = []
     for tok in tokens:
@@ -100,8 +108,8 @@ def rows_to_input(rows) -> torch.Tensor:
 # --- row <-> native Token ---
 #
 # Token identity is by structure (same type + slot values), so the round-trip
-# between a native ``Token`` and its ``W_EMBED`` row index is direct. Used by
-# the standard tokenizer, formatter, and BOS/EOS resolution.
+# between a native ``Token`` and its ``W_EMBED`` row index is direct. Consumers:
+# the bijection gate (tests/tokenizer/test_surface.py) and diagnostic scripts.
 
 
 def token_to_row(tok: Token) -> int:
@@ -135,10 +143,9 @@ def carrier_delta(name: str, predicted_row: int, expected_row: int):
     """Encoded-value distance for a carrier; None if the prediction isn't even
     the right carrier type (a hard divergence).
 
-    The canonical definition — the scene and emit graph-gate oracles import it
-    (per-test copies previously hardcoded the vocab row ranges; these derive
-    from ``TOKEN_VOCAB`` so a layout change can't silently break the delta
-    math).
+    The canonical definition — the scene and emit gate oracles
+    (``test_flat_pixel_oracle.py``, ``test_emit_graph_correctness.py``)
+    import it.
     """
     if name == "angleValue":
         if not (_ANGLE_START <= predicted_row < _ANGLE_END):
@@ -149,4 +156,6 @@ def carrier_delta(name: str, predicted_row: int, expected_row: int):
         return abs(((pa - ea + half) % _ANGLE_LEVELS) - half)
     if not (_VALUE_START <= predicted_row < _VALUE_END):
         return None
+    # VALUE's encoded span is [-1, 1] (value_ranges.encode_float), so adjacent
+    # carrier rows differ by 2.0 / (levels - 1).
     return abs(predicted_row - expected_row) * 2.0 / (_VALUE_LEVELS - 1)

@@ -1,5 +1,9 @@
-"""Forward/render math ops for the read-side + write-side subset, ported from
-the original plain-Python implementation.
+"""Forward/render math ops for the read-side + write-side subset.
+
+This module runs once at compile time: it builds part of the computation
+graph that torchwright lowers into the transformer's weights. Nothing here
+executes during inference — at render time, only the compiled transformer
+runs. Coined terms: see GLOSSARY.md.
 
 The file opens with the read-side helpers (``MARKER_PRESENT`` / ``and_`` /
 ``one_minus`` / ``or_`` / ``snap_bool`` / ``SCREEN_X_CLAMP``), then nine
@@ -154,14 +158,12 @@ def add_const(a: Node, c: float) -> Node:
 
 
 # DOOM: R_PointOnSide cross-product sign (r_main.c). Only the SIGN feeds
-# SIDE_POSITIVE. The original keeps a magnitude split (MUL_SIDE_SMALL/LARGE)
-# for precision near unit-normal coefficients; the swiglu ``multiply`` is
-# exact to ~2 ulp of the product at any magnitude (no grid, no range limit,
-# no extrapolation regime), so one op serves every operand class. Node deltas
-# are recovered within R2 = [-512, 512]; rel = view - p with both in
-# R1 = [-1152, 1152], so |rel| <= 2304 and |product| <= ~1.2e6 — the ~2-ulp
-# error (~0.3 abs) is invisible to the sign test, which tolerated ~75 of
-# grid product noise before the cutover.
+# SIDE_POSITIVE. The swiglu ``multiply`` is exact to ~2 ulp of the product
+# at any magnitude (no grid, no range limit, no extrapolation regime), so
+# one op serves every operand class. Node deltas are recovered within
+# R2 = [-512, 512]; rel = view - p with both in R1 = [-1152, 1152], so
+# |rel| <= 2304 and |product| <= ~1.2e6 — the ~2-ulp error (~0.3 abs) is
+# invisible to the sign test.
 def mul_side(coef: Node, rel: Node) -> Node:
     """Product of a partition coefficient and a view-relative coordinate,
     resolved to the sign by ``SIDE_POSITIVE``."""
@@ -187,13 +189,10 @@ def DEPTH_NONZERO(depth: Node) -> Node:
 # R_PointToAngle BAM-atan2 octant + one-turn angle wrap
 # ---------------------------------------------------------------------------
 #
-# The original keeps two near-duplicate octant builders —
-# ``signed_world_angle`` (clamp 2048, seg endpoints) and
-# ``_signed_world_angle_bbox`` (clamp 3072, bbox corners). They are unified
-# here on the **wider 3072 clamp**:
-# e1m1_subset bbox corners reach |dx|,|dy| ≈ 2752 (vs ≈ 308 for seg endpoints),
-# which overruns 2048 and would clip to a wrong BAM angle, but sits comfortably
-# inside 3072. One helper serves both the seg-projection (F) and bbox (G) sides.
+# One octant builder serves both callers — seg endpoints and bbox corners —
+# on a single 3072 clamp: e1m1_subset bbox corners reach |dx|,|dy| ≈ 2752
+# (vs ≈ 308 for seg endpoints), so a tighter 2048 clamp would clip a bbox
+# corner to a wrong BAM angle, while both sit comfortably inside 3072.
 #
 # The angle of (|dx|, |dy|) in the first octant-pair [0, ANGLE_BAM/4) is read
 # as a *count* of ray-threshold crossings: for each candidate BAM angle k the
@@ -231,8 +230,8 @@ _HIGH_RAY_MATRIX = [list(_HIGH_COTS), [-1.0] * len(_HIGH_COTS)]
 # Each 1,024-threshold half splits into 32 segments of 32. The coarse level
 # counts crossings of every 32nd threshold; the fine level tests only the
 # active segment's 32 thresholds, with the segment's slope DELTAS applied at
-# runtime (a gated ± product — possible on the swiglu machine, impossible on
-# relu grids). All thresholds — coarse (32j − 0.5) and fine (32s + i + 0.5) —
+# runtime (a gated ± product). All thresholds — coarse (32j − 0.5) and fine
+# (32s + i + 0.5) —
 # are members of today's half-integer threshold set, so the committed-fixture
 # ray-clearance bound (min nonzero |ray| ~1.5e-4, the _RAY_SHARPNESS note)
 # applies to every ray this scheme evaluates.
@@ -331,15 +330,13 @@ def _abs_coord(x: Node) -> Node:
 def _ray_count(rays: Node) -> Node:
     """Count the +1 (positive) components of a ray vector.
 
-    The reference renderer spells this ``reduce_sum(bool_to_01(...))`` — an
-    elementwise ±1 ``compare`` (sharpness 32000), a 0/1 cast, then a sum — and
-    runs it in float64. The real graph is float32 and ``compare`` is
+    Conceptually an elementwise ±1 ``compare`` (sharpness 32000), a 0/1
+    cast, then a sum — but the graph is float32 and ``compare`` is
     scalar-only, so the elementwise 0/1 step is built directly on the swish
     hinge ``hinge(z) = Swish(scale·z)/scale``, which equals ``relu(z)``
     exactly once ``|scale·z| >= 17`` (fp32 sigmoid saturation; the machine
     ``scale`` = 128 and the ·scale / /scale shifts are exact powers of two).
-    The construction ports the relu-era min-form hinge-for-hinge and keeps
-    its **cancellation-free** property:
+    The two-stage construction is **cancellation-free**:
 
     - Stage 1, lane i: ``a_i = hinge(s·v_i)`` — gate row ``scale·s·v_i``,
       degenerate up lane, output ``1/scale``. Exactly 0 for a nonpositive
@@ -351,8 +348,8 @@ def _ray_count(rays: Node) -> Node:
       summed with bias ``n``: ``count = n − Σ_i hinge(1 − a_i)``. For a
       saturated positive ray ``a_i >= ~4.8`` so the gate argument is <=
       ~−486 and the hinge is exactly 0 — no subtraction of two large
-      near-equal numbers anywhere (the property that motivated the
-      original min-form). For a nonpositive ray ``a_i = 0`` and
+      near-equal numbers anywhere (the property this two-stage form
+      exists for). For a nonpositive ray ``a_i = 0`` and
       ``hinge(1) = Swish(128)/128 = 1.0`` exactly on every deployed kernel
       (σ(128) = 1.0; ·128 and /128 exact), so each term is exactly 1 or 0
       and the count — a sum of <= 1024 exact 0/1 terms, an integer far
@@ -400,12 +397,11 @@ def _ray_count(rays: Node) -> Node:
 def MUL_SCREEN(a: Node, b: Node) -> Node:
     """Product of two screen-column operands.
 
-    ~2 ulp relative (<= ~1e-3 abs at products <= ~4400). One regression in
-    kind vs the relu-era grid, far inside margin: the grid was exactly 0
-    error at integer grid points, while the swiglu ± lane pair leaves both
-    lanes unsaturated for |a| < 17, so integer screen columns now carry the
-    ~2-ulp noise too. The consumers compare against half-integer thresholds
-    with the default 0.1 deadband — a >= 100x margin.
+    ~2 ulp relative (<= ~1e-3 abs at products <= ~4400). Integer screen
+    columns carry the ~2-ulp noise too (the swiglu ± lane pair leaves both
+    lanes unsaturated for |a| < 17, so integer inputs are not exact). The
+    consumers compare against half-integer thresholds with the default 0.1
+    deadband — a >= 100x margin.
     """
     return multiply(a, b)
 
@@ -545,10 +541,9 @@ def wrap_signed_angle(delta: Node) -> Node:
 # Screen comparators, integer-equality, and the backface cross product
 # ---------------------------------------------------------------------------
 #
-# The original's ``compare_const(c, input_range=...)`` drops to the real
-# ``compare(node, c)`` (default sharpness 10, deadband 0.1 — the ``input_range``
-# has no real-graph counterpart). The thresholds are half-integers, so
-# integer-valued inputs land squarely in a flat zone.
+# Comparators here are ``compare(node, c)`` (default sharpness 10, deadband
+# 0.1). The thresholds are half-integers, so integer-valued inputs land
+# squarely in a flat zone.
 
 
 def ABS_SMALL_INT(x: Node) -> Node:
@@ -641,9 +636,8 @@ def same_int(a: Node, b: Node) -> Node:
 #
 # DOOM: R_CheckBBox boxx/boxy region computation (r_bsp.c lines 404-418) — the
 # player-vs-bbox-edge sign tests that index into the 9-region ``checkcoord``
-# table. The original spells this ``compare_const(0.0, input_range=(-3000, 3000))``;
-# the real-side default-sharpness ``compare`` has the same 0.1 deadband at the
-# zero threshold (mirrors the ``dx``/``dy`` sign test inside ``signed_world_angle``).
+# table. The default-sharpness ``compare`` has a 0.1 deadband at the zero
+# threshold (mirrors the ``dx``/``dy`` sign test inside ``signed_world_angle``).
 def COORD_GT_ZERO(x: Node) -> Node:
     """±1: is a map-coordinate / player-vs-bbox-edge delta > 0?"""
     return compare(x, 0.0)
@@ -660,8 +654,7 @@ def MUL_CROSS(a: Node, b: Node) -> Node:
     ``is_negative_cross``.
 
     e1m1 seg vectors reach |256| and relative coords |308|, so |product| <=
-    ~1.5e5 and the ~2-ulp error (~0.03 abs) is invisible to the sign test
-    (the old grid budgeted 37.5 of product noise there).
+    ~1.5e5 and the ~2-ulp error (~0.03 abs) is invisible to the sign test.
     """
     return multiply(a, b)
 
@@ -671,13 +664,11 @@ def MUL_CROSS(a: Node, b: Node) -> Node:
 # comparators feeding the DRAWSEG_SCALE* / DRAWSEG_*SILHEIGHT VALUE carriers.
 # ---------------------------------------------------------------------------
 #
-# Projection / scale constants mirror ``reference.py``. FOV_HALF_BAM =
+# Projection / scale constants mirror pydoom's ``renderer.py``
+# (``_PROJECTION`` / ``_MIN_SCALE`` / ``_MAX_SCALE``). FOV_HALF_BAM =
 # ANGLE_BAM/8 = 45°, so the focal length is (SCREEN_WIDTH-1)/(2·tan 45°).
 # ``_TAN_FOV_HALF`` is canonical in vocab.py (imported above); the scale
 # ranges declared in value_ranges.py must track this module's scale math.
-# (The relu-era grids also sized their breakpoints from value_ranges'
-# ``_PROJ_RATIO``; the swiglu ``multiply`` has no grid, so that coupling is
-# gone from this file.)
 _PROJECTION = (SCREEN_WIDTH - 1) / (2.0 * _TAN_FOV_HALF)
 _MIN_SCALE = 1.0 / 256.0
 _MAX_SCALE = 64.0
@@ -686,11 +677,9 @@ NEAR_DEN_SCALE_FACTOR = 1024.0
 
 # The drawseg / pixel-pass products below all lower to the swiglu
 # ``multiply`` — exact to ~2 ulp of the product at any magnitude, no grid,
-# no range limit, no extrapolation regime. The named wrappers survive the
-# cutover so each J-file call site keeps its semantic name and the operand
-# provenance notes; every relu-era grid parameter is gone (the grid builder
-# ``_mul_grid`` died with them, and with it the extrapolation trap its
-# callers had to size around).
+# no range limit, no extrapolation regime. The named wrappers exist so each
+# rasterizer call site keeps its semantic name and its operand provenance
+# notes.
 
 
 def mul_normal_coord(coef: Node, rel: Node) -> Node:
@@ -904,8 +893,8 @@ def MAX_SCALE_VALUE(_: Node) -> Node:
 # The pixel pass: per-pixel texture-coordinate products + the native
 # coordinate floor. Each is a ``multiply(...)`` / ``floor_int(...)`` from the
 # pixel pipeline (``uv_compute`` / ``pixel_dispatcher`` / ``flat_state``),
-# lowered here so the J files stay node-free at import (the multiply / floor
-# node is built only on call).
+# lowered here so those flat-pass raster modules stay node-free at import
+# (the multiply / floor node is built only on call).
 # ---------------------------------------------------------------------------
 
 

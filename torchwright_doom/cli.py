@@ -1,6 +1,6 @@
 """Argument parsing and dispatch for the render-job CLI — nothing else.
 
-Commands (verbs unchanged by the cleanup):
+Commands:
 
 ``python -m torchwright_doom compile --config job.yaml``
 ``python -m torchwright_doom run --config job.yaml --x 1056 --y -3616 --angle 64``

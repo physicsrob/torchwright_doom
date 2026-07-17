@@ -1,5 +1,10 @@
 """Small wrappers around ``GraphPast`` attention storage patterns.
 
+This module runs once at compile time: it builds part of the computation
+graph that torchwright lowers into the transformer's weights. Nothing here
+executes during inference — at render time, only the compiled transformer
+runs. Coined terms: see GLOSSARY.md.
+
 This module is deliberately generic: it knows how to publish residual-stream
 channels and recover values through ``GraphPast``, but it does not know why a
 value is useful. Algorithm modules should still wrap these helpers in domain
@@ -15,11 +20,6 @@ The helpers cover three recurring shapes:
 The keyed lookups use *lifted* id keys: an integer id is encoded as
 ``[id, -id^2, 1]`` so one attention dot-product peaks at exact id equality (see
 :func:`lifted_id_query` and ``GLOSSARY.md``), instead of a width-N one-hot.
-
-The only changes from the original are the import
-block (``Vec`` -> ``Node``; ``Past`` -> ``GraphPast``; the std helpers and
-constants now come from the real-side shim) — the dataclasses, the lifted-id
-key scheme, and the publish/pick structure are a line-for-line port.
 """
 
 from __future__ import annotations

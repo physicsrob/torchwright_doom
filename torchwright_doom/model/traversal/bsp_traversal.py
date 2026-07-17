@@ -1,5 +1,10 @@
 """BSP traversal protocol for the wall-pass forward pass.
 
+This module runs once at compile time: it builds part of the computation graph
+that torchwright lowers into the transformer's weights. Nothing here executes
+during inference — at render time, only the compiled transformer runs. Coined
+terms: see GLOSSARY.md.
+
 Branch builders follow the ``after_<token>`` convention (see GLOSSARY.md):
 ``after_X()`` builds the emit head for the token the protocol emits after an
 ``X`` token, and ``render_main.build_branch_outputs`` selects exactly one per
@@ -13,19 +18,16 @@ DOOM's `R_RenderBSPNode` tree walk:
     SIDE_RECORD(node) -> THINK_SIDE(node + 1) or TRAVERSE_ENTER(root)
     TRAVERSE_ENTER(node, depth) -> first/front child
     TRAVERSE_BETWEEN(node, depth) -> second/back child
-    TRAVERSE_RETURN(entity, depth) -> BETWEEN, another RETURN, or DONE
+    TRAVERSE_RETURN(entity, depth) -> BETWEEN, another RETURN, or
+        DRAW_PLANES_BEGIN (walk complete, the planes pass starts)
 
 The lower-level dynamic stack record is still in `traversal_edges.py`; this
 file decides which edges are taken and what each traversal token emits next.
 
-Changes from the original: the import block (``Vec`` -> ``Node``; ``Past`` ->
-``GraphPast``; std helpers / ``make_token`` -> ``make_token_head`` / the side ops
-from the real-side shim); ``ZERO`` is created inline as ``constant(0.0)`` (no
-import-time nodes). The R_CheckBBox coupling: ``publish`` builds
+The R_CheckBBox coupling: ``publish`` builds
 the :class:`~.bbox_pruning.BBoxPruner` over the now-populated occlusion state and
 ``after_between`` / the ``after_bbox_*`` delegators route the bbox sub-protocol's
-branches to it. The ``SideTable``, ``_think_side_compute`` cross product, the
-ENTER/SIDE/RETURN emitters, and the child dispatch are a line-for-line port.
+branches to it.
 """
 
 from __future__ import annotations
@@ -248,7 +250,7 @@ def _think_side_compute(scene: SceneIndex, node: Node) -> Node:
 
     DOOM's `R_PointOnSide` stores a BSP partition as `(x, y, dx, dy)` and uses
     the sign of `(dy * (viewx - x)) - (dx * (viewy - y))` to choose which child
-    is front for the current viewpoint. The original computes the same general
+    is front for the current viewpoint. The graph computes the same general
     cross-product form, without DOOM's integer/XOR fast paths.
 
     The result is emitted through SIDE_RECORD rather than directly published

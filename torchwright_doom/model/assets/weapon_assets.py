@@ -1,6 +1,8 @@
 """Bake the player weapon (the ready pistol, sprite ``PISGA0``) into a static
 screen-space picture the renderer paints last, on top of the 3D view.
 
+This module runs once at compile time: it builds part of the computation graph that torchwright lowers into the transformer's weights. Nothing here executes during inference — at render time, only the compiled transformer runs. Coined terms: see GLOSSARY.md.
+
 DOOM draws the player weapon in ``R_DrawPlayerSprites`` -> ``R_DrawPSprite``
 (``r_things.c``) -> ``R_DrawVisSprite`` -> ``R_DrawMaskedColumn``. The player
 weapon has no perspective: every frame it is the same size at the same screen
@@ -51,39 +53,15 @@ _PISTOL_READY_LUMP = "PISGA0"
 class WeaponPicture:
     """A baked weapon, in our rendered-column coordinate system.
 
-    ``pixels[col][row]`` is a *lit* palette index, or ``None`` for transparent.
-    ``column_count`` x ``view_height`` is the grid; ``min_col``/``max_col`` and
-    the per-column post extents bound the non-empty region so the emit phase can
-    skip empty columns and transparent gaps.
+    ``pixels[col][row]`` is a *lit* palette index, or ``None`` for transparent;
+    ``column_count`` x ``view_height`` is the grid. The non-empty bounding box
+    the emit phase needs is computed from it by ``bake_weapon_table`` (see
+    ``WeaponBake``).
     """
 
     column_count: int
     view_height: int
     pixels: list[list[int | None]]  # pixels[col][row], None = transparent
-
-    def posts(self) -> dict[int, list[tuple[int, list[int]]]]:
-        """Per column, the opaque vertical runs as ``(top_row, [indices])``."""
-        out: dict[int, list[tuple[int, list[int]]]] = {}
-        for col in range(self.column_count):
-            runs: list[tuple[int, list[int]]] = []
-            row = 0
-            column = self.pixels[col]
-            while row < self.view_height:
-                if column[row] is None:
-                    row += 1
-                    continue
-                top = row
-                run: list[int] = []
-                while row < self.view_height:
-                    val = column[row]
-                    if val is None:
-                        break
-                    run.append(int(val))
-                    row += 1
-                runs.append((top, run))
-            if runs:
-                out[col] = runs
-        return out
 
 
 def _fixed_mul(a: int, b: int) -> int:
@@ -183,8 +161,9 @@ def bake_pistol(
 
 # Transparent sentinel for the baked weapon table: a value outside the 0..255
 # palette range. The render loop reads the table at the cursor and, on the
-# sentinel, emits a setCursorY skip instead of a pixel (Option 3), so the
-# sentinel never reaches the host.
+# sentinel, emits a setCursorY skip instead of a pixel — reusing an existing
+# token, no new pixel token, no host change — so the sentinel never reaches
+# the host.
 WEAPON_TRANSPARENT = 256.0
 
 

@@ -1,9 +1,10 @@
 """Fetch the reference render and report image-level agreement; write PNGs.
 
-Plan K §2: success is image-level, not token-exact — the generated stream will
-diverge (off-by-one edges change pixel counts), so we **report rich stats and
-render PNGs first**, and pick the acceptance bar once the real divergence is
-visible. This module fixes no threshold; it measures.
+Success is image-level, not token-exact — the generated stream can diverge
+benignly (off-by-one edges change pixel counts), so this module **reports
+rich stats and renders PNGs**; it fixes no threshold. It is the standing
+report-only correctness gate (``make run COMPARE=1``); the production
+render's measured scores live in ``FACTS.md``.
 
 The in-tree ``pydoom`` renderer is imported lazily inside the reference helpers,
 so the stats/PNG helpers that take buffers load without touching it.
@@ -59,8 +60,8 @@ def _hud_reference_cells() -> list[tuple[int, int, Rgb]]:
     empty when the HUD is off.
 
     Composited from ``configured_hud_draw_list`` + ``configured_hud_bake`` — the
-    SAME tables the graph spine and the pydoom token reference walk — so the bar
-    is consistent across all three. The bar paints at native screen resolution
+    SAME tables the compiled graph's HUD pass and the pydoom token reference
+    walk — so the bar is consistent across all three. The bar paints at native screen resolution
     (one cell per column, ``w = 1``, unlike the doubled weapon/3D view). Cells are
     emitted in draw-list order, so the consumer's last-write-wins puts each widget
     over the plate beneath it (DOOM's painter order)."""
@@ -226,8 +227,9 @@ def _blit(canvas: np.ndarray, buf: PixelBuf) -> None:
 def _diff_canvas(
     gen: PixelBuf, ref: PixelBuf, options: dict[tuple[int, int], set[Rgb]]
 ) -> np.ndarray:
-    """Color-coded diff: green=in-option, red=color-mismatch, blue=only-ref,
-    yellow=only-gen, black=neither."""
+    """Color-coded diff: green=in-option or exact-match (exact-only where no
+    option set exists), red=color-mismatch, blue=only-ref, yellow=only-gen,
+    black=neither."""
     canvas = _canvas((0, 0, 0))
     gen_keys, ref_keys = set(gen), set(ref)
     for x in range(SCREEN_WIDTH):

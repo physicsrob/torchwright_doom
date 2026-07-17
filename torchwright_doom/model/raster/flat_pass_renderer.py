@@ -1,11 +1,18 @@
 """Read-only branch owner for R_DrawPlanes / R_MakeSpans transitions.
 
-Real-side port of the flat-pass control spine that runs *after* the BSP walk
-completes
+This module runs once at compile time: it builds part of the computation
+graph that torchwright lowers into the transformer's weights. Nothing here
+executes during inference — at render time, only the compiled transformer
+runs. Coined terms: see GLOSSARY.md.
+
+The flat-pass control spine that runs *after* the BSP walk completes
 (``DRAW_PLANES_BEGIN``), walking planes -> visplanes -> R_MakeSpans columns ->
-SPAN_ROWs -> SET_CURSOR_Y (which flips ``flat_span_seen`` so the shared
-pixel/cursor branches route the flat arm), terminating at ``DONE`` when the
-plane successor returns the sentinel.
+SPAN_ROWs -> SET_CURSOR_Y. Each SPAN_ROW's firing publishes the
+``flat_span_seen`` marker that the shared SET_CURSOR_Y / SET_CURSOR_X / PIXEL
+branches fork on to route the flat arm. When the plane successor returns the
+sentinel, the pass hands off to the player-weapon phase
+(``DRAW_PSPRITES_BEGIN``; HUD on — both committed configs) or terminates at
+``DONE`` (HUD off).
 
 Flat pass control flow (the single map of the four-file token state machine
 that draws floors/ceilings). The flat pass is split across four files: this
@@ -14,18 +21,24 @@ floor/ceiling region DURING the BSP/wall walk (the rows this pass later reads
 back), ``flat_state.py`` publishes the per-row span/cursor state those reads
 consume, and ``pixel_dispatcher.py`` owns the shared pixel/cursor branches both
 the wall pass and this flat pass route through. Token transitions below; the
-owner of each arrow is named in brackets. (Reconstructed from the ``after_*``
-methods across these files — read those, not this comment, if they disagree.)
+owner of each arrow is named in brackets. PROTOCOL.md's "Flat (visplane)
+pass" section is the authoritative version of this sequence; GLOSSARY.md
+defines the owner / head / publish vocabulary.
 
     DRAW_PLANES_BEGIN -> SET_CURSOR_DIRECTION_X            [FlatPassRenderer]
     SET_CURSOR_DIRECTION_X -> FLAT_NEXT_PLANE(p = -1)      [FlatPassRenderer]
-    FLAT_NEXT_PLANE -> DONE  (no further used plane)       [FlatPassRenderer]
+    FLAT_NEXT_PLANE -> DRAW_PSPRITES_BEGIN / DONE          [FlatPassRenderer]
+                       (no further used plane; HUD on / off,
+                        a compile-time choice)
                     -> FLAT_NEXT_VP(next plane, vp = -1)
     FLAT_NEXT_VP -> FLAT_NEXT_PLANE  (no further vp)       [FlatPassRenderer]
                  -> FLAT_VISPLANE_BEGIN(plane, vp)
     FLAT_VISPLANE_BEGIN -> FLAT_NEXT_VP  (sky: skip span)  [FlatPassRenderer]
                         -> MAKE_SPANS_COL(x = minx)
     MAKE_SPANS_COL -> SPAN_CLOSE_SLOT(slot 0 or 1)         [FlatPassRenderer]
+                      (slot 0 / 1 = the top / bottom coverage-change run
+                       closing at this column; at most one contiguous
+                       run each)
                    -> (no close: advance / next vp)
     SPAN_CLOSE_SLOT -> SPAN_ROW(y)  (slot has rows)        [FlatPassRenderer]
                     -> SPAN_CLOSE_SLOT(other slot) / advance
@@ -40,12 +53,11 @@ The SET_CURSOR_Y / SET_CURSOR_X / PIXEL arrows are SHARED with the wall pass:
 ``PixelDispatcher`` forks each on the runtime boolean ``flat_span_seen`` (true
 only once a SPAN_ROW has fired this frame), so before the flat pass starts they
 degenerate to the wall arm. The visplane regions this pass walks were recorded
-earlier by ``VisplaneMarker`` (one SCREEN_RANGE per marked wall seg) while the
-BSP/wall walk was still running.
+earlier by ``VisplaneMarker`` (one SCREEN_RANGE per non-empty per-column plane
+mark) while the BSP/wall walk was still running.
 
-Changes from the original: ``make_token`` -> ``make_token_head``; ``Vec`` ->
-``Node``; the module-level sentinel ``constant``\\ s relocated inside the methods
-(no import-time graph nodes).
+``plan/`` in the ``@annotated`` labels below is the planes-subsystem
+shorthand of the debug-trace namespace, not a reference to a planning doc.
 """
 
 from __future__ import annotations
@@ -135,7 +147,7 @@ class FlatPassRenderer:
 
     # DOOM: R_DrawPlanes sky special-case (r_plane.c:396-420) vs. regular flat
     # path — sky visplanes are skipped (no span pass); a column-drawn sky is
-    # a separate future phase.
+    # not implemented.
     @annotated("plan/R_DrawPlanes")
     def after_flat_visplane_begin(self) -> "Node":
         projection = self.projection

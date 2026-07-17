@@ -1,5 +1,10 @@
 """The renderer's token vocabulary — prompt side and autoregressive loop.
 
+This module runs once at compile time: it builds part of the computation
+graph that torchwright lowers into the transformer's weights. Nothing here
+executes during inference — at render time, only the compiled transformer
+runs. Coined terms: see GLOSSARY.md.
+
 Token types emitted by :func:`torchwright_doom.prompt.build.build_prompt`
 (``PROMPT_TYPES``) plus the AR-loop types produced by the renderer's
 ``forward()`` (``AR_TYPES``). The combined ``VOCAB_TYPES`` is what the
@@ -96,7 +101,7 @@ def viewangletox(theta_bam: int) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Derived-column helpers (ported from spec09__ref/setup.py)
+# Derived-column helpers
 # ---------------------------------------------------------------------------
 
 
@@ -523,7 +528,7 @@ PROMPT_TYPES = [
 
 
 # ---------------------------------------------------------------------------
-# AR-loop types (ported from spec09__ref/setup.py)
+# AR-loop types
 # ---------------------------------------------------------------------------
 
 # These declarations are grouped below by pipeline phase. The phases are
@@ -670,10 +675,10 @@ PIXEL = TokenType(
                 "pixel_b": lambda color: _pixel_rgb_channel(color, 2),
             },
         ),
-        # Paint width in screen columns: 1 = high-detail (today), 2 = low-detail
-        # (the host blits W adjacent cells in +X). Riding the already-expiring
-        # pixel row avoids a new token type. Until detail:low lands (Step 2),
-        # every emitter sets w=1, keeping the frame token-identical.
+        # Paint width in screen columns: the host blits ``w`` adjacent cells
+        # in +X. The 3D-view and weapon emitters set w = PIXEL_WIDTH (1 in
+        # high-detail, 2 in low-detail); the status bar paints at native
+        # resolution and always sets w = 1.
         "w": IntSlot(1, 3),
     },
 )

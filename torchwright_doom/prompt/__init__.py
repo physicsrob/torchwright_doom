@@ -19,7 +19,7 @@ Dataflow (one direction, top to bottom):
   stable visplane list and tag each subsector with its floor/ceiling plane id.
 - ``build`` — :func:`build_prompt`: emit the flat ``list[Token]`` prefill
   (player state -> per-node -> per-subsector/seg -> visplane defs -> ``BEGIN``),
-  mirroring the original ``get_prefill`` order.
+  in the ``PROTOCOL.md`` prefill order.
 - ``scene`` — the production entry point: :func:`load_render_scene` (WAD +
   config region + asset book), :func:`pose_from_world` (world pose into the
   subset frame), and :func:`prefill_rows_for` (prompt row ids, via

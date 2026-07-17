@@ -1,9 +1,9 @@
 """Structural policy gates for the production runtime architecture.
 
 Every path-sensitive assertion is keyed on the module-level constants below,
-so a cleanup move flips a constant instead of rewriting assertions
-(plan_cleanup_v2.md, Workstream 1). The gates are AST-based and fast — they
-must fail on drift without compiling a model.
+so a cleanup move flips a constant instead of rewriting assertions. The
+gates are AST-based and fast — they must fail on drift without compiling a
+model.
 
 What they enforce, lifecycle-stage by stage:
 
@@ -37,7 +37,7 @@ ROOT = Path(__file__).resolve().parents[2]
 PACKAGE = ROOT / "torchwright_doom"
 
 # ---------------------------------------------------------------------------
-# Path constants — each cleanup move flips one of these (plan_cleanup_v2.md).
+# Path constants — each cleanup move flips one of these.
 # ---------------------------------------------------------------------------
 
 # The sole portable inference program: the one .generate() caller, copied
@@ -51,8 +51,8 @@ PORTABLE_SOURCES = (
 )
 
 # The only production files allowed to import the portable sources
-# (Decision 12: the formatter wrapper and staged bundle validation; tests are
-# exempt by scope).
+# (the formatter wrapper and staged bundle validation; tests are exempt by
+# scope).
 PORTABLE_IMPORTERS = (
     "torchwright_doom/interpret/formatter.py",
     "torchwright_doom/bundle/build.py",
@@ -62,9 +62,14 @@ PORTABLE_IMPORTERS = (
 # scripts/compile_report.py is the explicit non-package exception).
 ONNX_IMPORTERS = ("torchwright_doom/diagnostics/onnx.py",)
 
-# The one production file allowed to (lazily) import diagnostics/ — the CLI's
-# compile-onnx-debug dispatch path.
-DIAGNOSTICS_IMPORTERS = ("torchwright_doom/cli.py",)
+# Files allowed to (lazily) import diagnostics/ — the CLI's
+# compile-onnx-debug dispatch path, and the remote hand-over runner for the
+# same debug compile (both dispatch-only; the diagnostics stay in
+# diagnostics/).
+DIAGNOSTICS_IMPORTERS = (
+    "torchwright_doom/cli.py",
+    "scripts/compile_onnx_debug_remote.py",
+)
 
 # The root dispatch-only CLI.
 CLI_PATH: str | None = "torchwright_doom/cli.py"
@@ -111,11 +116,11 @@ MODEL_LAYER_ALLOWED = {
 }
 MODEL_LAYERING_EXEMPT = ("torchwright_doom/model/render_main.py",)
 
-# Flips True in the Workstream 2 commit that establishes bundle layout v2
-# (root infer.py + tools/) — afterwards no legacy layout name may remain.
+# True since bundle layout v2 (root infer.py + tools/) landed — afterwards
+# no legacy layout name may remain.
 NEW_BUNDLE_LAYOUT = True
 
-# True since torchwright_doom/inference/ was deleted (Workstream 11).
+# True since torchwright_doom/inference/ was deleted.
 OLD_PACKAGE_REMOVED = True
 
 _STDLIB = set(sys.stdlib_module_names) | {"__future__"}

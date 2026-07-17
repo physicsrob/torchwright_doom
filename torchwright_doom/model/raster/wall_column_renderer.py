@@ -1,9 +1,14 @@
-"""Read-only branch owner for wall-column render transitions (Phase H).
+"""Read-only branch owner for wall-column render transitions (Phase H —
+port-milestone tag; GLOSSARY: Phase letters).
 
-Changes from the original: ``make_token`` -> ``make_token_head``,
-``make_value`` -> ``value_scalar``, ``Vec`` -> ``Node``.
+This module runs once at compile time: it builds part of the computation
+graph that torchwright lowers into the transformer's weights. Nothing here
+executes during inference — at render time, only the compiled transformer
+runs. Coined terms: see GLOSSARY.md.
 
-Branch builders follow the after_<token> convention (see GLOSSARY.md).
+Branch builders follow the after_<token> convention (see GLOSSARY.md): each
+``after_X`` method builds the emit head for the token that follows an ``X``
+row on this pass's arrows.
 
 Sentinel/constant nodes are built inside the publish methods, not at module
 scope — see GLOSSARY.md 'the import-time-node rule'.

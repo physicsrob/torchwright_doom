@@ -11,13 +11,16 @@ from ..prompt.types import GameState
 
 
 def pydoom_scene_for(scene: LoadedRenderScene, pose: GameState):
-    """Build the in-tree :class:`torchwright_doom.pydoom.Scene` the renderer and
-    drafter consume, from the WAD-loaded render scene and pose."""
+    """Build the in-tree :class:`torchwright_doom.pydoom.Scene` that the pydoom
+    reference renderer and the drafter (the test-only conformance oracle — see
+    GLOSSARY.md; never on the generation path) consume, from the WAD-loaded
+    render scene and pose."""
     from ..pydoom import Scene as PyScene
 
     # model_validate over a plain dict: pydantic coerces map_data / textures /
-    # palette into the typed pydoom models (the native<->pydoom-shape round-trip
-    # the adapter has always relied on).
+    # palette into the typed pydoom models, so the WAD-loaded native shapes and
+    # pydoom's own model types stay interchangeable without a hand-written
+    # field-by-field adapter.
     py_scene = PyScene.model_validate(
         {
             "map_data": scene.map_data.model_dump(),
@@ -41,8 +44,9 @@ def patch_pydoom_assets(py_scene, asset_config: AssetConfig) -> None:
     The vendored renderer reads module-level asset globals (``ASSET_BOOK``,
     ``PLAYPAL``, ...) and the drafter reads them through that same module. The WAD
     adapter supplies an in-memory scene, so those globals are updated before the
-    drafter / reference render runs. This keeps host work at reference/draft
-    generation only; the compiled renderer still owns rendering.
+    oracle render runs. Everything here is post-hoc scoring machinery — the
+    reference frame the generated pixels are compared against; the compiled
+    transformer alone renders.
     """
     from ..pydoom import renderer
 

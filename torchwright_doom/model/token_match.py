@@ -1,5 +1,10 @@
 """Shared type-match helper for narrow input-type slices.
 
+This module runs once at compile time: it builds part of the computation
+graph that torchwright lowers into the transformer's weights. Nothing here
+executes during inference — at render time, only the compiled transformer
+runs. Coined terms: see GLOSSARY.md.
+
 ``SceneTokenView`` and ``ProtocolTokenView`` both need to compare a previous
 position's ``GraphPast.input_type()`` slice (the compact 8-wide E8 code)
 against a ``TokenType``. The implementation is identical, so it lives here
@@ -14,9 +19,8 @@ test in ``protocol_tokens.py`` and ``scene_tokens.py`` (both import it as
 ``_input_type_matches``): each phase test calls it to compare the previous
 position's input type against the marker that gates that phase.
 
-The original built a one-hot ``linear`` over ``VOCAB.types``; the real side
-repoints the body at :func:`torchwright_doom.model.extract.type_matches`,
-which does the E8 dot-product plus ``compare`` directly on the 8-wide code.
+The body is :func:`torchwright_doom.model.extract.type_matches`, which does
+the E8 dot-product plus ``compare`` directly on the 8-wide code.
 """
 
 from __future__ import annotations

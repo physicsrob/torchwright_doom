@@ -7,9 +7,7 @@ __pycache__
 *.gif
 *.png
 *.vocab.json
-.claude/worktrees/
-.claude/commands/rob-review.md
 .python-version
-.codex
 out/
 token_dump*.json
+.claude/worktrees/

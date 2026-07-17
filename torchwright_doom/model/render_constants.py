@@ -1,10 +1,14 @@
 """Forward/render constants.
 
-Real-side mirror of the read-side render-constant subset. Kept separate from
-:mod:`.constants` (which holds the vocab-scale ``SCREEN_WIDTH`` /
-``SCREEN_HEIGHT`` and must stay dependency-free): the values here are
-render-domain magnitudes, wrapped by :func:`.std.constant` at their call
-sites (see the note below), not at import.
+This module runs once at compile time: it builds part of the computation
+graph that torchwright lowers into the transformer's weights. Nothing here
+executes during inference — at render time, only the compiled transformer
+runs. Coined terms: see GLOSSARY.md.
+
+Render-domain magnitudes, kept separate from :mod:`.constants` (which holds
+the vocab-scale ``SCREEN_WIDTH`` / ``SCREEN_HEIGHT`` and must stay
+dependency-free); each value here is wrapped by :func:`.std.constant` at its
+call site (see the note below), not at import.
 """
 
 from __future__ import annotations
@@ -77,11 +81,10 @@ OPEN_CLIP_CEILING = -1.0
 # this threshold separates the two in the radix-successor presence checks.
 PRESENT_THRESHOLD = 0.9
 
-# NOTE: the original keeps ``ONE``/``ZERO``/``FALSE`` as module-level
-# ``constant`` Vecs. On the real side a ``constant`` is a graph ``Node`` with a
-# global auto-incrementing id; creating one at import time gives it a fixed low
-# id that collides with test-built nodes after the test harness resets the id
-# counter (``tests/conftest.py``), aliasing them under ``reference_eval`` /
-# ``probe_compiled`` memoization. So — matching ``extract.py``'s convention —
-# the 1.0 query constant is created *inside* the call sites (via
-# ``std.constant(1.0)``) rather than here.
+# NOTE (the import-time-node rule; see GLOSSARY.md): a ``constant`` is a graph
+# ``Node`` with a global auto-incrementing id; creating one at import time
+# gives it a fixed low id that collides with test-built nodes after the test
+# harness resets the id counter (``tests/conftest.py``), aliasing them under
+# ``reference_eval`` / ``probe_compiled`` memoization. So — matching
+# ``extract.py``'s convention — the 1.0 query constant is created *inside* the
+# call sites (via ``std.constant(1.0)``) rather than here.

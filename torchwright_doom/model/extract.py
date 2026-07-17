@@ -1,6 +1,11 @@
 """In-graph extract helpers: reading a token's fields back from a
 position's ``input_vec``.
 
+This module runs once at compile time: it builds part of the computation
+graph that torchwright lowers into the transformer's weights. Nothing here
+executes during inference — at render time, only the compiled transformer
+runs. Coined terms: see GLOSSARY.md.
+
 The mirror image of ``emit.py``. ``emit`` writes a residual row that
 matches one row of ``W_EMBED``; the embedding lookup produces an
 ``input_vec`` at every position, and these helpers decode that
@@ -34,9 +39,9 @@ into the consumer.
 Threshold math for :func:`is_type`: every type's 8-wide E8 code is a
 10x-scaled spherical-code unit vector, so the self-dot is 1600. In the
 current vocab the maximum cross-dot between any two distinct types is
-1200 — leaving a 400-unit gap on either side of the halfway threshold
-1400. Far larger than the 1/sharpness = 0.1 ramp half-width of
-``compare`` at the module default ``step_sharpness = 10``.
+1200 — a 400-unit total gap (200 on either side of the halfway
+threshold 1400). Far larger than the 1/sharpness = 0.1 ramp half-width
+of ``compare`` at the module default ``step_sharpness = 10``.
 """
 
 from __future__ import annotations
@@ -72,10 +77,10 @@ __all__ = [
 ]
 
 
-# Minimum gap between self-dot and worst-case cross-dot before
+# Minimum TOTAL gap between self-dot and worst-case cross-dot before
 # :func:`compare` saturation stops being trustworthy at the default
-# sharpness. Self-dot is fixed at 1600 by the E8 code scaling; the gap
-# is the slack ``compare`` has on either side of the halfway threshold.
+# sharpness. Self-dot is fixed at 1600 by the E8 code scaling; ``compare``
+# gets half the gap of slack on each side of the halfway threshold.
 _IS_TYPE_GAP_MARGIN: float = 200.0
 _E8_SELF_DOT: float = 1600.0
 
@@ -98,9 +103,10 @@ def _is_type_threshold(token_type: TokenType) -> float:
     compare: halfway between the self-dot (1600) and the worst-case
     cross-dot with any other type in the vocab.
 
-    Validates that the gap on either side of the threshold is at least
-    ``_IS_TYPE_GAP_MARGIN`` units so ``compare`` saturates cleanly at
-    the default sharpness. Raises if not — that's a structural problem
+    Validates that the total self-dot − cross-dot gap is at least
+    ``_IS_TYPE_GAP_MARGIN`` units (half of it on either side of the
+    halfway threshold) so ``compare`` saturates cleanly at the default
+    sharpness. Raises if not — that's a structural problem
     with the vocab's E8 assignment, not a runtime condition.
     """
     layout = TOKEN_VOCAB.layout
@@ -149,9 +155,9 @@ def _is_type_pm1(input_vec: Node, token_type: TokenType) -> Node:
 
     The compare's output saturates at +1 / −1 because the dot lands at
     ``_E8_SELF_DOT`` (active type) or at most ``max_cross_T`` (any other
-    type) — a gap of ≥ ``_IS_TYPE_GAP_MARGIN`` on either side of the
-    halfway threshold, far larger than the ``1/step_sharpness = 0.1``
-    ramp half-width.
+    type) — a total gap of ≥ ``_IS_TYPE_GAP_MARGIN`` straddling the
+    halfway threshold (half per side), far larger than the
+    ``1/step_sharpness = 0.1`` ramp half-width.
     """
     thresh = _is_type_threshold(token_type)
     dot = _dot_with_e8_code(

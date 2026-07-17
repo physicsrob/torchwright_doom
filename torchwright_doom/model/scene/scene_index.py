@@ -1,28 +1,29 @@
-"""Assemble the render-time scene index for the prescribed prefill stream.
+"""Assemble the render-time scene index from the prefill stream.
 
-Each forward call sees one token position. The prescribed prefill stream uses
-structural headers (`NODE`, `SS`, `SEG`) followed by marker/value tokens. This
-module wires together the helpers that interpret the current token, publish
-header contexts, and expose query objects used by render code.
+This module runs once at compile time: it builds part of the computation graph
+that torchwright lowers into the transformer's weights. Nothing here executes
+during inference — at render time, only the compiled transformer runs. Coined
+terms: see GLOSSARY.md.
+
+Each forward call sees one token position. The prefill stream (its grammar is
+``PROTOCOL.md`` "Prefill") uses structural headers (`NODE`, `SS`, `SEG`,
+`PLANE_DEF`) followed by marker/value tokens. This module wires together the
+helpers that interpret the current token, publish header contexts, and expose
+query objects used by render code.
 
 Read order:
 
 1. `scene_tokens`: token interpretation.
-2. `scene_headers`: current NODE/SS/SEG header contexts.
-3. `scene_facts`: queryable player/node/subsector/seg facts.
+2. `scene_headers`: current NODE/SS/SEG/PLANE_DEF header contexts.
+3. `scene_facts`: queryable player/node/subsector/seg/plane facts.
 4. `attention_handles`: generic GraphPast lookup plumbing.
 
 This is the static-scene side. From here the reading path continues onto the
 dynamic/dispatch side: `protocol_tokens` / `protocol_registry` ->
-`render_main.forward` (see CLAUDE.md "Rough layout" for the full reading path).
+`render_main.forward` (see README.md "Reading path" for the full chain).
 
-Changes from the original: the import block (``Vec`` -> ``Node``;
-``Past`` -> ``GraphPast``; ``one_hot`` / ``N_PLANES_MAX`` from the real-side
-shim / vocab) and the ``SceneIndex.build`` ``pos`` annotation. The classmethod
-body, the four ``_publish_*_context`` recency helpers, and the published-field
-shape (``view``/``nodes``/``subsectors``/``segs``/``assets``/``planes``) are a
-line-for-line port. ``AssetIndex()`` is constructed with zero ``past.publish``;
-its lookup internals are the lookup track's deliverable (see ``assets.py``).
+``AssetIndex()`` is constructed with zero ``past.publish`` calls; its lookups
+are weight-side tables implemented in ``assets.py``.
 """
 
 from __future__ import annotations
@@ -53,7 +54,9 @@ class SceneIndex:
 
     Render code should treat this as the scene database: `view` exposes player
     pose, `nodes` exposes BSP node facts, `subsectors` exposes first-seg
-    membership, and `segs` exposes seg geometry/ownership.
+    membership, `segs` exposes seg geometry/ownership, `planes` exposes
+    visplane height/flat/light facts, and `assets` holds the weight-side
+    texture/flat lookup tables.
     """
 
     view: PlayerView
@@ -76,7 +79,7 @@ class SceneIndex:
         Construction is eager: every field group publishes its backing channels
         before render code consumes the returned `SceneIndex`. The previous-token
         read goes through ``past``, which holds the RoPE config; position is
-        graph-derived inside attention, never passed in.
+        graph-derived inside attention, never passed in (see ``past.py``).
         """
         # VALUE/ANGLE_VALUE tokens are interpreted by looking at the marker
         # token immediately before them.

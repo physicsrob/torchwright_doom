@@ -1,19 +1,25 @@
 """Minimal compiled-asset surface for the prefill vocab + prompt builder.
 
+This module runs once at compile time: it builds part of the computation
+graph that torchwright lowers into the transformer's weights. Nothing here
+executes during inference — at render time, only the compiled transformer
+runs. Coined terms: see GLOSSARY.md.
+
 The prefill contract is asset-coupled in three places:
 ``PLANE_DEF.flat_id`` ranges over ``N_FLATS``, ``seg.texture.*`` over
 ``N_WALL_TEXTURES + 1``, and ``PIXEL.color`` carries ``pixel_r/g/b``
 derived columns read off the 256-entry ``PLAYPAL`` palette. The prompt
 builder also needs the texture/flat **name -> id** maps to emit the same
-ids the reference renderer (pydoom) ``get_prefill`` does.
+ids the pydoom reference renderer uses.
 
-This module is the **pure** slice of the original ``asset_config`` /
-``asset_banks`` that those need: the texture/flat name lists, the id maps,
-the counts, and a snapshot of ``PLAYPAL`` (the static DOOM1 palette
-pydoom loads from the WAD — copied as a literal so the prefill side does
-not pull in the WAD-loading machinery). The forward-path pixel and
-dimension banks (wall/flat pixel tables, ``WALL_HEIGHT_BANK`` etc., the
-``table_lookup`` data) are owned by the lookup track and are NOT here.
+This module holds only the WAD-independent name/id/palette data the vocab
+and prompt builder need: the texture/flat name lists, the id maps, the
+counts, and a snapshot of ``PLAYPAL`` (the static DOOM1 palette pydoom
+loads from the WAD — copied as a literal so the prefill side does not pull
+in the WAD-loading machinery). The forward-path pixel and dimension banks
+(wall/flat pixel tables, ``WALL_HEIGHT_BANK`` etc., the ``table_lookup``
+data) live in ``model/assets/asset_banks.py`` and its ``table_lookup``
+consumers, NOT here.
 """
 
 from __future__ import annotations

@@ -1,5 +1,10 @@
 """R_CheckBBox-style pruning for back-side BSP traversal.
 
+This module runs once at compile time: it builds part of the computation graph
+that torchwright lowers into the transformer's weights. Nothing here executes
+during inference — at render time, only the compiled transformer runs. Coined
+terms: see GLOSSARY.md.
+
 Owns the ``TRAVERSE_BETWEEN`` bbox sub-protocol: classify the player against the back
 child's bounding box into one of DOOM's nine regions (``R_CheckBBox`` ``boxx`` /
 ``boxy``), project the two extreme corners to screen columns through the same
@@ -8,25 +13,20 @@ screen span against the now-populated :class:`SolidIntervals`. A bbox entirely
 beyond the last visible column or fully covered by solid walls prunes its
 subtree (``TRAVERSE_RETURN``); otherwise traversal descends into the back child.
 
-Changes from the original:
+Every owner ``after_*`` emitter returns an emit *head* (``make_token_head``):
+the renderer's dispatch folds over heads and stamps one shared derived tail
+after selecting the winning branch (the convention the ``bsp_traversal`` /
+``seg_scanner`` owners follow).
 
-* ``Vec`` -> ``Node``; ``...api`` helpers come from the real-side ``std`` /
-  ``render_ops`` shim; the token declarations / ``ValueRange`` / ``make_value``
-  from ``vocab`` / ``value_ranges``.
-* ``make_token`` -> ``make_token_head``: the renderer's dispatch folds over emit
-  *heads* and stamps one shared derived tail after selecting the winning branch,
-  so every owner ``after_*`` emitter returns a head (the convention the
-  ``bsp_traversal`` / ``seg_scanner`` owners established).
-* The original kept a near-duplicate octant builder here
-  (``_signed_world_angle_bbox``, clamp 3072) alongside ``ops.signed_world_angle``
-  (clamp 2048). The real ``render_ops.signed_world_angle`` is already unified on
-  the wider 3072 clamp, so this port calls it directly and the duplicate (plus
-  its ray-matrix / ``Q2``/``Q3`` constants) is dropped.
+World angles are not computed in this module: the corner emitters defer each
+corner's atan2 inputs as a ``(dx, dy)`` pair (see :func:`angle_inputs`), and
+the shared dispatch runs ONE ``render_ops.signed_world_angle`` — unified on
+the 3072 clamp, wide enough for bbox corner deltas as well as seg endpoints
+(see the octant-builder comment in ``render_ops``).
 
-The dataclasses, the publish/pick structure, and the ``after_*`` emit logic are
-otherwise a line-for-line port. The ``_BOX*_LINEAR`` matrices below are plain
-constant data passed to ``linear`` (not graph nodes), so the module stays free
-of import-time graph nodes (``global_node_id == 0`` after import).
+The ``_BOX*_LINEAR`` matrices below are plain constant data passed to
+``linear`` (not graph nodes), so the module stays free of import-time graph
+nodes (``global_node_id == 0`` after import).
 """
 
 from __future__ import annotations

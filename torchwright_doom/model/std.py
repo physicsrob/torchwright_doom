@@ -1,7 +1,12 @@
-"""Read-side std/helper shim.
+"""Helper-op shim: the ``std`` surface the ported renderer modules import from.
 
-The std surface the ported renderer files import from, lowering each to an
-existing torchwright op. The helpers fall into these categories:
+This module runs once at compile time: it builds part of the computation
+graph that torchwright lowers into the transformer's weights. Nothing here
+executes during inference — at render time, only the compiled transformer
+runs. Coined terms: see GLOSSARY.md.
+
+Each helper lowers to an existing torchwright op. The helpers fall into
+these categories:
 
 - Column plumbing (residual-column reshaping): ``concat``, ``split``,
   ``linear``, ``reduce_sum``.
@@ -23,9 +28,9 @@ dispatch is built from: ``render_main.dispatch_next_token`` uses
 to pick a numeric carrier / world-angle scalar float-exact from its
 candidates.
 
-Two helpers that already exist on the real side — ``extract_derived`` and
-``indicator_to_bool`` (in :mod:`.extract`) — are re-exported here so a ported
-file has a single import source for the whole std surface.
+Two helpers that already exist in :mod:`.extract` — ``extract_derived`` and
+``indicator_to_bool`` — are re-exported here so a ported file has a single
+import source for the whole std surface.
 
 These are graph-construction helpers: each returns a torchwright
 ``Node``. There is no runtime state.
@@ -127,10 +132,9 @@ def _column_selector(d_in: int, start: int, width: int) -> torch.Tensor:
 def split(node: Node, sizes: list[int]) -> list[Node]:
     """Slice ``node`` into consecutive sub-ranges of the given ``sizes``.
 
-    The original ``split`` is free metadata; on the real graph each piece
-    is a fused identity ``Linear`` reading exactly its column range (the
-    same column-select pattern :mod:`.extract` uses), which folds into
-    its consumer.
+    Each piece is a fused identity ``Linear`` reading exactly its column
+    range (the same column-select pattern :mod:`.extract` uses), which
+    folds into its consumer.
     """
     total = 0
     for size in sizes:
@@ -152,8 +156,7 @@ def split(node: Node, sizes: list[int]) -> list[Node]:
 def linear(node: Node, output_matrix: list[list[float]]) -> Node:
     """Fixed ``(d_input, d_output)`` projection.
 
-    ``output_matrix`` is plain numpy/list weight data, not a node — the
-    real-graph weight analog — matching the original contract exactly.
+    ``output_matrix`` is plain numpy/list weight data, not a node.
     """
     weights = torch.tensor(output_matrix, dtype=torch.float32)
     return Linear(node, weights)
@@ -187,8 +190,9 @@ def one_hot(scalar: Node, n: int) -> Node:
     Lowers to ``bool_to_01(in_range(scalar, scalar + 1, n))``: ``in_range``
     marks position ``i`` true when ``scalar <= i + 0.5 < scalar + 1`` —
     i.e. ``i - 0.5 < scalar <= i + 0.5`` — so an integer ``scalar = k``
-    selects index ``k`` cleanly, with the same ``1/step_sharpness``
-    half-integer blend zones as the original's trapezoidal kernel.
+    selects index ``k`` cleanly, with ``1/step_sharpness``-wide blend zones
+    at the half-integer boundaries (``step_sharpness`` = 10, torchwright
+    ``ops/const.py``).
     """
     if len(scalar) != 1:
         raise ValueError(f"one_hot expects a scalar node, got width {len(scalar)}")
@@ -351,15 +355,15 @@ def pwl_def(
 ) -> Callable[[Node], Node]:
     """Build a reusable 1D piecewise-linear function.
 
-    Returns a callable that applies the PWL to a scalar node, mirroring the
-    original ``PWLDef`` pattern: construct once at module level, apply many times
+    Returns a callable that applies the PWL to a scalar node — construct once
+    at module level, apply many times
     inside the graph builders. ``breakpoints`` is the grid resolution (an int);
     the grid spans ``input_range`` uniformly. ``fn`` is sampled at each
     breakpoint and the result linearly interpolates between them, lowering to
     torchwright ``piecewise_linear``.
 
     The returned callable — not this factory — is what builds a graph node, so
-    the tuple-of-PWLs module-level pattern (``_U_MOD_BY_BANK``,
+    the tuple-of-PWLs module-level pattern (``V_MOD_BANK``,
     ``_COLORMAP_ROW_PWLS``) stays node-free at import (no ``constant``/op nodes;
     ``global_node_id`` unchanged), satisfying the no-import-time-nodes rule.
     """
@@ -381,10 +385,10 @@ def table_lookup_2d(
 
     Thin re-export of torchwright core ``table_lookup_2d`` so a ported renderer
     file reaches it through the same ``std`` surface as
-    its other ops. ``table`` is plain numpy/array weight data (not a node), the
-    real-graph weight analog — torchwright's builder accepts the raw array.
+    its other ops. ``table`` is plain numpy/array weight data (not a node) —
+    torchwright's builder accepts the raw array.
     Inputs near integer ``k`` select index ``k``; out-of-range indices clamp to
-    the table edge (cancellation-free after the I0 fix). The ``eps = 1 /
+    the table edge (cancellation-free). The ``eps = 1 /
     sharpness`` transition bands are centered at half-integer boundaries.
     """
     return _table_lookup_2d(i, j, table, index_scale=index_scale, sharpness=sharpness)
@@ -396,13 +400,12 @@ def make_token(token_type: TokenType, **slot_value_nodes: Node) -> Node:
     The renderer builds every branch's next-token eagerly at every position and
     masks by token type in ``dispatch``, so a branch's slot inputs are only
     valid at the rows that branch actually fires on; elsewhere a computed slot
-    (e.g. ``child_u - N_NODES_MAX`` for a node child, or ``last_node + 1``) goes
-    out of the slot's range. The original ``make_token`` tolerates that via the
-    clamping one-hot encoder; the real ``emit_token``'s digit-quad payload does
-    not, and an out-of-range value blows up the row (and the downstream
-    ``select`` / ``type_switch`` value-range guards). Clamping each slot value
-    to its declared range here restores that tolerance — it is a no-op at the
-    rows the branch is selected on, and bounds the discarded garbage rows.
+    (e.g. ``child_u - N_NODES_MAX`` for a node child, or ``side_record_node
+    + 1``) goes out of the slot's range. ``emit_token``'s digit-quad payload
+    does not tolerate that: an out-of-range value blows up the row (and the
+    downstream ``select`` / ``type_switch`` value-range guards). Clamping each
+    slot value to its declared range here — a no-op at the rows the branch is
+    selected on — bounds the discarded garbage rows.
     """
     from .emit import emit_token
 
@@ -431,7 +434,8 @@ def clamp(node: Node, lo: float, hi: float) -> Node:
     a ported renderer file reaches its clamp through the same
     ``std`` surface as its other ops instead of importing ``torchwright.ops``
     directly. Used by the dispatch's world-angle collapse to pin each candidate
-    ``(dx, dy)`` to the atan square before the pick."""
+    ``(dx, dy)`` to the clamped ±3072 atan2 input square (see
+    :mod:`.render_ops`) before the pick."""
     return _clamp(node, lo, hi)
 
 
@@ -440,14 +444,12 @@ def clamp_to_slot(token_type: TokenType, slot_name: str, value: Node) -> Node:
     same clamp :func:`make_token_head` applies internally.
 
     The dispatch's numeric-carrier collapse uses this to bound each candidate
-    scalar *before* the pick (``pick_by_one_hot``). Historically this kept the
-    relu-era pick's additive offset (derived from the union of candidate value
-    ranges) inside its sanity bound; the swiglu pick multiplies gate×value
-    directly and has no such offset, so the clamp's stated reason is gone.
-    Retained at the cutover as a cheap idempotent bound on the value-range
-    bookkeeping — removal is the cutover plan's D4 audit, not flip work. It is
-    a no-op at the winning row (the per-branch head clamped there too, and the
-    clamp is idempotent under the shared head's re-clamp)."""
+    scalar *before* the pick (``pick_by_one_hot``): a cheap idempotent bound
+    on the value-range bookkeeping (an un-clamped candidate's tracked range
+    can span millions). Not load-bearing for correctness — the pick
+    multiplies gate×value and carries no additive offset — and a no-op at
+    the winning row (the per-branch head clamped there too, and the clamp is
+    idempotent under the shared head's re-clamp)."""
     return _clamp_slot_values(token_type, {slot_name: value})[slot_name]
 
 

@@ -1,5 +1,10 @@
 """DOOM's token vocabulary and embedding table.
 
+This module runs once at compile time: it builds part of the computation
+graph that torchwright lowers into the transformer's weights. Nothing here
+executes during inference — at render time, only the compiled transformer
+runs. Coined terms: see GLOSSARY.md.
+
 A ``TokenVocab`` enumerates every discrete ``(token_type, slot_values)``
 combination across the vocab's ``TokenType`` list, producing one
 ``W_EMBED`` row per combination. The autoregressive loop feeds a 1-wide
@@ -116,10 +121,10 @@ MAX_CARDINALITY_PER_BLOCK: int = BASE * BASE
 this would need a 3-digit recursion (not implemented; would only kick
 in if a slot grew past 65,536 levels)."""
 
-# Range for E8 category code indices. Any 89 indices in [0, 1024) give
+# Range for E8 category code indices. Distinct indices in [0, 1024) give
 # distinct 8-wide codes; we assign them sequentially per-type. The
-# index_to_vector loader caps at 1024 — we'll comfortably stay under
-# even with the full prompt + AR vocab (~89 types).
+# index_to_vector loader caps at 1024 — the full prompt + AR vocab
+# (currently 112 types) stays far under.
 _MAX_E8_INDEX: int = 1024
 
 
@@ -378,7 +383,7 @@ class Layout:
 
 # ---------------------------------------------------------------------------
 # TokenVocab — owns the ordered row table and the layout, with a
-# cardinality budget that mirrors the original TokenVocab.
+# per-slot cardinality budget.
 # ---------------------------------------------------------------------------
 
 
@@ -387,9 +392,8 @@ class Layout:
 # full-res scale-1 build: screenRange's per-column clip y-range is
 # (SCREEN_HEIGHT+2)**2 (40,804 at 320x200), which tips the 1<<17 ceiling. The
 # principled fix is to size screenRange's clip-y by VIEW_HEIGHT (the clip is
-# view-only) rather than the full SCREEN_HEIGHT — landing with the Step-3
-# vertical view-carve; this guard bump unblocks the scale-1 build/measurement
-# until then.
+# view-only) rather than the full SCREEN_HEIGHT — not yet implemented; until
+# then this guard bump keeps the scale-1 build inside the budget.
 DEFAULT_MAX_CARDINALITY: int = 1 << 18
 
 
@@ -461,7 +465,7 @@ def _type_cardinality(t: TokenType) -> int:
 
 
 def _slot_value_for_index(slot: IntSlot | FloatSlot, idx: int) -> int | float:
-    """Slot value at the ``idx``-th step (matches the original encoder)."""
+    """Slot value at the ``idx``-th step of the slot's enumeration grid."""
     if isinstance(slot, IntSlot):
         return slot.lo + idx
     span = slot.hi - slot.lo
@@ -499,8 +503,9 @@ def _build_w_embed(vocab: TokenVocab) -> torch.Tensor:
     """Construct W_EMBED in numpy column-by-column.
 
     The per-row, per-derived-column Python loop the docstring describes
-    is too slow on the full ~120k-row × ~330-derived vocab (35s+ at
-    import time, dominated by torch element-assign overhead). The
+    is too slow at production vocab scale (~10^5 rows × ~10^3 derived
+    columns; 35s+ at import time, dominated by torch element-assign
+    overhead). The
     implementation below does the same writes column-batched in numpy
     and only converts to torch once at the end.
     """
@@ -691,12 +696,13 @@ def build_doom_embedding(input_name: str = "token_ids") -> Embedding:
 
 
 def _row_label(t: TokenType, values: Mapping[str, int | float]) -> str:
-    """The HF ``WordLevel`` vocab label / the ``Embedding`` node's debug name for
-    one row — the shared per-id label (:func:`..tokenizer.display.token_label`),
-    called **config-free** (``wall_names=flat_names=None``) so the vocab labels
-    stay asset-independent. Cosmetic only: the labels are *not* in
-    ``vocab_fingerprint`` (which hashes name + slots + n_rows), so the prettier
-    spelling never re-keys ids."""
+    """The ``Embedding`` node's debug name for one row — the shared per-id label
+    (:func:`..tokenizer.display.token_label`), called **config-free**
+    (``wall_names=flat_names=None``) so these labels stay asset-independent.
+    Not the published HF tokenizer's words — those are built asset-aware by
+    ``tokenizer.standard.canonical_words``. Cosmetic only: the labels are *not*
+    in ``vocab_fingerprint`` (which hashes name + slots + n_rows), so the
+    prettier spelling never re-keys ids."""
     from ..tokenizer.display import token_label
 
     return token_label(t, values)

@@ -1,5 +1,10 @@
 """Per-pixel v coordinate decode for texture sampling.
 
+This module runs once at compile time: it builds part of the computation
+graph that torchwright lowers into the transformer's weights. Nothing here
+executes during inference — at render time, only the compiled transformer
+runs. Coined terms: see GLOSSARY.md.
+
 The chain mirrors DOOM ``R_DrawColumn`` texture stepping (r_draw.c:132-145)::
 
     v_native = dc_texturemid + (y - centery) * dc_iscale
@@ -15,15 +20,13 @@ row-address path (unselected banks see their own-height mod of a possibly-junk
 junk u/row candidates today).  The floor is shared, not folded per-height —
 see ``pwl_banks`` for the width story.
 
-Changes from the original: ``Vec`` -> ``Node``; the module-level ``multiply`` /
-``floor_int`` / ``constant(CENTER_Y)`` nodes become the ``render_ops`` shims
-(``mul_pixel_dc_iscale`` / ``FLOOR_NATIVE`` / ``add_const``) applied inside the
-functions (no import-time graph nodes). The dead ``compute_v_at_screen_y`` (the
-combined native+floor+sawtooth form, imported nowhere) is **not** ported.
+All graph nodes are built inside the functions, never at module scope — see
+GLOSSARY.md 'the import-time-node rule'.
 
 ``mul_pixel_dc_iscale`` is exact on its first axis because ``pixel_index`` /
-``screen_y - CENTER_Y`` are always integers (CENTER_Y = 25.0), so they land on
-the grid's unit step and the dc_iscale axis cell precision does not matter.
+``screen_y - CENTER_Y`` are always integers (``CENTER_Y = VIEW_HEIGHT / 2``,
+an integer at every committed config), so they land on the grid's unit step
+and the dc_iscale axis cell precision does not matter.
 """
 
 from __future__ import annotations

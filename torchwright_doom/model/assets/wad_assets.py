@@ -1,17 +1,19 @@
 """Load DOOM WAD assets the texture read-surface compiles into weights.
 
-Data-source **B**: a self-contained real-side WAD loader rather than reusing
-compiled banks. Narrowed to the asset payloads the forward path
-needs: PLAYPAL, COLORMAP, TEXTURE1/TEXTURE2 wall textures, patch pictures, and
-flats. The composite must byte-match the reference renderer (pydoom)'s
-``ASSET_BOOK``
-(column-major ``pixels[u][v]``, missing-texture handling, 64x64 flats).
+This module runs once at compile time: it builds part of the computation graph that torchwright lowers into the transformer's weights. Nothing here executes during inference — at render time, only the compiled transformer runs. Coined terms: see GLOSSARY.md.
+
+A self-contained plain-Python WAD loader, narrowed to the asset payloads the
+forward path needs: PLAYPAL, COLORMAP, TEXTURE1/TEXTURE2 wall textures, patch
+pictures, and flats. The composite ``ASSET_BOOK`` it feeds (built in
+:mod:`.asset_banks`) is the single source — the reference renderer (pydoom)
+imports it directly — so the format is the contract: column-major
+``pixels[u][v]``, missing-texture handling, 64x64 flats.
 
 This is the WAD-loading machinery the prefill-side ``asset_config`` deliberately
 omits (it snapshots PLAYPAL as a literal). ``prompt/wad.py`` parses map
 *geometry* from the same WAD and states textures are out of scope; this module
-is the texture/flat counterpart, kept separate exactly as the original split
-geometry (``prompt/wad.py``) from assets (``wad_assets.py``).
+is the texture/flat counterpart — geometry stays in ``prompt/wad.py``,
+textures and flats live here.
 """
 
 from __future__ import annotations
@@ -37,7 +39,7 @@ FLAT_SIZE = 64  # a flat (floor/ceiling texture) is FLAT_SIZE x FLAT_SIZE pixels
 class TextureImage:
     """A native-size texture/flat: column-major ``pixels[u][v]`` palette indices.
 
-    Real-side stand-in for the original ``TextureImage`` type —
+    A plain stand-in for pydoom's ``TextureImage`` (``pydoom/_scene.py``) —
     only the fields the loader and bank builder touch (``name``/``width``/
     ``height``/``pixels``), as a plain frozen dataclass (no pydantic dep).
     """

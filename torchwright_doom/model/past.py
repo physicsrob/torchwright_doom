@@ -1,4 +1,9 @@
-"""Graph-construction facade for the original's ``Past``-style reads.
+"""Graph-building facade lowering named past-reads onto torchwright attention ops.
+
+This module runs once at compile time: it builds part of the computation
+graph that torchwright lowers into the transformer's weights. Nothing here
+executes during inference — at render time, only the compiled transformer
+runs. Coined terms: see GLOSSARY.md.
 
 ``GraphPast`` stores graph ``Node`` references in lightweight handles and
 lowers each read to an existing torchwright attention primitive. It does
@@ -64,7 +69,7 @@ class GraphPast:
         """Each token's approximate absolute position (RoPE-derived, via BOS).
 
         Built once and cached.  This is the graph-computed monotone position
-        scalar that replaces the old host counter column: ``global_position_from_bos``
+        scalar — no host-supplied counter exists: ``global_position_from_bos``
         recovers position ``0..max_positions`` from the softmax weight every token
         places on the inert BOS token (``is_type(input_vec, BOS)``, 1.0 only at
         position 0).  It is used both as the absolute-position scalar for bounded
@@ -78,8 +83,8 @@ class GraphPast:
         recency reads — the n_heads=32 regression class).  Production
         therefore takes the op's ``smoothed=True`` path: an exact uniform
         causal mean of the recovery, ×2, which restores adjacent steps to
-        ≥0.965 at 54k and cuts the absolute envelope to ~±1.7 (receipts in
-        ``smooth_recency_rank_derisked.md``).  ``_SMOOTHED_GLOBAL_POSITION``
+        ≥0.965 at 54k and cuts the absolute envelope to ~±1.7 (measured by
+        the ``scripts/recency_rank_*`` probes).  ``_SMOOTHED_GLOBAL_POSITION``
         is a build-time A/B flag for probes; production keeps it True.
         """
         if self._global_position_node is None:
@@ -207,10 +212,9 @@ class GraphPast:
         cliff (the unbounded clip read DOOM needs).  The KV cache is unbounded, so
         every committed row stays readable for the whole run.
 
-        This is the same mechanism the pre-RoPE renderer used — a global absolute
-        position scaled by a per-position gain — so it inherits that scheme's
-        sharpness.  ``recency_scale`` is that gain (``RECENCY_GAIN``, the old
-        ``SCORE_GAIN = 8``): adjacent positions differ by ``recency_scale`` in the
+        The mechanism is a global absolute position scaled by a per-position
+        gain.  ``recency_scale`` is that gain (``RECENCY_GAIN = 8``): adjacent
+        positions differ by ``recency_scale`` in the
         logit, so the most recent matching key wins the softmax sharply
         (``exp(8)`` ⇒ cond ≈ 0.9993), which a ±1 boolean marker read needs.  The
         torchwright op default ``recency_scale=1`` is far too soft (``exp(1)`` ⇒
@@ -219,9 +223,9 @@ class GraphPast:
         The per-adjacent-position logit gap is ``recency_scale`` times the
         position signal's real adjacent step.  The smoothed
         :meth:`global_position` keeps that step ≥ 0.965 over a full-cap
-        rollout (measured; the raw recovery dipped to 0.53 at scale, leaking
-        ~1.5% of the softmax to the runner-up — the n_heads=32 regression
-        class; see ``smooth_recency_rank_derisked.md``).
+        rollout (measured by the ``scripts/recency_rank_*`` probes; the raw
+        recovery dipped to 0.53 at scale, leaking ~1.5% of the softmax to the
+        runner-up — the n_heads=32 regression class).
 
         Content-dominance invariant (the caller must satisfy): a content-matched
         older key must beat an unmatched newer key, i.e.

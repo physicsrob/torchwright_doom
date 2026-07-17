@@ -1,76 +1,13 @@
-# Communication
-
-## Use plain English; reintroduce terms on every use
-
-When explaining technical concepts, describe the mechanics in plain
-English rather than introducing named abstractions. Say "the input
-range crosses zero" not "straddling." Say "the slope of the line
-connecting the endpoints" not "the chord relaxation." If a term
-doesn't already exist in the codebase, prefer the description — the
-user will name it if it needs a name.
-
-When a named term genuinely earns its keep (you'll reference the
-concept many times and the name saves confusion), define it inline on
-every use until the user starts using it themselves — that's the
-signal they've adopted it. "The PL-drift (the gap between the
-piecewise-linear approximation and the exact function) compounds
-through..." not just "The PL-drift compounds through..."
-
-Never stack coined terms. "The chord relaxation of the straddling ReLU
-in the forward-mode LiRPA" is four layers of undefined vocabulary.
-Each layer of jargon you build on top of another layer compounds
-confusion. If you need multiple concepts, introduce them one at a time
-with plain-English definitions between them.
-
-The user manages multiple projects and does not have your earlier
-definitions loaded. Write every explanation so it can be understood
-cold.
-
-## Admit uncertainty; don't fill gaps with plausible stories
-
-When you aren't sure whether two things are really the same, whether a
-mechanism works the way you think, or whether a number is right — say
-so. "I think these might be the same thing but I'm not sure" is always
-better than treating them as interchangeable and building an
-explanation on top. Check the code before building an explanation on
-any factual claim (a constant's value, what a function reads, how a
-data structure is used). Never construct a narrative that "sounds
-right" without tracing the actual code path — the most dangerous
-explanations are the ones that are internally consistent but don't
-match reality.
-
-## Flag complexity before building it
-
-Before introducing a new abstraction, indirection layer, or
-deferred-execution pattern, flag it to the user: what it is, why you
-think you need it, and what the simpler alternative would be. "I'm
-about to add a placeholder system because the basis needs to be fully
-known before computing bounds — the simpler alternative is making the
-basis mutable. The placeholder approach is more complex but avoids
-changing Basis. Which do you prefer?" Don't commit to elaborate
-machinery without explicit agreement. If the user says "that feels
-gross," trust that instinct and look for the direct path.
-
-## State constraints alongside proposals
-
-When proposing a mechanism, state all its constraints and assumptions
-upfront. Don't wait for the user to discover them through follow-up
-questions. "This requires X and constrains Y" is always better than
-explaining X only when asked. If a design requires a fixed layout,
-say so. If it introduces a dependency, name it. If it limits future
-flexibility, flag it. Minimizing complexity in the explanation doesn't
-reduce the complexity of the mechanism — it just hides it, and the
-user will find it later in a more frustrating way.
-
 # Current state of this submodule
 
 This submodule is the active DOOM renderer: a computation graph that
 `torchwright` compiles into a transformer which renders DOOM
 autoregressively. `torchwright_doom/model/render_main.py` is the entry
-point — `forward(input_vec, past, pos)` builds the read-side scene and
+point — `forward(input_vec, past)` builds the read-side scene and
 protocol views, publishes the runtime protocol owners, builds each
 dispatch branch's next-token, and selects one by the current input
-token's type.
+token's type. Canonical numbers (resolution, token counts, timings):
+`FACTS.md`.
 
 Layout of `torchwright_doom/`. The top-level split is the dumb-host
 line: **`model/`** holds every module that compiles into transformer
@@ -81,11 +18,12 @@ weights; everything else runs as Python on the host.
   (the token vocabulary and value encodings), `embedding` / `emit` /
   `extract` (token ↔ residual encode/decode), `std` (the helper-op
   shim), `past` / `attention_handles` (reading previously-emitted
-  tokens), `render_ops` (shared math: atan2, distance, clamps),
-  `constants` (env-driven screen sizing) / `render_constants`
-  (attention gains + protocol sentinels), `doom_lighting` /
-  `asset_config` (the data floor under the token contract), and
-  `render_main` (the assembler — the front door).
+  tokens), `token_match` (token-type match predicates), `render_ops`
+  (shared math: atan2, distance, clamps), `constants` (env-driven
+  screen sizing) / `render_constants` (attention gains + protocol
+  sentinels), `doom_lighting` / `asset_config` (the data floor under
+  the token contract — see `GLOSSARY.md`), and `render_main` (the
+  assembler — the front door).
 - **`model/scene/`** — the static read side: prefill token
   interpretation, header recovery, queryable map facts, the assembled
   SceneIndex.
@@ -188,16 +126,15 @@ When parameters change, **update these files in place** and keep their
 shared model / scene / run fields in lockstep — only `scale` differs.
 Do NOT add a third committed config.
 
-Config proliferation was a recurring failure mode (wrong-config runs,
-stale variants, an umbrella-proxy OOM from drifted defaults). The rule
-that still holds beyond those two: an experiment or gate that needs a
-variant **copies a config to /tmp, edits the field, and runs with
-`--config /tmp/<name>.yaml`**. Variants are ephemeral by construction;
-if you find yourself about to commit a third YAML under `configs/`,
-stop and use a /tmp variant instead.
+Extra committed configs invite wrong-config runs and stale variants.
+The rule: an experiment or gate that needs a variant **copies a config
+to /tmp, edits the field, and runs with `--config /tmp/<name>.yaml`**.
+Variants are ephemeral by construction; if you find yourself about to
+commit a third YAML under `configs/`, stop and use a /tmp variant
+instead.
 
 The umbrella Makefile proxies these defaults — change them in lockstep
-or the stale copy bites (it has).
+or the stale copy causes wrong-config runs.
 
 # Production runtime — a standard HuggingFace transformer
 
@@ -218,8 +155,8 @@ RoPE transition and discards the KV cache at that boundary even when
 `rope_type` is `default`.
 
 The earlier production engine — an ONNX runtime with a windowed /
-circular KV cache, tier-1 expiry certification, speculative decode, and
-CUDA-graph capture — was **retired**. The HF model is now the sole
+circular KV cache (entries certified expired before eviction),
+speculative decode, and CUDA-graph capture — was **retired**. The HF model is now the sole
 renderer. The trade-offs were accepted deliberately:
 
 - **greedy only** (no speculative decode),
@@ -238,11 +175,13 @@ retained only for debug sessions and backend investigations
 (`tests/scene/test_flat_pixel_oracle.py`, `test_forward_ar_rollout.py`)
 are runtime-agnostic and stay in `make test`. The runtime-level gate is
 the full HF render scored against pydoom — `make run COMPARE=1` (it scores
-coverage / within-option color and writes the diff PNG), ~30 min on Modal,
-too heavy for per-commit pytest. Run manually at both `configs/e1m1.yaml`
-(320×200) and `configs/e1m1_lowres.yaml` (160×100).
+coverage / within-option color — the accepted-color-set metric, see
+`GLOSSARY.md` — and writes the diff PNG), ~42 min of decode on Modal
+(measured; see `FACTS.md`), too heavy for per-commit pytest. Run manually
+at both `configs/e1m1.yaml` (320×200) and `configs/e1m1_lowres.yaml`
+(160×100).
 
-**Known ceiling.** The unbounded cache is why ~30-min single frames fit
+**Known ceiling.** The unbounded cache is why ~42-min single frames fit
 a big GPU today; a much larger frame or a multi-frame / video rollout
 would reintroduce the need for a bounded cache. The earlier windowed
 cache has been removed, so that would be a from-scratch re-add, not a
@@ -662,3 +601,65 @@ takes it as explanation, and stops looking.
 
 `torchwright.debug.probe.probe_compiled` is the tool that converts
 form 2 into form 1.
+
+# Communication (session rules)
+
+## Use plain English; reintroduce terms on every use
+
+When explaining technical concepts, describe the mechanics in plain
+English rather than introducing named abstractions. Say "the input
+range crosses zero" not "straddling." Say "the slope of the line
+connecting the endpoints" not "the chord relaxation." If a term
+doesn't already exist in the codebase, prefer the description — the
+user will name it if it needs a name.
+
+When a named term genuinely earns its keep (you'll reference the
+concept many times and the name saves confusion), define it inline on
+every use until the user starts using it themselves — that's the
+signal they've adopted it. "The PL-drift (the gap between the
+piecewise-linear approximation and the exact function) compounds
+through..." not just "The PL-drift compounds through..."
+
+Never stack coined terms. "The chord relaxation of the straddling ReLU
+in the forward-mode LiRPA" is four layers of undefined vocabulary.
+Each layer of jargon you build on top of another layer compounds
+confusion. If you need multiple concepts, introduce them one at a time
+with plain-English definitions between them.
+
+Write every explanation so it can be understood cold — the reader does
+not have your earlier definitions loaded.
+
+## Admit uncertainty; don't fill gaps with plausible stories
+
+When you aren't sure whether two things are really the same, whether a
+mechanism works the way you think, or whether a number is right — say
+so. "I think these might be the same thing but I'm not sure" is always
+better than treating them as interchangeable and building an
+explanation on top. Check the code before building an explanation on
+any factual claim (a constant's value, what a function reads, how a
+data structure is used). Never construct a narrative that "sounds
+right" without tracing the actual code path — the most dangerous
+explanations are the ones that are internally consistent but don't
+match reality.
+
+## Flag complexity before building it
+
+Before introducing a new abstraction, indirection layer, or
+deferred-execution pattern, flag it to the user: what it is, why you
+think you need it, and what the simpler alternative would be. "I'm
+about to add a placeholder system because the basis needs to be fully
+known before computing bounds — the simpler alternative is making the
+basis mutable. The placeholder approach is more complex but avoids
+changing Basis. Which do you prefer?" Don't commit to elaborate
+machinery without explicit agreement.
+
+## State constraints alongside proposals
+
+When proposing a mechanism, state all its constraints and assumptions
+upfront. Don't wait for the user to discover them through follow-up
+questions. "This requires X and constrains Y" is always better than
+explaining X only when asked. If a design requires a fixed layout,
+say so. If it introduces a dependency, name it. If it limits future
+flexibility, flag it. Minimizing complexity in the explanation doesn't
+reduce the complexity of the mechanism — it just hides it, and the
+user will find it later in a more frustrating way.

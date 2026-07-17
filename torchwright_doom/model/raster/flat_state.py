@@ -1,12 +1,17 @@
 """Flat-pass publish state for the SegProjection ``flats`` subcontext.
 
+This module runs once at compile time: it builds part of the computation
+graph that torchwright lowers into the transformer's weights. Nothing here
+executes during inference — at render time, only the compiled transformer
+runs. Coined terms: see GLOSSARY.md.
+
 A *flat* is DOOM's floor/ceiling texture (as opposed to a wall texture); the
 flat pass fills floor/ceiling pixels. See ``GLOSSARY.md`` for the other coined
 terms used here: ``subcontext`` (the named ``SegProjection`` slice this state
 hangs off), ``span`` (a horizontal run of floor/ceiling pixels at one screen
 row), and ``visplane`` / ``marker``.
 
-Real-side port of the ``FlatPassState`` that owns two things:
+``FlatPassState`` owns two things:
 
 1. **R_MakeSpans span open/close** (``r_plane.c:338-359``). Iterating columns
    ``minx..maxx+1``, it compares the previous column's coverage (``t1/b1``)
@@ -23,11 +28,6 @@ Real-side port of the ``FlatPassState`` that owns two things:
 
 The flat-pass control flow that drives the tokens this state feeds is mapped in
 ``flat_pass_renderer.py``.
-
-Changes from the original: ``Vec`` -> ``Node``; ``...api`` -> ``.std``; the
-``.ops`` shims -> ``.render_ops``; module-level ``constant`` / ``floor``
-/ ``multiply`` / ``clamp`` nodes relocated inside ``publish()`` (no import-time
-graph nodes); plain-list ``linear`` weight matrices stay at module level.
 """
 
 from __future__ import annotations
@@ -96,9 +96,11 @@ _GE_Y_MATRIX = [
     for idx in range(SCREEN_HEIGHT + 2)
 ]
 _NEG1_LINEAR = [[-1.0]]
-# Flat texture-step focal: DOOM's centerxfrac = viewwidth/2 = COLUMN_COUNT/2 (80
-# in low-detail), the COLUMN-count half-width — NOT the lighting term just below,
-# which keeps the full SCREEN_WIDTH (the §3 "evil twin" pair).
+# Flat texture-step focal half-width, in COLUMNs: (COLUMN_COUNT - 1) / 2,
+# matching pydoom's _map_plane_setup (the column->ray mapping spans the FOV
+# across columns 0..COLUMN_COUNT-1, so the half-width is (COLUMN_COUNT-1)/2
+# rather than DOOM's centerxfrac = viewwidth/2). NOT the lighting term just
+# below, which keeps the full SCREEN_WIDTH.
 _FLAT_HALF_SCREEN_INV_X = [[1.0 / ((COLUMN_COUNT - 1) / 2.0)]]
 _FLAT_DIST_DIV16_LINEAR = [[1.0 / 16.0]]
 # DOOM: planezlight distance light terms (r_plane.c). Raw data; wrapped in
@@ -112,7 +114,8 @@ _FLAT_DIST_TERM_DATA = [
 # flat_span_x1 recovers, for a SPAN_ROW at row y, the column where the span
 # covering y opened (DOOM spanstart[y]). The recency pick reads a per-opening
 # SCREEN_HEIGHT-wide range-membership indicator at row y. That made the head's
-# d_qk = (plane 32 + vp 8 + rows 50) + 1 = 91, far over the d_head=32 floor.
+# d_qk = (plane 32 + vp 8 + rows SCREEN_HEIGHT) + 1 (91 fixture / 241 real),
+# far over the d_head=32 floor.
 #
 # A contiguous-range membership is NOT a one-hot equality, so it can't be radixed
 # into one bilinear dot (range membership over a (bucket, digit) split needs the
@@ -135,7 +138,7 @@ _FLAT_SPAN_CHUNK_SIZES = [
 ]
 
 
-# DOOM: R_MakeSpans span-opening iteration (r_plane.c:328-359). Builds a
+# DOOM: R_MakeSpans span-opening iteration (r_plane.c:338-359). Builds a
 # screen-height indicator vector marking rows in range [lo, hi].
 def _row_range_indicator(lo: Node, hi: Node) -> Node:
     ge_lo = linear(one_hot(add_const(lo, 1.0), SCREEN_HEIGHT + 2), _GE_Y_MATRIX)
@@ -616,8 +619,9 @@ class WeaponPassState:
        frame (a marker recovered exactly like ``flat_span_seen``), gating the
        shared cursor/pixel branches onto the weapon arm. Structurally false
        before the weapon phase (and forever when the HUD is off, since the
-       splice never emits ``DRAW_PSPRITES_BEGIN``), so every fork degenerates to
-       the existing wall/flat arm.
+       HUD-gated phase splice in ``flat_pass_renderer.py`` never emits
+       ``DRAW_PSPRITES_BEGIN``), so every fork degenerates to the existing
+       wall/flat arm.
     2. The weapon cursor recoveries. ``inp.cursor_x`` / ``inp.cursor_y`` are only
        populated on their own ``SET_CURSOR_*`` rows; on a ``PIXEL`` row both are
        stale/zero. So the column (the most-recent weapon ``SET_CURSOR_X``) and
@@ -708,8 +712,8 @@ class HudPassState:
 
     1. ``hud_seen`` — ``+1`` once ``ST_Drawer`` has fired this frame, gating the
        shared cursor/pixel branches onto the HUD arm. False before the phase
-       (and forever HUD-off, since the splice never emits ``HUD_BEGIN``), so
-       every fork degenerates to the weapon/wall/flat arm.
+       (and forever HUD-off, since the HUD-gated splice never emits
+       ``HUD_BEGIN``), so every fork degenerates to the weapon/wall/flat arm.
     2. ``hud_item`` — the current draw-list index (the most-recent ``HUD_ITEM``),
        which selects the patch id + screen origin/size from the baked draw-list
        tables. This is the only piece the weapon lacks: the weapon is one fixed

@@ -1,13 +1,17 @@
-"""Read-only mixed branch owner for SCREEN_RANGE transitions (Phase H).
+"""Read-only mixed branch owner for SCREEN_RANGE transitions (Phase H —
+port-milestone tag; GLOSSARY: Phase letters).
+
+This module runs once at compile time: it builds part of the computation
+graph that torchwright lowers into the transformer's weights. Nothing here
+executes during inference — at render time, only the compiled transformer
+runs. Coined terms: see GLOSSARY.md.
 
 In the per-token ``forward()`` flow this is the
 ``render_main.build_branch_outputs`` owner for the ``screen_range`` branch (the
-host-visible clip/visplane merge token): that builder constructs a
+clip/visplane merge token — the merge is computed in-graph; "host-visible"
+means only that the token appears in the output stream): that builder constructs a
 ``RangeDispatcher`` and wires its ``after_screen_range`` head to the
 ``"screen_range"`` dispatch branch.
-
-``type_switch`` exists real-side (``std``), so the two-arm wall/visplane merge
-ports directly.
 """
 
 from __future__ import annotations

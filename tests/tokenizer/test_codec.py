@@ -1,4 +1,4 @@
-"""Codec parity gate (plan_cleanup_v2 Workstream 3).
+"""Codec parity gate.
 
 ``tokenizer/codec.py`` (the project-side contract) and the portable
 prettifier kernel's embedded copy must agree on encode/decode over the frozen

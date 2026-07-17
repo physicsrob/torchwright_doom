@@ -1,6 +1,7 @@
 """Render-job orchestration: the end-to-end ``run_config`` driver.
 
-The conductor may see everything; nothing sees the conductor. Its phases:
+Top of the import DAG: this module may import anything, and only the
+dispatchers (``cli.py``, the Modal entrypoints) import it. Its phases:
 
     load config -> load WAD scene and pose -> construct prompt row ids
     -> rows to canonical prompt text (tokenizer/codec + bundle vocab)
@@ -15,7 +16,12 @@ Prompt text, ``output.ids.json``, and ``output.txt`` are the retained
 artifacts; everything else is reproducible downstream.
 
 Graph-reaching imports stay inside ``run_config`` after
-``apply_screen_env`` (the import-time screen-environment rule).
+``apply_screen_env`` (``config.apply_screen_env`` must export the screen
+dims as env vars before any graph module is imported, because the graph
+modules read them at import time).
+
+"Row" throughout = a tokenizer id, the vocab table's row index
+(GLOSSARY: row).
 """
 
 from __future__ import annotations
@@ -108,8 +114,12 @@ def run_config(
         raise ValueError("validated bundle does not match the requested render config")
 
     # Prompt construction is Doom-specific and happens before inference.  The
-    # bundle's frozen canonical words are authoritative, and the exact text is
-    # retained as a run artifact.
+    # input-side dumb-host boundary: the map subset is the config's fixed
+    # region rectangle (pose-independent, declared once — never derived from
+    # the camera), and the prompt is raw map facts plus the pose; contents
+    # specified in PROTOCOL.md, built in prompt/build.py.  The bundle's frozen
+    # canonical words are authoritative, and the exact text is retained as a
+    # run artifact.
     vocab = json.loads((cache_dir / "doom_vocab.json").read_text(encoding="utf-8"))
     words = list(vocab["words"])
     prompt_text = raw_text_from_rows(words, prefill_ids) + "\n"
@@ -139,10 +149,10 @@ def run_config(
     # DynamicCache grows by a per-layer torch.cat each step, whose transient
     # second copy needs one layer's full K/V (~1 GiB at 320x200 end-of-frame)
     # as a CONTIGUOUS block.  A full-resolution frame fills the render GPU to
-    # within a few GiB, and ~30 min of grow-free cycles fragments what's
-    # left — the 2026-07-14 production render died at ~61k/61,440 tokens with
-    # 5.2 GiB stranded in reserved-but-unallocated segments.  Expandable
-    # segments lets those segments grow in place instead.
+    # within a few GiB, and ~40 min of grow-free cycles fragments what's
+    # left — observed as an OOM near the generation cap on a full-resolution
+    # render, with 5.2 GiB stranded in reserved-but-unallocated segments.
+    # Expandable segments lets those segments grow in place instead.
     env = dict(os.environ)
     env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     subprocess.run(command, check=True, env=env)
@@ -165,7 +175,8 @@ def run_config(
     if termination == "cap" and len(emitted_rows) != max_new_tokens:
         raise ValueError("portable inference claimed cap at the wrong row count")
     # Protocol validation goes through the contract (the raw-word codec over
-    # the bundle's frozen words), not the prettifier.
+    # the bundle's frozen words), not the display formatter
+    # (tools/pretty_text.py).
     text_rows = rows_from_raw_text(words, raw_text_path.read_text(encoding="utf-8"))
     if text_rows != emitted_rows:
         raise ValueError("portable output.txt differs from output.ids.json")
@@ -185,6 +196,9 @@ def run_config(
         py_scene = pydoom_scene_for(render_scene, pose)
         py_pose = py_scene.test_poses[0]
         ref = compare_mod.reference_pixels(py_scene, py_pose)
+        # An "option set" is a pixel's accepted colors: the reference color
+        # plus texture-neighborhood and lighting-tolerance alternates
+        # (interpret/compare.py; "within-option color" in GLOSSARY.md).
         options = compare_mod.reference_options(py_scene, py_pose)
         report = compare_mod.compare(gen, ref, options)
         if compare_images:

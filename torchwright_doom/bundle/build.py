@@ -4,8 +4,9 @@ Manifest schema, hashing, and completeness validation live in ``manifest``;
 the copied bundle layout in ``layout``. This module owns ``compile_config``
 (cache probe + Modal-handed payloads), the stock Phi-3 compilation via
 ``model_graph.build_graph`` and torchwright, model-config stamping, staged
-model/tokenizer smoke validation (through the shipped portable kernel), and
-the rollback-protected two-rename publication.
+model/tokenizer smoke validation (through the shipped pure-stdlib formatter
+``portable/pretty_text.py``), and the rollback-protected two-rename
+publication.
 """
 
 from __future__ import annotations
@@ -71,6 +72,11 @@ def compile_config(
         verbose=verbose_compile,
     )
     provenance = report.manifest["schedule"]
+    # Schedule-provenance fields, defined by torchwright's ScheduleProvenance
+    # (torchwright/compiler/token_model.py): selected_origin = where the
+    # winning schedule came from (fresh solve vs. cache), delivery = how this
+    # compile obtained it, selected_objective = the selected schedule's
+    # solver objective value.
     print(
         f"[compile] {report.n_layers} layers "
         f"(selected={provenance.get('selected_origin')}, "
@@ -109,7 +115,7 @@ def _outer_bundle_transaction(destination: str | Path) -> Iterator[Path]:
     failed second rename can restore the previous destination. The two-rename
     replacement is NOT reader-visible atomic — there is a short gap after the
     old destination moves aside. Production assumes one publisher per cache
-    key; concurrent-publisher serialization is a recorded follow-up.
+    key; publication is not serialized against concurrent publishers.
     """
     final = Path(destination).absolute()
     final.parent.mkdir(parents=True, exist_ok=True)
@@ -176,9 +182,9 @@ def _validate_complete_staged_bundle(
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer, DynamicCache
 
-    # Decision 8: staged validation smoke-tests the exact shipped prettifier
-    # (the portable kernel), not the project wrapper — publication has no
-    # edge into interpret/.
+    # Staged validation smoke-tests the exact shipped pure-stdlib formatter
+    # (portable/pretty_text.py), not the project wrapper — publication has
+    # no edge into interpret/.
     from ..portable.pretty_text import DoomTextFormatter
 
     manifest = validate_bundle_manifest(bundle, allow_incomplete=True)
@@ -245,9 +251,10 @@ def _validate_complete_staged_bundle(
     expected_partial = (config.model.d_rot or config.model.d_head) / config.model.d_head
     if partial != expected_partial:
         raise ValueError("stock Phi-3 partial-RoPE setting differs from the Doom graph")
-    # token.v6 tie: one serialized token table serves lookup and readout —
-    # the config declares the tie, the loaded parameters share storage, and
-    # the index carries no separate lm_head tensor.
+    # token.v6 tie (the tied token contract; see GLOSSARY.md: token.v6): one
+    # serialized token table serves lookup and readout — the config declares
+    # the tie, the loaded parameters share storage, and the index carries no
+    # separate lm_head tensor.
     if model.config.tie_word_embeddings is not True:
         raise ValueError("Doom Phi-3 bundle must set tie_word_embeddings (token.v6)")
     if model.lm_head.weight.data_ptr() != model.model.embed_tokens.weight.data_ptr():
@@ -354,6 +361,12 @@ def compile_phi3_bundle(
             optimize=config.model.optimize,
             d_hidden=config.model.d_hidden,
             trim_heads=config.model.trim_heads,
+            # RMSNorm pinned-constant exponent: the norm is kept a bit-exact
+            # identity by reserved residual columns holding large power-of-two
+            # constants. 63 is the largest fp32-feasible exponent; its
+            # data-energy budget (~2^102) clears the doom graph's residual
+            # energy bound (~2^99.6, fixed-point coordinates) with ~5x margin,
+            # where torchwright's default was tuned on far smaller graphs.
             rms_norm_const_exp=63,
             architecture=CompileProfile.PHI3,
             bias=False,

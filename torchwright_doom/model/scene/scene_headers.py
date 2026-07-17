@@ -1,5 +1,10 @@
 """Structural header context for scene indexing.
 
+This module runs once at compile time: it builds part of the computation graph
+that torchwright lowers into the transformer's weights. Nothing here executes
+during inference — at render time, only the compiled transformer runs. Coined
+terms: see GLOSSARY.md.
+
 The prefill stream groups facts by the most recent structural header. A `NODE`
 header provides the context for following node fields, an `SS` header provides
 the context for following subsector facts, and a `SEG` header provides the
@@ -12,12 +17,10 @@ defs, from ``scene_index``):
 - `subsector`: current id is the most recent `SS(s=...)`.
 - `seg`: current id is the most recent `SEG(i=...)`.
 
-Changes from the original: the import block (``Vec`` -> ``Node``; ``Past`` ->
-``GraphPast``; std/constants from the real-side shim) and ``Vec.shape`` ->
-``len(node)`` in the ``split`` sizes. ``HeaderContext.publish`` packs
-``concat(id_value, key_value)`` into the residual; ``pick_most_recent`` recovers
-that packed state, which ``split`` recovers as ``(current_id, current_key)`` —
-so the context exposes both the scalar id and the lifted-equality key.
+``HeaderContext.publish`` packs ``concat(id_value, key_value)`` into the
+residual; ``pick_most_recent`` recovers that packed state, which ``split``
+recovers as ``(current_id, current_key)`` — so the context exposes both the
+scalar id and the lifted-equality key.
 """
 
 from __future__ import annotations

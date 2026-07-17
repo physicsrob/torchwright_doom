@@ -1,6 +1,9 @@
-"""Derisking probe for the smooth-recency-rank plan (smooth_recency_rank.md).
+"""Derisking probe for the smoothed global-position recency rank — part of
+the n_heads=32 regression session record (working docs removed from the tree
+in f7ececf; findings traced in 9b5c414; see scripts/README.md).
 
-Builds a MINIMAL graph containing exactly the machinery the plan touches —
+Builds a MINIMAL graph containing exactly the machinery the smoothing fix
+touches —
 the swiglu ``global_position_from_bos`` recovery (raw), the exact zero-Q/K
 causal mean over the same raw node (``attend_causal_mean``), the production
 ``smoothed=True`` op path as an independent end-to-end instance, and a
@@ -12,9 +15,11 @@ GPU kernels:
              adjacent steps, per position bucket (envelope shape receipt);
   [realize]  the same graph compiled at a second residual width — the
              cross-realization noise family the n_heads=32 regression
-             exposed (FINDINGS finding 9);
+             exposed (recompiling at a different width shifts the noise;
+             session record in 9b5c414);
   [rerun]    same artifact forward twice — run-to-run GPU nondeterminism
-             (FINDINGS open question 6, tiny-scale);
+             (left as an open question by the regression session;
+             tiny-scale here);
   [meanhead] the compiled uniform mean vs a float64 host mean of the SAME
              compiled raw — the mean head's OWN fp32 accumulation noise,
              cleanly separated from input noise (Version A's crux);

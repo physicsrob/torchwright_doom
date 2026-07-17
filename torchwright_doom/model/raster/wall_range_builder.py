@@ -1,5 +1,10 @@
 """Read-only branch owner for R_StoreWallRange / drawseg setup.
 
+This module runs once at compile time: it builds part of the computation
+graph that torchwright lowers into the transformer's weights. Nothing here
+executes during inference — at render time, only the compiled transformer
+runs. Coined terms: see GLOSSARY.md.
+
 Branch builders follow the ``after_<token>`` convention (see GLOSSARY.md):
 ``after_X()`` builds the emit head for the token the protocol emits after an
 ``X`` token, and ``render_main.build_branch_outputs`` selects exactly one per
@@ -18,9 +23,7 @@ the ``is_value_after_wall_column`` arm of ``after_drawseg_value`` emits a wall
 column's ``SCREEN_Y_VALUE`` (``WallColumnRenderer``); and the
 ``is_value_after_set_cursor_y`` arm emits a ``PIXEL`` (``PixelDispatcher``).
 
-Changes from the original: ``Vec`` -> ``Node``; ``make_token`` ->
-``make_token_head`` (the dispatch folds over emit heads); module-level
-``constant`` sentinels move inside the methods (import-time node rule).
+Ported from pydoom's wall-range setup.
 """
 
 from __future__ import annotations
@@ -90,7 +93,7 @@ from ..vocab import (
 if TYPE_CHECKING:
     from .seg_projection import SegProjection
 
-# Silhouette flags (reference.py: SIL_BOTTOM=1, SIL_TOP=2, SIL_BOTH=3).
+# Silhouette flags (pydoom/renderer.py: SIL_BOTTOM=1, SIL_TOP=2, SIL_BOTH=3).
 _SIL_BOTH_VALUE = 3.0
 _SIL_HEIGHT_MAX = 256.0
 _SIL_HEIGHT_MIN = -256.0

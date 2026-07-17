@@ -12,6 +12,8 @@ by the stock tokenizer and the standalone bundle tools:
   pre-baked: the **carrier-fold rule** data (each marker's value-range bounds,
   the angle markers, the back-height sentinel, the carrier id ranges, the x/y
   coordinate-marker sets, ``ANGLE_BAM``).
+* ``doom_palette.json`` — the 256-entry PLAYPAL RGB table the frame decoder
+  (``txt_to_png.py``) paints with.
 
 No Transformers auto class points at local Python code. The files are consumed
 explicitly by ``DoomFormatter`` and ``txt_to_png.py`` after model inference.
@@ -120,9 +122,11 @@ def build_tables() -> dict:
 def build_vocab_blob(wall_names: Sequence[str], flat_names: Sequence[str]) -> dict:
     """``doom_vocab.json`` contents for both tokenizer and formatter identity.
 
-    ``vocab`` remains during the migration for the retired custom tokenizer.
-    New consumers use the ordered ``words`` / ``labels`` arrays and the explicit
-    row records, whose positions are the model ids.
+    In-repo readers (``pretty_text.py``, ``txt_to_png.py``) use the ordered
+    ``words`` / ``labels`` arrays and the explicit ``rows`` records, whose
+    positions are the model ids. The inverted ``vocab`` / ``canonical_vocab``
+    maps have no in-repo reader; they ship as ready-made ``{label: id}`` /
+    ``{word: id}`` lookups for external consumers of the JSON.
     """
     labels = [
         token_label(ttype, values, wall_names=wall_names, flat_names=flat_names)

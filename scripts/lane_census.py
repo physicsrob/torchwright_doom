@@ -2,7 +2,7 @@
 
 Pure graph construction (no compile, no weights) — the same walk as
 ``scripts/widest_nodes.py``, but sized the way compute is actually paid
-post-cutover: an FFN node's lane count is its ``gate_proj`` row count
+under the gated-MLP compile: an FFN node's lane count is its ``gate_proj`` row count
 (the torchwright ``b12bac3`` pattern; ``d_output`` measures residual
 width, not lanes). Buckets by annotation subtree, by node name, and by
 op-family name pattern, plus per-site cross-tabs for the floor / table

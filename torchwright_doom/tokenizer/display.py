@@ -7,11 +7,16 @@ reads only that one row, never a neighbour (the one cross-token rule, folding a
 ``VALUE`` carrier into its marker, lives in :mod:`.surface`, the grammar). Two
 callers share it:
 
-* :func:`embedding._row_label` — the HuggingFace ``WordLevel`` vocab labels,
-  called with ``wall_names=flat_names=None`` so the vocab stays **config-free**
-  (raw ids, asset-independent fingerprint), and
+* :func:`embedding._row_label` — the ``Embedding`` graph node's per-row debug
+  vocab, called with ``wall_names=flat_names=None`` so those labels stay
+  **config-free** (raw ids, asset-independent), and
 * the grammar renderer (:mod:`.surface`) — called *with* the asset name tables so
   the blog figure shows ``STARTAN3`` instead of a raw id.
+
+The published bundle's HuggingFace ``WordLevel`` words are the sibling
+:func:`token_word` spellings, built **asset-aware** by
+``standard.canonical_words`` — the shipped ``tokenizer.json`` spells WAD
+names, not raw ids.
 
 Every transform here is a **bijection** (a 1:1 relabel of one row), so the
 re-encoded token-id stream is byte-identical whether the label is the raw
@@ -441,8 +446,10 @@ def token_label(
     flat_names: Sequence[str] | None = None,
 ) -> str:
     """The single context-free label for one token id: ``TYPE(arg, ...)`` (bare
-    ``TYPE`` when it has no args). The shared source for the HF vocab
-    (``embedding._row_label``, called config-free) and the grammar figure."""
+    ``TYPE`` when it has no args). The shared source for the ``Embedding``
+    node's debug vocab (``embedding._row_label``, called config-free) and the
+    grammar figure; the published HF tokenizer's words come from
+    :func:`token_word` instead."""
     name, args = token_fields(
         ttype, values, wall_names=wall_names, flat_names=flat_names
     )

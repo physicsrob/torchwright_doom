@@ -1,16 +1,25 @@
 """Build a prompt token sequence from a :class:`MapData` + :class:`GameState`.
 
+Host-side code, run once before generation. The input-side dumb-host
+boundary (see README): the prompt may bake any **view-independent**
+static-scene fact — raw map records plus the static per-seg
+classifications below (``_is_empty_line``, ``_is_closed``, static wall
+light: DOOM's ``R_AddLine``-time facts about the *map*, not the *view*).
+All view-dependent work — visibility, ordering, projection, occlusion —
+happens inside the transformer. This is input encoding, like loading a
+level file.
+
 The prompt is what the transformer sees: a flat sequence of typed tokens
 encoding the scene's geometry and the player's per-frame state. Section
-order mirrors the original ``get_prefill``: player state -> per-node block
--> per-subsector + per-seg block -> visplane defs + per-subsector plane
-refs -> ``BEGIN`` marker.
+order is the prefill spec in ``PROTOCOL.md``: player state -> per-node
+block -> per-subsector + per-seg block -> visplane defs + per-subsector
+plane refs -> ``BEGIN`` marker.
 
 Every continuous float payload is emitted through :func:`prefill_value`,
 which range-encodes it into the ``VALUE`` carrier's ``[-1, 1]`` space
-(the per-site ``ValueRange`` mirrors ``get_prefill``). Flats are carried
-by ``PLANE_DEF.flat_id`` (their pixels are weight-side); there are no
-standalone flat tokens.
+(range-encode: see ``GLOSSARY.md``). Flats are carried by
+``PLANE_DEF.flat_id`` (their pixels live in lookup tables compiled into
+the weights, not in tokens); there are no standalone flat tokens.
 """
 
 from __future__ import annotations
@@ -90,7 +99,8 @@ def _marked(tokens: list[Token], marker: TokenType, value: float) -> None:
     """Append a marker token then its ``VALUE`` carrier — the prefill's basic
     marker->value pair (see GLOSSARY.md 'marker' / 'carrier'). The marker's
     range is looked up in the shared ``marker_ranges.MARKER_RANGE`` table (the
-    single source shared with the drafter and the tokenizer surface), so the
+    single source shared with the drafter — pydoom's test-only token-order
+    oracle, see GLOSSARY.md — and the tokenizer surface), so the
     range can't drift between the code that *writes* the stream and the code
     that *reads* it."""
     tokens.append(Token(marker))
@@ -195,9 +205,10 @@ def build_prompt(
     name_to_id = {"-": 0, "": 0, **asset_config.wall_id_by_name}
 
     # Position 0: a true beginning-of-sequence anchor. Inert (dispatches to
-    # NO_OP); every downstream read is content-addressed or uses relative
-    # offsets, so this +1 shift of the prompt is harmless. BEGIN still closes
-    # the prompt below as the prompt->AR boundary.
+    # NO_OP); the +1 shift of the prompt is harmless because downstream reads
+    # are content-addressed or relative — see vocab.py "Section 5: BOS" for
+    # why BOS splices onto VOCAB_TYPES without shifting AR type codes. BEGIN
+    # still closes the prompt below as the prompt->AR boundary.
     tokens.append(Token(BOS))
 
     _marked(tokens, PLAYER_X_MARK, state.x)
@@ -220,7 +231,8 @@ def build_prompt(
             Token(NODE_BACK_CHILD, {"child_u": _child_unified(node.back_child)})
         )
         # Front then back bbox edges, each marker paired with its edge value
-        # (all ValueRange.R0). Order is load-bearing — it mirrors get_prefill.
+        # (all ValueRange.R0). Order is load-bearing — it is the PROTOCOL.md
+        # prefill order the graph's readers assume.
         ft, fb, fl, fr = node.front_bbox
         bt, bb, bl, br = node.back_bbox
         for bbox_marker, edge in (

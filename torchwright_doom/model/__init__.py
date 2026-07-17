@@ -12,6 +12,9 @@ this package.
 Layout: flat files at this level are the shared substrate — the
 "machine" any program would need to be expressed as a transformer.
 Directories are the stages of the DOOM program written in it.
+Coined terms throughout this map (publish, owner, channel, carrier,
+recency, ...) are defined in ``../GLOSSARY.md``; the per-frame token
+sequence is ``../PROTOCOL.md``.
 
 Machine kernel (flat, this level):
 
@@ -20,22 +23,26 @@ Machine kernel (flat, this level):
   / ``extract`` these form one import cycle and must co-reside)
 - ``embedding`` / ``emit`` / ``extract`` — token <-> residual
   encode/decode
-- ``std`` — the helper-op shim lowering ported-renderer helpers onto
-  torchwright ops
+- ``std`` — the helper-op shim lowering the pydoom-ported renderer's
+  helpers onto torchwright ops
 - ``past`` / ``attention_handles`` — reading previously-emitted
   tokens (past channels, keyed/presence/recency lookups)
 - ``render_ops`` — shared forward math (atan2, distance, clamps),
   used by every write-side stage
-- ``constants`` — env-driven screen sizing; ``render_constants`` —
-  attention gains and protocol sentinels (disjoint concerns despite
-  the sibling names)
-- ``doom_lighting`` / ``asset_config`` — the data floor under the
-  token contract (``vocab`` and ``value_ranges`` read them, so they
-  cannot live in ``assets/``)
+- ``constants`` — env-driven screen sizing (fixed at compile time;
+  each config compiles its own weights); ``render_constants`` —
+  attention gains (softmax-sharpness constants) and protocol
+  sentinels (reserved out-of-range marker values) — disjoint concerns
+  despite the sibling names
+- ``doom_lighting`` / ``asset_config`` — the data floor (GLOSSARY)
+  under the token contract (``vocab`` and ``value_ranges`` read them,
+  so they cannot live in ``assets/``)
 - ``token_match`` — the shared token-type predicate
-- ``render_main`` — the assembler: ``forward()`` builds the read-side
-  views, publishes protocol owners, and dispatches each branch's
-  next-token.  The front door for reading the model.
+- ``render_main`` — the assembler: ``forward()`` is called once at
+  graph build; it builds the read-side views, has each protocol owner
+  publish its channels, and dispatches each branch's next-token. The
+  compiled circuit then runs at every autoregressive step. The front
+  door for reading the model.
 
 Program stages (directories):
 
@@ -56,7 +63,6 @@ Import layering (enforced by tests/architecture/test_runtime_policy.py):
 imports flow kernel -> {protocol, assets} -> scene -> traversal ->
 raster; ``render_main`` is the only kernel module that imports from
 the directories.  If this package ever needs further nesting, nest
-exactly along these directory lines — the partition was measured
-against the import graph (2026-07); every alternative cut (segs vs
-pixels, read vs write) crosses real dependencies.
+exactly along these directory lines — every alternative cut (segs vs
+pixels, read vs write) crosses real import dependencies.
 """

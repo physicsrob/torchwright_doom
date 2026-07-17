@@ -14,7 +14,7 @@
 # tiebreak (RECENCY_GAIN, render_constants.py).  Rendered by the native
 # HuggingFace model (the production runtime) with an unbounded KV cache.
 # Certified against the pydoom reference at 320x200: 100% pixel coverage,
-# ~99.99% within-option color (96.5% exact), ~53,748-token rollout.
+# ~99.99% within-option color (96.5% exact), 53,747-token rollout (FACTS.md).
 wad: doom1.wad
 model: {d: 8192, d_head: 128, d_rot: 64, n_heads: 32, scale: 1, detail: low, hud: true, d_hidden: 16384, optimize: 3}
 region: {x1: 627.2, y1: -3760.0, x2: 1395.2, y2: -2800.0}
@@ -28,7 +28,7 @@ textures:
 # enter the compile-cache key (identity.compile_payload_domain, "bundle"
 # section). Changing them recompiles/republishes the bundle.
 run:
-  # Covers the full 320x200 low-detail frame (~53,748 tokens) with headroom;
+  # Covers the full 320x200 low-detail frame (53,747 tokens, FACTS.md) with headroom;
   # the cap sizes the RoPE global-position recovery range (the BOS-weight PWL
   # in global_position_from_bos) and bounds content dominance for recency
   # (match_gain > RECENCY_GAIN * max positions); the model's 65536-position

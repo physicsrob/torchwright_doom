@@ -4,7 +4,7 @@
 Depth and width are properties of the *graph*, not the scene: the compiler
 schedules the per-position graph topology, so the layer count and the residual
 peak are fixed regardless of which fixture flows through. This tool answers
-"what drives the 77 layers / the residual width, and how much is each
+"what drives the layer count / the residual width, and how much is each
 subsystem (E8 type-coding, the digit-quad VALUE emit, attention picks, the
 geometry PWLs, the dispatch selects)?".
 
@@ -204,9 +204,8 @@ def _apply_fusion(output_node, verbose=False, eject_budget=None):
     """Apply fusion; FUSE_FILTER selects all|narrow|wide|smallout|bigout.
 
     ``all`` is the production always-on pre-pass (``fuse_consecutive_linears``,
-    now FFN-aware; the relu-era ``safe``/``budget`` ejection gates are gone
-    with the relu — ``eject_budget`` is accepted and ignored for call-site
-    compatibility).
+    FFN-aware; it has no ``safe``/``budget`` ejection gates —
+    ``eject_budget`` is accepted and ignored for call-site compatibility).
     """
     filt = os.environ.get("FUSE_FILTER", "all")
     if filt == "all":
@@ -230,8 +229,7 @@ def compile_capture(
     ``run_optimize_graph`` applies ``optimize_graph`` (``fuse_consecutive_linears``)
     in place BEFORE compiling. The ONNX diagnostic pipeline
     (``compile_onnx_debug_path``) applies this pre-pass ALWAYS-ON (656 fused
-    pairs on the production graph — see the swiglu cutover record, find #4,
-    and ``diagnostics/onnx.py``), so
+    pairs measured on the production graph — see ``diagnostics/onnx.py``), so
     backend-comparable depth/width numbers need ``OPT_GRAPH=1``;
     without it you are measuring the unfused topology.
     ``d_hidden`` caps MLP weight memory (must be >= the widest single-layer MLP op).

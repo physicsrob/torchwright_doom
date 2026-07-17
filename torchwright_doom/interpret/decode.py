@@ -8,8 +8,9 @@ overwriting blit (last-write-wins, DOOM's painter order). All rendering
 decisions were made inside the transformer.
 
 Generalizes ``tests/scene/test_flat_pixel_oracle.py::_decode_pixel_xy`` (+ its
-``row - pixel_start`` color step) to consume ``W_EMBED`` row ids rather than
-``Token``s. Walls advance the cursor in Y (the default); flats advance
+``row - pixel_start`` color step) to consume ``W_EMBED`` row ids (a row id =
+the tokenizer id, the embedding table's row index; GLOSSARY: row, W_EMBED)
+rather than ``Token``s. Walls advance the cursor in Y (the default); flats advance
 in X after a ``setCursorDirectionX``.
 """
 
@@ -30,17 +31,15 @@ Rgb = tuple[int, int, int]
 
 
 def _walk_pixels(rows):
-    """The cursor state machine shared by both decoders: yield
+    """The cursor state machine of the render decode: yield
     ``(stream_index, row, (x, y), w)`` for every ``pixel`` token with an
     established cursor, advancing per the direction marks.  ``(x, y)`` is the
     base cursor; the host paints the ``w`` cells ``(x + k, y)`` for ``k`` in
-    ``0..w-1``.  Pixels emitted before a cursor is established are dropped
-    (matches the original host decode).  Cursor bookkeeping only — the
-    dumb-host contract.
-
-    Shared so the render decode and the per-position variant
-    (:func:`decode_xy_by_position`) can never disagree about where a
-    pixel landed.
+    ``0..w-1``.  Pixels emitted before a cursor is established are dropped —
+    a healthy stream always sets the cursor before its first pixel (see
+    PROTOCOL.md).  Cursor bookkeeping only — the dumb-host contract: the
+    model emits every cursor set, direction mark, and width; the host just
+    applies them.
     """
     cursor_dx, cursor_dy = 0, 1  # default: walls advance in Y
     cursor_x: int | None = None
@@ -80,9 +79,9 @@ def decode_rows_to_pixels(
     Each ``pixel`` token paints ``w`` adjacent cells in +X (low-detail blits two).
     Last write at each ``(x, y)`` wins — a plain overwrite, DOOM's painter order:
     the 3D scene is emitted first, then the weapon on top of it (and the bar into
-    its own rows). The 3D pass itself writes each view pixel exactly once (column
-    clipping), so this is identical to the old front-to-back rule there; the
-    overwrite only matters where the weapon covers the scene.
+    its own rows). The 3D pass itself writes each view pixel exactly once
+    (column clipping inside the model), so the overwrite only matters where
+    the weapon covers the scene.
     """
     buf: dict[tuple[int, int], Rgb] = {}
     for _, row, (x, y), w in _walk_pixels(rows):
@@ -98,17 +97,8 @@ def pixel_color_index(row: int) -> int:
     Color shares the row with the width slot, enumerated as
     ``row = _PIXEL_START + color * _PIXEL_W_LEVELS + w_idx`` (color is the
     higher-order slot), so the color is the row offset floored by the number
-    of width levels.
+    of width levels. This is pure detokenization — arithmetic-form-identical
+    to reading ``values["color"]`` from ``TOKEN_VOCAB.row_to_token[row]``,
+    the same table ``_walk_pixels`` already consults for ``w``.
     """
     return int((row - _PIXEL_START) // _PIXEL_W_LEVELS)
-
-
-def decode_xy_by_position(rows) -> dict[int, tuple[int, int]]:
-    """Map each ``pixel`` row's stream position -> its ``(x, y)`` screen cursor.
-
-    Same cursor walk as :func:`decode_rows_to_pixels` (literally — both
-    consume :func:`_walk_pixels`), keyed by stream position for analyses
-    that check an emitted pixel against the option set at the reference
-    cursor position (the retired teacher-forced diagnostic consumed this).
-    """
-    return {i: xy for i, _, xy, _ in _walk_pixels(rows)}

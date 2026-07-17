@@ -1,13 +1,21 @@
 """Autoregressive renderer dispatch: the per-token forward pass.
 
+**Execution model.** This module runs once at compile time: it builds the
+top of the computation graph that torchwright lowers into the
+transformer's weights (every function here returns a symbolic
+``torchwright.graph.Node``). Nothing here executes during inference — at
+render time, only the compiled transformer runs. Coined terms (emit head,
+carrier, digit-quad, token.v6, …): see ``GLOSSARY.md``.
+
 ``forward()`` builds the read-side ``SceneIndex`` + ``ProtocolTokenView``,
 publishes the runtime protocol owners (BSP traversal, seg projection, and the
 payload router), builds each branch's next-token, then dispatches by the
-current input token's type.
+current input token's type. Ported from the pydoom reference renderer's
+per-token dispatch (``pydoom/``, the test oracle).
 
-**The output head (the fan-out fix).** The original dispatch sums one type-gated
-*full* ``d_embed`` row per transition; at ~64 transitions that needs a huge
-residual and will not compile. The port replaces it (see ``dispatch_next_token``):
+**The output head.** A naive dispatch would sum one type-gated *full*
+``d_embed`` row per transition; at ~64 transitions that needs a huge
+residual and will not compile. Instead (see ``dispatch_next_token``):
 branches are built as emit *heads* (``head_width()`` — the constant derived tail
 dropped, ≈ 19 cols), transitions that select the same head are grouped with
 their predicates OR-ed, the distinct gated heads are summed (see
@@ -17,11 +25,6 @@ columns (one schedulable writer — the token.v6 tied compile rejects a
 ``Concatenate`` output). The full row is
 byte-identical to a per-transition ``make_token`` row, so the teacher-forced
 oracle is unchanged, and the dispatch width barely grows with the token count.
-
-Changes from the original: ``Vec`` -> ``Node``; ``Past`` -> ``GraphPast``
-/ ``PastHandleScope``; ``make_token`` -> ``make_token_head`` + a shared derived
-tail; ``ForwardOutput`` -> the next-token ``Node`` returned directly. The
-original's prefill-replay ``select`` is not ported (see ``dispatch_next_token``).
 """
 
 from __future__ import annotations
@@ -149,7 +152,7 @@ def dispatch_next_token(
 ) -> Node:
     """Select the one branch's next-token that matches the current input token.
 
-    This is the transformer's output head. The original's ``type_switch`` sums
+    This is the transformer's output head. A naive ``type_switch`` would sum
     one type-gated *full* ``d_embed`` row **per transition** — at ~64
     transitions that needs a huge residual to compile. Two changes shrink it to
     a handful of narrow columns while staying a single flat sum (no deep
@@ -166,30 +169,25 @@ def dispatch_next_token(
        transition's predicate is read off ``inp``; transitions that select the
        *same* head node (all the deferred branches share one ``no_op`` head) are
        grouped and their predicates OR-ed, so the sum has one term per distinct
-       next-token head (~8 this phase) rather than 64. Because exactly one
+       next-token head rather than one per transition. Because exactly one
        transition predicate is +1, exactly one grouped predicate is +1.
 
-    **Not ported:** the original also wraps dispatch in a prefill-replay
-    ``select`` so prefill rows re-emit their input verbatim (a render-trace
-    nicety; those emissions are discarded and ``BEGIN`` — the AR seed — is not
-    replayed). That replay is **deferred** (which is why this function takes no
-    ``input_vec``): it would select the full input row, whose W_EMBED rows span
-    a ~100x dynamic range, and a single input ``value_type`` can't satisfy both
-    the read-side interval arithmetic and the whole-row replay guard. The AR
-    rollout and the oracle are unaffected (prefill emissions are discarded; the
-    AR seed comes from the ``begin`` branch).
+    **Prefill rows** dispatch like any other position and their emissions are
+    discarded by the host (the prompt is replayed verbatim; the AR seed comes
+    from the ``begin`` branch). A replay variant that re-emits each prefill
+    input verbatim was rejected — it would select the full input row, whose
+    ``W_EMBED`` rows (GLOSSARY) span a ~100x dynamic range, and a single input
+    ``value_type`` can't satisfy both the read-side interval arithmetic and a
+    whole-row replay guard — which is also why this function takes no
+    ``input_vec``. The AR rollout and the oracle are unaffected.
     """
     # max_fanout bounds how many gated heads are summed per accumulator step:
-    # smaller = fewer copies live at once (narrower residual), larger = a shallower
-    # reduction tree (fewer layers). Measured on the e1m1 forward (scripts/
-    # analyze_forward_cost.py): the reduction is the dominant depth driver —
-    # fanout=2 (a serial accumulator) costs ~35 layers (66 total), fanout=8 a
-    # shallow tree ~22 (44 total), flat ~10 (32 total). The width cost is small
-    # (each head is ~19 cols + its inputs; +~3% peak from 2→8). 8 captures most of
-    # the depth win at a residual that still fits a modest d. The reassociation is
-    # output-identical in the tiny-scene fanout equivalence measurement.
-    # 16 keeps the sum single-level after the shared pixel branches' arms are
-    # flattened into this switch (~15 distinct heads); 8 would re-add a level.
+    # smaller = fewer copies live at once (narrower residual), larger = a
+    # shallower reduction tree (fewer layers). The reduction is a dominant
+    # depth driver; re-measure with scripts/analyze_forward_cost.py before
+    # changing this (2026-07-16, fanout=16, heuristic schedule: 48 layers
+    # total, peak width 6400). The reassociation is output-identical in the
+    # tiny-scene fanout equivalence measurement.
     head = type_switch(*_distinct_head_pairs(inp, branches), max_fanout=16)
     # token.v6: the tied compile writes the output into the embedding's held
     # residual bank through one realized writer node, so the derived-zero
@@ -255,7 +253,9 @@ def _distinct_head_pairs(
 
 # DOOM: R_RenderPlayerView (r_main.c) — top-level per-frame render dispatch
 def forward(input_vec: Node, past: GraphPast, asset_index=None) -> Node:
-    # Provenance: each subsystem call below re-annotates to its own TOP-LEVEL code
+    # Provenance: annotate() labels tag nodes for the per-subsystem cost/width
+    # attribution in scripts/analyze_forward_cost.py.
+    # Each subsystem call below re-annotates to its own TOP-LEVEL code
     # (SceneIndex.build -> `scene`, the publish/branch builders -> their owners,
     # dispatch_next_token -> `dispatch`). forward() therefore does NOT wrap the
     # whole body in one label (that would nest every subsystem under it); it only
@@ -431,7 +431,8 @@ def build_branch_outputs(
         # branches above, forked on hud_seen.
         "hud_begin": statusbar.after_hud_begin() if HUD_ENABLED else no_op_out,
         "hud_item": statusbar.after_hud_item() if HUD_ENABLED else no_op_out,
-        # Host-visible screen-range merge (RangeDispatcher).
+        # Screen-range clip/visplane merge — computed in-graph; the token
+        # merely appears in the output stream (RangeDispatcher).
         "screen_range": ranges.after_screen_range(no_op_out),
     }
     # Any registry branch not built above falls back to the shared NO_OP head,
@@ -514,13 +515,13 @@ def _collapse_world_angle_inputs(
         )
 
         # Clamp each candidate (dx, dy) to the atan's ±3072 square BEFORE the
-        # pick. Historically load-bearing: the raw `dx = sub(vertex, view)`
-        # carries a tracked value_range wider than 3072, which would have blown
-        # the relu-era pick's additive offset past its sanity bound. The swiglu
-        # pick has no such offset, so the clamps are retained only as a cheap
-        # value-range bound (removal is the cutover plan's D4 audit, not flip
-        # work). A no-op at the active row: `signed_world_angle` re-clamps to
-        # the same ±3072 internally via `_abs_coord`.
+        # pick: the raw `dx = sub(vertex, view)` carries a tracked value_range
+        # wider than 3072, and the clamp keeps the pick's operands inside the
+        # atan's declared range. Retained as a cheap value-range bound — the
+        # current gate×value pick carries no additive offset, so this is not
+        # load-bearing for correctness. A no-op at the active row:
+        # `signed_world_angle` re-clamps to the same ±3072 internally via
+        # `_abs_coord`.
         dxs = [
             clamp(emit.dx, -_ATAN_ABS_RANGE, _ATAN_ABS_RANGE) for _n, emit in members
         ]
@@ -566,8 +567,8 @@ def _collapse_scalar_emits(
     collapse to 2.
 
     Equivalent to building each branch's head eagerly: the picked scalar is
-    the winning branch's scalar within ~1 ulp relative (byte-identical under
-    the relu-era exact pick; the swiglu pick multiplies gate×value), and the
+    the winning branch's scalar within ~1 ulp relative (the pick multiplies
+    gate×value), and the
     shared head clamps + quantizes it exactly as the per-branch head did — the
     gate that used to mask the *quantized bytes* now picks the *scalar* before
     the single shared quantization, on a row where exactly one predicate

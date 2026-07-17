@@ -1,5 +1,10 @@
 """Read-only branch owner for the player-weapon pass (R_DrawPlayerSprites).
 
+This module runs once at compile time: it builds part of the computation
+graph that torchwright lowers into the transformer's weights. Nothing here
+executes during inference — at render time, only the compiled transformer
+runs. Coined terms: see GLOSSARY.md.
+
 DOOM draws the ready pistol last, on top of the 3D view (``R_DrawPlayerSprites``
 -> ``R_DrawPSprite``), under the painter order (last-write-wins). The weapon is
 baked once into a screen-space masked picture (``weapon_assets.py`` ->
@@ -10,15 +15,16 @@ This pass walks that bounding box (``weapon_min_col..weapon_max_col`` x
 ``weapon_top..weapon_bottom``) one column at a time, cursor advancing in Y like a
 wall column. Per (col, row) it reads the baked opacity at the cursor and emits a
 ``PIXEL`` (opaque) or a ``SET_CURSOR_Y`` skip (transparent); the host paints the
-pixel and the transparent gaps show the 3D scene through (Option 3 — reuse the
-existing tokens, no new pixel token, no host change).
+pixel and the transparent gaps show the 3D scene through (reusing the existing
+tokens: no new pixel token, no host change).
 
 Token transitions (the owner of each arrow is this module unless noted):
 
     [flat pass end] -> R_DrawPlayerSprites              [flat_pass_renderer, HUD-gated]
     R_DrawPlayerSprites -> SET_CURSOR_DIRECTION_Y       (posts advance in Y)
     SET_CURSOR_DIRECTION_Y -> SET_CURSOR_X(min_col)     (weapon arm; weapon_seen)
-    SET_CURSOR_X(col) -> col>max_col ? DONE : SET_CURSOR_Y(top)
+    SET_CURSOR_X(col) -> col>max_col ? HUD_BEGIN : SET_CURSOR_Y(top)
+                         (HUD on — both committed configs; DONE if HUD off)
     SET_CURSOR_Y(r)   -> D(col, r)
     PIXEL             -> D(col, current_row)
 
@@ -29,7 +35,8 @@ Token transitions (the owner of each arrow is this module unless noted):
 
 The SET_CURSOR_X / SET_CURSOR_Y / PIXEL arrows are SHARED with the wall and flat
 passes; ``pixel_dispatcher`` forks each on ``weapon_seen`` (an OUTER select, so
-the wall/flat width keystone stays structurally intact). ``current_row`` is
+the existing wall/flat arms keep their structure and fixed head widths — the
+invariant the compiled dispatch depends on). ``current_row`` is
 recovered from the most-recent weapon ``SET_CURSOR_Y`` (see ``WeaponPassState``);
 ``col`` from the most-recent weapon ``SET_CURSOR_X`` (both are stale on a PIXEL
 row — pixels advance Y, not X, and a column's whole opaque run shares one

@@ -6,4 +6,7 @@ from ..portable.pretty_text import DoomTextFormatter
 
 
 class DoomFormatter(DoomTextFormatter):
-    """Bundle-driven canonical-text ↔ contextual pretty-text formatter."""
+    """Display-only wrapper over the bundle-shipped prettifier
+    (``portable/pretty_text.py``): turns the tokenizer's raw output text into
+    the readable surface, driven by the bundle's frozen vocab/tables. Pretty
+    output is never parsed back or used for validation."""

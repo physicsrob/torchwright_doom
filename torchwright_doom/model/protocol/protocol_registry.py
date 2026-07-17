@@ -1,13 +1,16 @@
 """Declarative ownership table for the renderer token protocol.
 
-The graph still builds branch nodes in the owner modules. This registry owns the
-cross-cutting metadata that otherwise drifts: vocab phase, inert/replay policy,
-payload-marker groups, and current-token dispatch wiring.
+This module runs once at compile time: it builds part of the computation graph
+that torchwright lowers into the transformer's weights. Nothing here executes
+during inference — at render time, only the compiled transformer runs. Coined
+terms: see GLOSSARY.md.
 
-The only changes from the original are the import block (``TokenType`` from the
-real ``tokens``; the token declarations from ``vocab``) and a whitespace-clean
-``render_protocol_table`` (empty payload rows no longer end in a trailing
-``| ``). The entries, builders, and exports are a line-for-line port.
+The branch nodes themselves are built in the owner modules; this registry owns
+the cross-cutting metadata that otherwise drifts: vocab phase, inert/replay
+policy, payload-marker groups, and current-token dispatch wiring. The table is
+assembled at import time and consumed by ``render_main`` / ``protocol_tokens``
+during graph construction. See ``PROTOCOL.md`` for the actual token sequence
+and per-phase liveness.
 """
 
 from __future__ import annotations
@@ -147,8 +150,11 @@ class ProtocolEntry:
       payload row routed by its preceding marker), ``"branch"`` (a renderer
       state with its own dispatch branch), ``"begin"`` (the final prefill
       marker that seeds the AR loop), or ``"terminal"`` (the frame-end token).
-    - ``owner``: the module that builds this token's branch nodes — ``"scene"``,
-      ``"payload_router"``, ``"main"``, ``"traversal"``, or ``"projection"``.
+    - ``owner``: for branch rows, the module that builds this token's branch
+      nodes; for inert rows, the module that owns the token's read-side
+      interpretation (their shared ``no_op`` head is built dispatch-side in
+      ``render_main``). One of ``"scene"``, ``"payload_router"``, ``"main"``,
+      ``"traversal"``, or ``"projection"``; see GLOSSARY.md "owner".
     - ``predicate``: the :class:`~.protocol_tokens.ProtocolTokenView`
       cached-property name this token dispatches on (e.g. ``"is_value"``,
       ``"is_inert_non_payload"``).
@@ -156,10 +162,14 @@ class ProtocolEntry:
       whose next-token this entry selects when its predicate fires.
     - ``dispatch_order``: integer that orders ``DISPATCH_TRANSITIONS`` (entries
       are sorted by this before being grouped into transitions).
-    - ``prefill_replay``: how prefill replay treats this token —
-      ``"never"`` (default; not replayed), ``"input"`` (replayed verbatim from
-      the prefill input), or ``"scene_payload"`` (a carrier replayed only in a
-      scene context; see :func:`_build_prefill_replay_predicates`).
+    - ``prefill_replay``: replay classification for prefill rows —
+      ``"never"`` (default), ``"input"``, or ``"scene_payload"`` (a carrier
+      classified by scene context; see
+      :func:`_build_prefill_replay_predicates`). Contract-only: the shipped
+      dispatch never replays — prefill-position emissions are discarded by the
+      host, and a verbatim-replay dispatch variant was rejected (see
+      ``render_main``'s dispatch docstring). The classification survives as
+      the derived ``PREFILL_REPLAY_PREDICATES`` export.
     - ``payload_group``: the marker group consumed by
       :func:`_tokens_for_payload_group`, or ``None`` — one of ``"scene_value"``,
       ``"scene_angle"``, ``"projection_angle"``, ``"bbox_value"``,
@@ -268,9 +278,9 @@ PROTOCOL_ENTRIES: tuple[ProtocolEntry, ...] = (
     _carrier(ANGLE_VALUE, predicate="is_angle_value", branch="angle", order=25),
     # Position-0 anchor. A true beginning-of-sequence token emitted first in
     # every sequence (prompt/build.py). Inert: it dispatches to no_op and its
-    # prefill-position prediction is discarded. Read during prefill but owned by
-    # main, not a scene fact (so it is not replayed as a scene payload; it is
-    # replayed verbatim like every other prefill input).
+    # prefill-position prediction is discarded, like every prefill row's. Read
+    # during prefill but owned by main, not a scene fact (prefill_replay
+    # classifies it "input", not "scene_payload").
     _inert(BOS, phase="prefill", owner="main"),
     # Scene/player prefill rows.
     _inert(PLAYER_X_MARK, payload_group="scene_value"),
@@ -770,9 +780,10 @@ PROTOCOL_ENTRIES: tuple[ProtocolEntry, ...] = (
         role="terminal",
     ),
     # Player weapon phase (R_DrawPlayerSprites), emitted after the 3D scene when
-    # the HUD is enabled. Branch logic + the HUD-gated splice land with the weapon
-    # spine; until then this is contract-complete but dormant (never emitted, so
-    # its branch falls back to NO_OP via build_branch_outputs' setdefault).
+    # the HUD is enabled. Live: the flat pass splices this token in at its
+    # sentinel arm (flat_pass_renderer, a compile-time gate on HUD_ENABLED —
+    # production HUD is on), and render_main wires the branch to the weapon
+    # renderer's after_draw_psprites_begin head.
     _branch(
         DRAW_PSPRITES_BEGIN,
         owner="projection",

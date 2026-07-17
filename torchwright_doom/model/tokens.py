@@ -1,5 +1,10 @@
 """Primitive token types — ``TokenType``, ``Token``, ``IntSlot``, ``FloatSlot``.
 
+This module runs once at compile time: it builds part of the computation
+graph that torchwright lowers into the transformer's weights. Nothing here
+executes during inference — at render time, only the compiled transformer
+runs. Coined terms: see GLOSSARY.md.
+
 The renderer's actual vocabulary lives in :mod:`.vocab` and uses these
 primitives to declare each token type. The prompt builder produces a
 sequence of :class:`Token` instances; flattening to integer vocab IDs
@@ -121,10 +126,9 @@ class TokenType:
 
     Two instances with the same ``name`` compare equal and hash equally,
     regardless of slot definitions; names are expected to be unique
-    within a vocab. This mirrors the original ``TokenType`` so ported
-    helpers that reconstruct a type from its name keep working
-    across the ported/native boundary — removing a class of silent
-    "looks like the same type but isn't" failures.
+    within a vocab. A helper that reconstructs a type from its name
+    therefore compares equal to the declared type — removing a class of
+    silent "looks like the same type but isn't" failures.
     """
 
     name: str

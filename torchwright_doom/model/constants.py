@@ -1,5 +1,11 @@
 """Shared scale constants for the vocab + value-range layers.
 
+This module runs once at compile time: it builds part of the computation
+graph that torchwright lowers into the transformer's weights. Nothing here
+executes during inference — at render time, only the compiled transformer
+runs. Coined terms: see GLOSSARY.md. Screen size is fixed at compile time —
+each config compiles its own weights.
+
 This module sits *below* :mod:`vocab` and :mod:`value_ranges` in the import
 graph: both import from here, neither is imported by here. That breaks the
 cycle that would otherwise form once ``vocab.py`` imports
@@ -7,9 +13,10 @@ cycle that would otherwise form once ``vocab.py`` imports
 needs ``SCREEN_WIDTH`` for its resolution-scaled ranges (R5 wall scale, R7
 drawseg width). Keep this module dependency-free.
 
-Porting scale: the production config renders at 160×100
-(``configs/e1m1.yaml`` ``model.scale: 2``); ``apply_screen_env``
-(``inference/config.py``) exports the screen dims via the env vars read
+Porting scale: the production config renders at 320×200
+(``configs/e1m1.yaml``, ``model.scale: 1``); the 160×100 preview is
+``configs/e1m1_lowres.yaml`` (``model.scale: 2``). ``apply_screen_env``
+(root ``config.py``) exports the screen dims via the env vars read
 below before graph modules import. The 60×50 defaults here are the
 bare-import fallback — the reference renderer (pydoom) fixture scale,
 which is what tests that import the graph without a config see (it gives
@@ -90,8 +97,9 @@ HUD_ENABLED = _HUD == "1"
 BAR_HEIGHT = (
     (_FULL_BAR_HEIGHT * SCREEN_HEIGHT) // _FULL_SCREEN_HEIGHT if HUD_ENABLED else 0
 )
-# The 3D view occupies the top VIEW_HEIGHT rows; the bar (blank until the HUD
-# phase lands) occupies [HUD_TOP, SCREEN_HEIGHT). The host buffer and every
+# The 3D view occupies the top VIEW_HEIGHT rows; the bar rows
+# [HUD_TOP, SCREEN_HEIGHT) are painted by the status-bar phase when HUD is
+# enabled (statusbar_renderer). The host buffer and every
 # vocab encoding range stay at the full SCREEN_HEIGHT (the bar rows are still
 # addressable, e.g. by setCursorY for bar pixels); only the 3D clip extent and
 # the projection horizon use VIEW_HEIGHT.

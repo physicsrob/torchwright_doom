@@ -1,17 +1,24 @@
-"""Runtime-visplane state for the SegProjection ``planes`` subcontext (Phase H).
+"""Runtime-visplane state for the SegProjection ``planes`` subcontext (Phase H —
+port-milestone tag; GLOSSARY: Phase letters).
+
+This module runs once at compile time: it builds part of the computation
+graph that torchwright lowers into the transformer's weights. Nothing here
+executes during inference — at render time, only the compiled transformer
+runs. Coined terms: see GLOSSARY.md.
+
+"Runtime" in the title is DOOM's frame-render sense, not Python-at-inference:
+runtime visplanes are the per-frame visplane instances the compiled attention
+allocates as segs mark plane regions during the render, as opposed to the
+static ``PLANE_DEF`` plane definitions the prefill declares.
 
 DOOM: R_FindPlane / R_CheckPlane (r_plane.c) over visplane_t — tracks which
 ceiling/floor regions share the same height, texture, and light level, and
 manages per-visplane column coverage (top[]/bottom[]) to detect conflicts when
 new column ranges must be merged.
 
-The original plain-Python implementation keeps several module-level
-``constant(...)`` / ``compare_const(...)``
-nodes; on the real side a ``constant`` is a graph ``Node`` with a global id, so
-every node-building literal is relocated inside the function that uses it (the
-no-import-time-nodes rule). The plain-list ``linear`` matrices (raw arrays) stay
-at module level. ``compare_const(c, sharpness)`` becomes the real ``compare(node,
-c, sharpness)``.
+Node-building literals (``constant(...)``) are built inside the functions that
+use them, never at module scope — see GLOSSARY.md 'the import-time-node rule';
+the plain-list ``linear`` matrices (raw arrays) stay at module level.
 
 Layout (top to bottom):
 
@@ -111,11 +118,12 @@ _USED_VP_THRESHOLD_SCALE = _scale_matrix(N_VP_PER_PLANE_MAX + 1, 16.0)
 # --- R_CheckPlane overlap test: instance-filtered radix successor -------------
 #
 # ``check_conflict`` asks: does visplane instance ``(plane, vp)`` already occupy a
-# screen column in ``[x1, x2]``? The old form dotted a width-``COLUMN_COUNT``
-# per-column one-hot (``occupied_key`` 63 cols fixture, 163 real) — the binding
-# ``d_head`` driver. This radixes the column the way the solid successor does
-# (``solid_intervals.next_start_after``), so the screen column collapses to a
-# (bucket, local-digit) pair and the key shrinks to ~21 cols (``d_head`` 64 -> 32).
+# screen column in ``[x1, x2]``? A per-column one-hot key would be
+# width-``COLUMN_COUNT`` — at the production config that is 160 columns, more
+# than the whole configured ``d_head`` (128, configs/e1m1.yaml). Radixing the
+# column the way the solid successor does (``solid_intervals.next_start_after``)
+# collapses the screen column to a (bucket, local-digit) pair, so the key is a
+# handful of ~sqrt(COLUMN_COUNT)-wide one-hots plus the width-3 instance lift.
 #
 # Equivalent boolean (gate-identical): ``c* = smallest instance-occupied column
 # with c >= x1``; conflict iff ``c*`` exists and ``c* <= x2``. ``c*`` is the
@@ -124,7 +132,7 @@ _USED_VP_THRESHOLD_SCALE = _scale_matrix(N_VP_PER_PLANE_MAX + 1, 16.0)
 # subsumes the same-bucket two-sided range case with no extra staging.
 
 # The screen-column radix key is the shared render_ops scheme
-# (radix_col_key, imported above as the historical local name).
+# (``radix_col_key``, imported above as the module-local ``_radix_col_key``).
 _INSTANCE_BREAKPOINTS = list(range(N_VISPLANE_MAX))
 
 # Plain weight data (no graph nodes), so module scope is safe. The runtime graph
@@ -141,17 +149,15 @@ _HI_ABOVE_TABLE = [
 
 # --- Plane-id radix (min_x / max_x / next_vp_after / next_plane_after) --------
 #
-# The plane-keyed visplane reads used a full ``one_hot(plane, N_PLANES_MAX)``
-# query component (d_qk 41-42 for the argmax reads; d_head 35 for the
-# ``next_plane_after`` argmin-above basis), all above the d_head=32 floor. Radix
-# the plane id exactly the way ClipMemory / OccupancyRadix radix a screen column:
-# ``plane -> (bucket = p // B, digit = p % B)`` one-hots, so an EXACT plane
-# equality needs only ``NB + B`` cols (12 vs 32) and is a sum of one-hot products
-# — NO large-magnitude cancellation (the lifted-square form would, and these
+# The plane id is radixed exactly the way ClipMemory / OccupancyRadix radix a
+# screen column: ``plane -> (bucket = p // B, digit = p % B)`` one-hots, so an
+# EXACT plane equality needs only ``NB + B`` cols (12, vs 32 for a full
+# ``one_hot(plane, N_PLANES_MAX)``) and is a sum of one-hot products — NO
+# large-magnitude cancellation (the lifted-square form would cancel, and these
 # heads resolve a small post-equality gap: argmin ``occupied_x`` / ``vp``, where
-# the cancellation noise blends the tie — see the d_head reduction notes). The
-# successor scan (``next_plane_after``) buckets the used-plane set and runs the
-# same/higher/carry search ``solid_intervals.next_start_after`` uses over columns.
+# cancellation noise blends the tie). The successor scan (``next_plane_after``)
+# buckets the used-plane set and runs the same/higher/carry search
+# ``solid_intervals.next_start_after`` uses over columns.
 #
 # One config covers both ranges: real planes 0..N_PLANES_MAX-1 (min_x/max_x/
 # next_vp_after) and the scored set 0..N_PLANES_MAX (next_plane_after publishes
@@ -194,7 +200,9 @@ def _lifted_instance_key(instance_idx: Node) -> Node:
     Dotted with ``_lifted_instance_query(q)`` this scores ``1 - (id - q)^2`` —
     exactly 1 on an instance match, dropping by >= 1 per unit of id mismatch. The
     square is exact at integer ids (breakpoints on every integer). The key is
-    used UNSCALED (gain 1): the bucketed-argmin op multiplies the bucket dot by
+    used UNSCALED (gain 1): the bucketed-argmin op (``attend_argmin_above_in_bucket``
+    in torchwright's ``ops/attention_ops.py`` — the home of ``_BUCKET_BONUS`` and
+    the rest of this op contract) multiplies the bucket dot by
     ``_BUCKET_BONUS`` (256), so the matched-row common-mode logit is
     ``256 * (q^2 + 1)`` <= ``256 * 65026`` ~ 1.66e7, which stays under fp32's
     exact-integer ceiling (2^24) so the gained local-digit score (8 per digit)
@@ -203,7 +211,9 @@ def _lifted_instance_key(instance_idx: Node) -> Node:
     ulp (16) swamps the score and the within-bucket argmin silently blends.
     Dominance over the co-located ``col_hi`` one-hot needs no extra gain: each
     contributes an independent unit to the bucket sum, so failing either costs a
-    full ``_BUCKET_BONUS`` (256) >> the 56-wide score swing.
+    full ``_BUCKET_BONUS`` (256) >> the score swing of 8 per digit over the
+    0..B-1 digit range (56 fixture / 96 real; *fixture* = the 60x50 bare-import
+    test scale, *real* = the 320x200 production config).
     """
     square = piecewise_linear(
         instance_idx,
@@ -252,11 +262,12 @@ class OccupancyRadix:
     is split into ``hi = col // B`` (bucket) and ``lo = col % B`` (local digit);
     the bucketed-argmin op filters by ``(bucket, instance)`` and picks the
     smallest local digit above a threshold. ``validity`` (the ±1 occupancy
-    marker) is the op's static validity — inactive rows are rejected by it, so
-    the bucket keys are published raw (no gate, hence no ``cond_gate`` bound).
+    marker) feeds the op's ``validity`` input — inactive rows are rejected by
+    it, so the bucket keys are published raw (no gate, hence no ``cond_gate``
+    bound).
     """
 
-    validity: PastHandle  # ±1 occupancy marker (op static validity)
+    validity: PastHandle  # ±1 occupancy marker (the op's validity input)
     lo: PastHandle  # local digit col % B (score for H1/H3)
     hi: PastHandle  # bucket col // B (score for H2)
     composite_bucket: PastHandle  # concat(col_bucket_onehot[N_BUCKETS], lift[3])
@@ -276,11 +287,12 @@ class UsedPlaneSuccessor:
     plane published at ``DRAW_PLANES_BEGIN``). The plane id is split into ``hi =
     p // B`` (bucket) and ``lo = p % B`` (digit); ``next_plane_after`` runs the
     same same/next-bucket/carry successor scan ``solid_intervals.next_start_after``
-    uses over screen columns. This replaces a single width-(N_PLANES_MAX+1)
-    ``pick_argmin_above`` (d_head 35) with three heads of d_qk <= 14.
+    uses over screen columns. The bucketed scan costs three heads of d_qk <= 14,
+    where a single flat ``pick_argmin_above`` over the width-(N_PLANES_MAX+1)
+    plane set would cost one ~35-col basis.
     """
 
-    validity: PastHandle  # +/-1 used marker (bucketed-argmin static validity)
+    validity: PastHandle  # +/-1 used marker (the bucketed-argmin op's validity input)
     lo: PastHandle  # plane digit p % B (score for the same/carry searches)
     hi_for_h2: PastHandle  # bucket p // B, or _PLANE_INVALID_HI on invalid rows
     bucket_onehot: PastHandle  # one_hot(p // B, NB)
@@ -305,6 +317,9 @@ class RuntimeVisplaneState:
     used_vp_key: PastHandle
     used_vp_value: PastHandle
 
+    # ``@annotated("pmrk")`` is the node-attribution code for this plane-mark /
+    # visplane subsystem: nodes built under it carry "pmrk" in compile/debug
+    # reports (codes nest — see ``SegProjection.publish``'s provenance note).
     @classmethod
     @annotated("pmrk")
     def publish(
@@ -346,8 +361,9 @@ class RuntimeVisplaneState:
         # --- Per-instance min/max-x keys: read by min_x / max_x. A (plane, vp)
         # query argmaxes these over every occupied column; the +/-occupied_x tail
         # term picks the smallest (min) or largest (max) matching column.
-        # Radix the plane equality (was one_hot(plane, 32), the d_qk driver) into
-        # a (bucket, digit) pair; the vp one-hot (width 8) stays. Both query and
+        # Radix the plane equality into a (bucket, digit) pair (12 cols, vs 32
+        # for a full one_hot(plane, N_PLANES_MAX)); the vp one-hot (width 8)
+        # stays. Both query and
         # key scale by 128, so a matched digit/vp column contributes 128*128 to
         # the dot, dominating the +/-occupied_x term (<= COLUMN_COUNT) so the
         # (plane, vp) equality wins; among matches, +/-occupied_x picks min/max x.
@@ -384,15 +400,12 @@ class RuntimeVisplaneState:
         # instance, returning its [top, bottom] from col_range (an empty range if
         # the column is unoccupied).
         # column_range key: lift the (plane, vp) instance to a width-3 scalar-id
-        # equality (the same form OccupancyRadix uses) and radix the screen column
-        # (was a width-(COLUMN_COUNT+1) one_hot), so a (plane, vp, x) lookup needs
-        # 3 + 16 + 1 cols (was 101). The dot of a full match is
+        # equality (the same form OccupancyRadix uses) and radix the screen
+        # column, so a (plane, vp, x) lookup needs 3 + (NB + B) + 1 cols
+        # (20 fixture / 30 real). The dot of a full match is
         #   (1) instance + (2) col(hi+lo) - 2.5 (sentinel bias) = 0.5 > 0;
         # any partial match is <= -0.5 and an inactive (gated-zero) row is 0, so a
-        # column with no occupancy picks an inactive row -> empty range. Identical
-        # separation to the old raw-one-hot form (instance lift contributes 1 on a
-        # match in place of the old plane(1)+vp(1)=2, and the col radix contributes
-        # 2 in place of the old x(1)=1 -> same total 3).
+        # column with no occupancy picks an inactive row -> empty range.
         col_key_value = concat(
             _lifted_instance_key(occupied_instance_idx),
             _radix_col_key(occupied_x_value),
@@ -725,9 +738,8 @@ def _publish_occupancy_radix(
     The bucket keys are published raw (not gated): the bucketed-argmin op rejects
     inactive rows via ``validity`` (= ``occupied_active``), so no ``gate`` /
     ``cond_gate`` is involved. ``thermometer_floor_div`` / ``mod_sawtooth`` are exact
-    on integer columns (the radix-successor derisk showed ``floor_int(v/B +
-    0.5/B)`` is wrong at B=13; these place transitions at ``k*B - 0.5``,
-    and the sawtooth digit runs in the bucket thermometer's layer)."""
+    on integer columns: both place their transitions at ``k*B - 0.5``, halfway
+    between adjacent integer columns, so every integer input lands mid-plateau."""
     col_hi = thermometer_floor_div(occupied_x_value, _RADIX_BASE, COLUMN_COUNT)
     col_lo = mod_sawtooth(occupied_x_value, _RADIX_BASE, COLUMN_COUNT)
     col_bucket_onehot = one_hot(col_hi, _N_BUCKETS)
@@ -776,8 +788,8 @@ def _publish_used_plane_successor(
 
     Mirrors ``solid_intervals._publish_successor_fields`` over plane ids: the
     plane splits into ``hi = p // B`` / ``lo = p % B``; the same/carry searches
-    use ``validity`` (= ``used_plane_active``) as the bucketed-argmin static
-    validity, so the bucket keys are published raw (no gate). The ``above_lo``
+    use ``validity`` (= ``used_plane_active``) as the bucketed-argmin op's
+    ``validity`` input, so the bucket keys are published raw (no gate). The ``above_lo``
     table is width ``B + 1`` (a leading ``t == -1`` slot) so a ``threshold == -1``
     query — R_DrawPlanes' find-first — admits every digit in bucket 0. Invalid
     rows get ``hi = _PLANE_INVALID_HI`` so the H2 next-bucket argmin returns that

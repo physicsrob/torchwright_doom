@@ -10,8 +10,11 @@ Two cleanly separable pieces, composed into the public ``render`` / ``parse``:
    de-quantized through that marker's range (``marker_ranges.MARKER_RANGE``). The
    carrier stores only a ``[-1, 1]`` number; the marker chooses how to read it —
    so this is normal "vanilla" detokenizer behaviour (cf. a BPE byte-merge), one
-   well-contained table-driven rule, not a third grammar. This is what the HF
-   tokenizer uses; it is fully reversible.
+   well-contained table-driven rule, not a third grammar. It is fully reversible,
+   and it is the reference spec: the HF tokenizer implements only the per-id
+   words (a context-free ``WordLevel`` with no folding — :mod:`.standard`), and
+   the fold rule reaches the shipped surface as data tables baked by
+   :mod:`.freeze` for the portable formatter.
 
 2. **The formatter** — ``format(flat) -> laid-out text``. It owns ALL layout: a
    new line at each "header" token (indented by its nesting level under
@@ -21,9 +24,9 @@ Two cleanly separable pieces, composed into the public ``render`` / ``parse``:
 
 Byte-exactness is anchored at the value level: a de-quantized carrier renders as
 the *shortest decimal that re-quantizes to the same carrier level* (so
-``encode(decode(v)) == v``). There is no lossy display knob; the figure shows the
-reversible shortest-decimal (``1383.98``), never a rounded ``1384`` that could
-re-encode to a neighbouring level.
+``encode(decode(v)) == v``). There is no lossy display knob; the blog's
+token-stream figure shows the reversible shortest-decimal (``1383.98``), never a
+rounded ``1384`` that could re-encode to a neighbouring level.
 
 The kept knobs are all reversible and audience-specific (none change the
 re-encoded id stream): ``wall_names`` / ``flat_names`` (WAD asset names; ``None``

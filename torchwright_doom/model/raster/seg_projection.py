@@ -1,5 +1,10 @@
 """Project visited subsector segs into emitted screen-space columns.
 
+This module runs once at compile time: it builds part of the computation
+graph that torchwright lowers into the transformer's weights. Nothing here
+executes during inference — at render time, only the compiled transformer
+runs. Coined terms: see GLOSSARY.md.
+
 The BSP traversal reaches geometry through subsectors; from there this module
 owns the local seg-scanning protocol::
 
@@ -17,9 +22,8 @@ visplane occupancy, seg facts, wall-span draft, and flat pass (phases 8-13). The
 ``wall`` / ``planes`` / ``flats`` subcontexts on the returned record carry those
 later subsystems.
 
-Changes from the original: ``Vec`` -> ``Node``; the original ``api`` / ``.ops``
-imports map to the real ``std`` / ``render_ops`` shims; the module-level
-``constant`` sentinel is built inside ``publish()`` (no import-time nodes).
+Sentinel/constant nodes are built inside ``publish()``, not at module scope —
+see GLOSSARY.md 'the import-time-node rule'.
 """
 
 from __future__ import annotations
@@ -141,7 +145,9 @@ class SegScanContext:
 
 @dataclass(frozen=True)
 class DrawsegScope:
-    """Cached drawseg facts plus attention picks for scale sidecars."""
+    """Cached drawseg facts plus attention picks for scale sidecars (a
+    *sidecar* is a companion value channel published alongside a primary
+    protocol row and recovered later by positional offset or recency pick)."""
 
     past: PastHandleScope
     recent_drawseg: RecentDrawsegState
@@ -194,7 +200,8 @@ class DrawsegScope:
 
 @dataclass(frozen=True)
 class WallRuntimeContext:
-    """Published wall-column and wall-span runtime state (Phase H)."""
+    """Published wall-column and wall-span runtime state (Phase H —
+    port-milestone tag; GLOSSARY: Phase letters)."""
 
     clip: ClipMemory
     seg_facts: SegLevelFacts
@@ -225,7 +232,7 @@ class VisplaneRuntimeContext:
 
 @dataclass(frozen=True)
 class FlatRuntimeContext:
-    """Published flat-pass state (Phase J) + the player-weapon pass (Phase 2)."""
+    """Published flat-pass state (Phase J) + the player-weapon pass."""
 
     flat_pass: FlatPassState
     weapon: WeaponPassState
@@ -403,12 +410,15 @@ class SegProjection:
         #
         # Integer claim on the pick: setCursorX.x is an integer screen
         # coordinate by protocol; before the first SET_CURSOR_X row the
-        # value channel is all zeros (the _or_zero convention), so the
-        # unanchored blend is exactly 0; after it, the pick carries the
-        # ~0.02 recovery leak (see render_ops.radix_col_key) — atol 0.05
-        # is the collapse pass's plateau band, which that leak sits well
-        # inside.  The claim lets the univariate collapse rebuild the
-        # downstream radix-key/emit chains as single staircase FFNs.
+        # value channel is all zeros (the _or_zero convention: a *_or_zero
+        # channel carries its value on producer rows and exactly zero on
+        # every other row), so the unanchored blend is exactly 0; after
+        # it, the pick carries the ~0.02 recovery leak (see
+        # render_ops.radix_col_key) — atol 0.05 is the plateau band of
+        # torchwright's univariate collapse pass (compiler/collapse.py),
+        # which that leak sits well inside.  The claim lets the collapse
+        # pass rebuild the downstream radix-key/emit chains as single
+        # staircase (stepwise-constant) FFNs.
         cursor_x_scalar = column_from_screen_x(
             assert_integer(cursor_x_row.pick(past, input_x_or_zero), atol=0.05)
         )
@@ -594,9 +604,11 @@ class SegProjection:
             wallcol_render_state,
         )
         # Phase 13 — two independent late publishes: the flat pass and
-        # the wall-span K-row finish. ``finish()`` gates the K-row y1 state at the
-        # SCREEN_Y_VALUE row and does not read flat-pass state, so the order is
-        # free; ``FlatPassState`` reads the runtime visplanes (Phase 10).
+        # the wall-span K-row finish (the K-row is the published per-wall-tier
+        # y1 state, one value per K-part — see GLOSSARY.md 'K-part').
+        # ``finish()`` gates the K-row y1 state at the SCREEN_Y_VALUE row and
+        # does not read flat-pass state, so the order is free; ``FlatPassState``
+        # reads the runtime visplanes (Phase 10).
         flat_pass = FlatPassState.publish(
             past,
             inp,

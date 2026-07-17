@@ -32,6 +32,9 @@ python tools/txt_to_png.py  --input out/output.txt --output out/frame.png
 
 `output.ids.json` is the canonical record of emitted model row ids;
 `output.txt` is their standard-tokenizer interchange form.
+
+The cursor/pixel token protocol these tools decode is specified in
+`PROTOCOL.md` in the source repo (github.com/physicsrob/torchwright_doom).
 """
 
 
@@ -76,10 +79,22 @@ The bundled `examples/e1m1_prompt.txt` is the executable prompt. Run
 `infer.py` (at the bundle root) to produce canonical emitted row ids and raw
 tokenizer text. `tools/pretty_text.py` formats that text for reading, while
 `tools/txt_to_png.py` independently decodes its cursor/pixel protocol into a
-PNG. Neither post-processing tool participates in inference or performs
-geometry, visibility, lighting, texture selection, or sorting.
+PNG — every cursor move and pixel in that protocol is a model-emitted token.
+The protocol is specified in `PROTOCOL.md` in the source repo. Neither
+post-processing tool participates in inference or performs geometry,
+visibility, lighting, texture selection, or sorting.
 
-Screen: {config.screen[0]}×{config.screen[1]}; map: {config.map}; fp32 weights;
-eager attention is the validated implementation.
+**This bundle:** screen {config.screen[0]}×{config.screen[1]}, map
+{config.map}, dense fp32 sharded safetensors, eager attention (the validated
+implementation), greedy decode, generation bound
+{config.run.max_new_tokens} new tokens.
+
+**What running it takes:** the weights load in full fp32 (total size = the
+sum of the shards; the flagship 320×200 bundle is ~98 GB, needing an
+H200/B200-class GPU or multi-GPU `device_map`). The flagship render measured
+~42 minutes of greedy decode on one B200 for its 53,747-token rollout from a
+3,614-token prompt, scoring ~99.99% within-option color against the
+reference renderer. Canonical numbers and their provenance: `FACTS.md` in
+the source repo (github.com/physicsrob/torchwright_doom).
 """
     (bundle / "README.md").write_text(text, encoding="utf-8")

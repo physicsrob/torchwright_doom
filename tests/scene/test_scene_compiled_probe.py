@@ -120,8 +120,8 @@ def test_side_test_cross_product_compiles_exact(device) -> None:
     product (``R_PointOnSide``).
 
     ``_think_side_compute`` computes ``sign((dy*(viewx-x)) - (dx*(viewy-y)))``.
-    The two ``mul_side`` products are the swiglu ``multiply`` (~2 ulp relative
-    — the relu-era grid's ~step-level absolute quantization is gone), but what
+    The two ``mul_side`` products are the gated ``multiply`` (~2 ulp
+    relative error), but what
     is load-bearing is still the *sign* of that value (the 0/1 side bit),
     which decides front-vs-back child, so the probe stays sign-only. The two
     partitions here are chosen so the cross product has large margin

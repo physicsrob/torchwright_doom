@@ -106,8 +106,8 @@ render-run run:
 
 # The production correctness gate is `make run COMPARE=1` (it scores the HF
 # render's coverage / within-option color against the pydoom reference and
-# writes the diff PNG). ~30 min/frame on the render GPU; too heavy for
-# per-commit `make test`, run manually.
+# writes the diff PNG). ~42 min/frame measured on the render GPU (FACTS.md);
+# too heavy for per-commit `make test`, run manually.
 
 .PHONY: test
 test: lint

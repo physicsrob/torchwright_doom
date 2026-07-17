@@ -3,9 +3,10 @@
 The publication contract's schema side. A normal completeness probe
 (:func:`validate_bundle_manifest` / :func:`is_complete_hf_bundle`) verifies
 the layout version, every declared file's size, and the hash of every
-hash-bearing file; safetensor shards are the only hash-exempt files (the
-index binds their tensors and their sizes are still checked), which keeps
-probes cheap against a ~98 GB checkpoint.
+hash-bearing file. Safetensor shards are the only hash-exempt files — a
+deliberate cost trade-off against a ~98 GB checkpoint: for shards, only
+their sizes and the index's declared name->shard map are checked; shard
+*contents* are not hashed by these probes.
 """
 
 from __future__ import annotations
@@ -56,9 +57,10 @@ def file_manifest(bundle: Path) -> dict[str, dict[str, Any]]:
         if path.is_file() and path.name != MANIFEST_NAME:
             relative = path.relative_to(bundle).as_posix()
             facts: dict[str, Any] = {"size": path.stat().st_size}
-            # The safetensors index binds every tensor key to a shard. Avoid a
-            # second tens-of-GB read solely to hash the already validated shard
-            # bytes; hash all Doom-owned data, configs, tools, and the index.
+            # Shards are size-checked but not content-hashed (the index maps
+            # tensor names to shards; it carries no content digest) — a
+            # deliberate trade-off to keep probes cheap against ~98 GB. Hash
+            # all Doom-owned data, configs, tools, and the index itself.
             if path.suffix != ".safetensors":
                 facts["sha256"] = sha256_file(path)
             files[relative] = facts
@@ -112,6 +114,10 @@ def candidate_manifest(
         "region": asdict(config.region),
         "pose": {**asdict(config.run.pose), "scene_origin": list(origin)},
         "vocab_size": int(vocab_size),
+        # Two distinct identities: the fingerprint hashes the row vocabulary's
+        # semantic slot/type structure plus its row count
+        # (tokenizer/identity.py); the sha256 hashes the ordered tokenizer
+        # word strings themselves (tokenizer/standard.py).
         "row_vocab_fingerprint": row_vocab_fingerprint,
         "tokenizer_vocab_sha256": tokenizer_vocab_sha256,
         "formatter_data_sha256": aggregate_hash(
@@ -147,8 +153,9 @@ def validate_bundle_manifest(
 
     A normal probe verifies the layout version, every declared file's size,
     and the hash of every hash-bearing file. Safetensor shards are the only
-    hash-exempt files (the index binds their tensors; their sizes are still
-    checked), which keeps completeness probes cheap.
+    hash-exempt files: their sizes and the index's declared name->shard map
+    are checked, but shard contents are not hashed — a deliberate cost
+    trade-off that keeps completeness probes cheap.
     """
     bundle = Path(bundle_dir)
     path = bundle / MANIFEST_NAME
@@ -205,9 +212,9 @@ def validate_bundle_manifest(
         if file_path.stat().st_size != facts.get("size"):
             raise ValueError(f"Doom bundle file size mismatch: {name}")
         if name.endswith(".safetensors"):
-            # Shards are the only hash-exempt entries (the index binds their
-            # tensors; sizes are still checked). Verify a digest if one is
-            # present anyway.
+            # Shards are the only hash-exempt entries: size-checked, contents
+            # not hashed (deliberate cost trade-off; see module docstring).
+            # Verify a digest if one is present anyway.
             if "sha256" in facts and sha256_file(file_path) != facts["sha256"]:
                 raise ValueError(f"Doom bundle file hash mismatch: {name}")
             continue

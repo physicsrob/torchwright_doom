@@ -98,6 +98,9 @@ class DoomTextFormatter:
         self.angle_lo = int(carrier["angle"]["lo"])
         self.value_steps = int(tables["value_steps"])
         self.angle_bam = int(tables["angle_bam"])
+        # Sentinel encoding for "no back sector": one-sided walls have no
+        # back-sector heights, so the prompt carries this reserved value,
+        # rendered as "none".
         self.sentinel_value = float(tables["back_height_sentinel"])
         self.marker_range = {
             key: (float(value[0]), float(value[1]))

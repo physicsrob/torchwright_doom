@@ -1,7 +1,7 @@
 """Compile-cache identity: canonical payloads, cache keys, git/WAD hashing.
 
 Root sibling of the job spec (``config.py``); both are shared authorities
-owned by no consumer package (plan_cleanup_v2 Decision 5). Distinct from
+owned by no consumer package. Distinct from
 ``tokenizer/identity.py`` (the vocab fingerprint) — same basename, different
 concern; grep with paths.
 """

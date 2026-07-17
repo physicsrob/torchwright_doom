@@ -1,13 +1,20 @@
 """In-graph emit helpers for token construction.
 
+This module runs once at compile time: it builds part of the computation
+graph that torchwright lowers into the transformer's weights. Nothing here
+executes during inference — at render time, only the compiled transformer
+runs.
+
 Terms (see ``GLOSSARY.md``): a *carrier* is a token whose payload is a wide
 numeric value; the *digit-quad* is that value's 2-or-4-number byte encoding; an
 emit *head* is a token's own columns without the shared constant derived tail.
 
 The graph's ``forward()`` produces a token at each AR step by writing
-a residual row matching one row of ``W_EMBED`` — the host argmaxes
-that row against ``W_EMBED.T`` to pick the next token ID. The helpers
-here build that residual:
+a residual row matching one row of ``W_EMBED`` — the stock tied LM head
+inside ``model.generate()`` (``W_EMBED`` doubles as the readout under
+token.v6; see ``GLOSSARY.md``) then scores that row and greedy decode
+picks the next token ID. No host code is involved in the selection. The
+helpers here build that residual:
 
 * :func:`emit_slotless` for marker types with no slots (BEGIN, DONE,
   NO_OP, …) — pure :class:`LiteralValue`, no inputs.
@@ -24,15 +31,19 @@ here build that residual:
 The producer-side encoding is the mirror image of the row table in
 ``embedding.py``: for each slot, write the slot's raw normalized
 column and a digit-quadratic payload that argmaxes against the slot's
-2- or 4-wide block. Slots a row doesn't carry — and every derived
+2- or 4-wide block. The algebra is the lifted-key trick (GLOSSARY)
+applied per digit: the payload writes ``[2·(q−C), 1]`` against the
+table's ``[(r−C), −(r−C)²]``, so the dot is ``(q−C)² − (q−r)²`` —
+peaked exactly at ``r = q``, and a row one step off loses by a full
+unit. Slots a row doesn't carry — and every derived
 column — stay at zero on the emit side: nothing the producer puts
 there could improve argmax, and a non-zero value would bias toward
 rows that happen to carry those columns.
 
 Depth, measured by compiling each helper alone with ``d=1024`` against
 ``compile_headless`` (torchwright's in-process debug/test reference
-compiler — not a twdoom inference path, which is the cached ONNX
-artifact) and reading ``compiled._n_layers``:
+compiler; never a render path — the production runtime is described in
+README.md) and reading ``compiled._n_layers``:
 
 * Slotless: 1 layer (just the constant `LiteralValue` row).
 * 1-digit slot (cardinality ≤ 256), ``slot.lo == 0``: 1 layer.
@@ -103,8 +114,10 @@ from .tokens import FloatSlot, IntSlot, TokenType
 # High-byte staircase sharpness for the 2-digit digit-quad (see
 # `_digit_quad_payload`). The high byte is `floor(q/BASE)`, whose `floor_int`
 # ramp sits AT each byte boundary `m·BASE`. A continuous step index for a
-# range-encoded integer carrier lands just below a boundary; the closest, a
-# 1-unit drawseg, is only `1/64 ≈ 0.0156` below one, so the ramp
+# range-encoded integer carrier (range-encode: GLOSSARY) lands just below a
+# boundary; the closest — a 1-unit drawseg, computed at the dev-default
+# 60-column ranges (value_ranges.py R7; re-derive there if ranges change) —
+# is only `1/64 ≈ 0.0156` below one, so the ramp
 # (`BASE/sharpness` wide in q-space) must be narrower than that:
 # `256/sharpness < 0.0156` ⇒ `sharpness > 16400`. 32768 gives a 0.0078-wide ramp
 # (~2× clearance on the worst carrier value); raising it shrinks the residual
@@ -137,17 +150,20 @@ __all__ = [
 # A numeric carrier (``VALUE`` / ``ANGLE_VALUE``) emits its value through a
 # ~255-wide ``floor_int`` digit-quad (see :func:`_digit_quad_payload`). Each
 # branch that emits one used to build its OWN ``make_token_head`` head eagerly,
-# so ~24 of these 255-wide staircases sat live on the residual at once — the
-# measured residual-width peak: digit-quad emit occupied ~39% of the d=6400
-# peak, and all of those copies were collapsible.
+# so ~24 of these 255-wide staircases sat live on the residual at once —
+# measured then as ~39% of the residual peak (on the earlier d=6400 compile
+# that motivated this design), and all of those copies were collapsible.
 #
 # Instead, an owner ``after_*`` returns just its 1-wide scalar wrapped in a
 # :class:`ScalarEmit`. The dispatch (``render_main._collapse_scalar_emits``)
 # gathers every branch sharing a carrier, picks the active branch's scalar by
-# its dispatch predicate (float-exact, exactly one predicate is +1), and runs
-# ONE shared digit-quad per carrier. 24 eager quads → 2. The emitted row is
-# byte-identical: the picked scalar is the winning branch's scalar bit-for-bit,
-# and the shared head clamps + quantizes it exactly as the per-branch head did.
+# its dispatch predicate (exactly one predicate is +1), and runs ONE shared
+# digit-quad per carrier. 24 eager quads → 2. Equivalent to eager per-branch
+# heads: the picked scalar lands within ~1 ulp relative of the winning
+# branch's (the pick multiplies gate×value), and the shared head clamps +
+# quantizes it exactly as a per-branch head would — sub-noise against the
+# digit-quad decode (see ``render_main._collapse_scalar_emits`` for the
+# tolerance gate).
 
 
 @dataclass(frozen=True)
@@ -190,29 +206,33 @@ def angle_scalar(angle: Node) -> ScalarEmit:
 # Route-then-atan-once: deferred world-angle atan2 inputs
 # ---------------------------------------------------------------------------
 #
-# ``signed_world_angle`` (the graph's R_PointToAngle atan2) is the widest
-# computation in ``forward()`` — its 1024-wide ray/scale/count nodes drive the
-# residual-stream peak. The 4 world-angle branches (the two seg endpoints and the
-# two bbox corners) each used to run their OWN atan, but exactly one of the 4
-# branch predicates is +1 per position (mutual exclusivity, guaranteed by the
-# protocol), so 3 of the 4 atans are pure waste.
+# ``signed_world_angle`` (the graph's R_PointToAngle atan2) is among the widest
+# computations in ``forward()`` — the flat single-level form held a 1,024-wide
+# ray/scale/count row live and drove the residual peak; the current two-level
+# form (``render_ops._two_level_half_count``) keeps residents to ~2×32 columns.
+# The 4 world-angle branches (the two seg endpoints and the two bbox corners)
+# each used to run their OWN atan, but exactly one of the 4 branch predicates
+# is +1 per position (the dispatch selects by the current token's type —
+# ``render_main.dispatch_next_token``), so 3 of the 4 atans are pure waste.
 #
 # Instead, a world-angle ``after_*`` returns just its endpoint's ``(dx, dy)``
 # wrapped in an :class:`AngleInputEmit`. The dispatch
 # (``render_main._collapse_world_angle_inputs``) picks the active branch's pair
-# by its one-hot predicate (float-exact) and runs ONE ``signed_world_angle``,
-# then re-wraps the result as an ``ANGLE_VALUE`` :class:`ScalarEmit` so the
-# existing :func:`angle_scalar` collapse folds it into the one shared
-# digit-quad head. 8 ray-halves (4 sites × tan/cot) → 2. The emitted angle is
-# byte-identical: the picked pair is the winning branch's pair bit-for-bit and
-# the single atan is deterministic.
+# by its one-hot predicate (within ~1 ulp relative) and runs ONE
+# ``signed_world_angle``, then re-wraps the result as an ``ANGLE_VALUE``
+# :class:`ScalarEmit` so the existing :func:`angle_scalar` collapse folds it
+# into the one shared digit-quad head. 8 ray-halves → 2 (a *ray-half* is one
+# of the octant-folded atan2's two test families — the tan-test half and the
+# cot-test half, ``render_ops``; 4 sites × tan/cot collapse to 1 site). The
+# single atan is deterministic, and the picked pair's ~1-ulp offset is
+# sub-noise against the atan's half-integer ray thresholds.
 
 
 @dataclass(frozen=True)
 class AngleInputEmit:
     """A world-angle branch's deferred atan2 inputs (``dx``, ``dy``). The
     dispatch picks the active branch's pair by its one-hot predicate
-    (float-exact) and runs ONE :func:`signed_world_angle`, then re-wraps as
+    (within ~1 ulp relative) and runs ONE :func:`signed_world_angle`, then re-wraps as
     :class:`ScalarEmit` ``(ANGLE_VALUE)``. See the module note above."""
 
     dx: Node
@@ -267,7 +287,7 @@ def emit_head_to_full_row(head: Node) -> Node:
     zero rows (matmul zeros are exact, so the row argmaxes identically to
     ``concat(head, emit_derived_zero())``).
 
-    This shape is required by the tied token compile (token.v6): the final
+    This shape is required by the tied token compile (token.v6; GLOSSARY.md): the final
     output must be a single non-``Concatenate`` writer node so the compiler
     can place it into the embedding's held residual bank. A ``Concatenate``
     of head + literal-zero tail has no writer and is rejected at compile
@@ -713,9 +733,9 @@ def _digit_quad_payload(
         # inside the boundary ramp itself produces a FRACTIONAL hi_raw (e.g.
         # 111.75 at q = 112·BASE − 0.002), and the low-byte recovery
         # 2·(q − BASE·hi) amplifies that fraction by BASE — a ~192-row emitted
-        # error, not the ±1-step truncation the split promises (bitten at the
-        # swiglu cutover: the flat-pixel oracle's segDcTmidMid carrier landed
-        # 0.002 q below a byte boundary; the value straddles the boundary in
+        # error, not the ±1-step truncation the split promises (observed on
+        # the flat-pixel oracle gate: a segDcTmidMid carrier landed 0.002 q
+        # below a byte boundary; such a value straddles the boundary in
         # float64, so which side the graph's sub-noise lands on is a coin
         # flip). Rounding hi to the nearest integer makes EITHER neighboring
         # byte pair reconstruct q correctly — lo compensates, the error stays

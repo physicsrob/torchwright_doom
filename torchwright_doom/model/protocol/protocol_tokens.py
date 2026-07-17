@@ -1,5 +1,10 @@
 """Current-token interpretation for the autoregressive protocol.
 
+This module runs once at compile time: it builds part of the computation graph
+that torchwright lowers into the transformer's weights. Nothing here executes
+during inference — at render time, only the compiled transformer runs. Coined
+terms: see GLOSSARY.md.
+
 `SceneTokenView` interprets prefill tokens as serialized scene facts. This file
 interprets the same `input_vec` as the runtime control/render protocol:
 traversal states, numeric payload carriers, angle phases, emit tokens, and
@@ -13,15 +18,9 @@ immediately preceding marker says whether that number is scene data, projection
 state, or some future AR thinking payload. This is why carrier rows are kept out
 of the broad "inert prefill" branch below and routed separately.
 
-Changes from the original: the import block (``Vec`` -> ``Node``; the std
-helpers, token declarations, registry exports, and value-range surface now come
-from the real-side shim / vocab / registry). The one-token dispatch predicates are
-installed from the registry by ``_install_registry_token_checks()`` (an
-import-time side effect that mutates the class); the context-sensitive
-cached properties, the ``value_derived(input_vec, range_id[, kind])`` direct
-reads, and the module-level free functions ``screen_column_one_hot`` /
-``_prev_type_matches_any`` / ``_current_type_matches_any`` are a line-for-line
-port.
+The one-token dispatch predicates are installed from the registry by
+``_install_registry_token_checks()`` — an import-time side effect that mutates
+the class. The context-sensitive cached properties below are defined by hand.
 """
 
 from __future__ import annotations
@@ -569,9 +568,9 @@ class ProtocolTokenView:
 
     @_input_cached_property
     def is_value_after_wall_column(self) -> Node:
-        # After Step 1, the rw_scale VALUE follows WALL_COL_U (not
-        # SET_CURSOR_X directly). The semantic name is preserved — this
-        # is still the VALUE row that carries the wall-column scale.
+        # The rw_scale VALUE follows WALL_COL_U (not SET_CURSOR_X
+        # directly). The semantic name is preserved — this is still the
+        # VALUE row that carries the wall-column scale.
         return and_(
             self.is_value,
             _input_type_matches(self.prev_input_type, WALL_COL_U),

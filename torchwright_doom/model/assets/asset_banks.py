@@ -1,16 +1,18 @@
 """Compile-time WAD asset banks for the texture/flat read surface.
 
+This module runs once at compile time: it builds part of the computation graph that torchwright lowers into the transformer's weights. Nothing here executes during inference — at render time, only the compiled transformer runs. Coined terms: see GLOSSARY.md.
+
 Builds the
 per-``(width, height)`` wall banks, the per-texture metadata tables, the flat
-table, and the COLORMAP rows from the WAD-loaded ``ASSET_BOOK`` (data-source
-**B**).
+table, and the COLORMAP rows from the WAD-loaded ``ASSET_BOOK``.
 
 Everything here is **plain numpy / Python data, never a graph node** — the
 no-import-time-nodes rule forbids module-level ``constant(...)`` / op nodes
 (they alias under the test-suite node-id reset). ``table_lookup_2d`` consumes
-the raw numpy ``table`` arrays directly; the ``WALL_TEX_*`` metadata tuples are
-wrapped in ``constant(...)`` only *inside* the accessor methods in
-:mod:`.assets`. Importing this module leaves ``global_node_id == 0``.
+the raw numpy ``table`` arrays directly; the ``wall_tex_*`` metadata tuples are
+baked into the ``pick_const_by_index`` selection weights inside the accessor
+methods in :mod:`.assets` (no ``constant`` node there either). Importing this
+module leaves ``global_node_id == 0``.
 """
 
 from __future__ import annotations
@@ -40,8 +42,9 @@ from .weapon_assets import WeaponBake, bake_weapon_table
 
 # COLORMAP row applied to the ready pistol at bake time (DOOM lights the ready
 # weapon by the view sector's brightest scale-light). Row 0 (brightest) matches
-# the bright E1M1 start room; refine to the exact start-sector scale-light if the
-# render-verify shows it reading too bright against the room.
+# the bright E1M1 start room; refine to the exact start-sector scale-light if
+# the image-compare gate (`make run COMPARE=1`) shows it reading too bright
+# against the room.
 WEAPON_COLORMAP_ROW = 0
 
 
@@ -56,7 +59,7 @@ def configured_weapon_bake(wad_path=None) -> WeaponBake | None:
 
     The SINGLE source the graph banks (``_build_weapon_bank``), the pydoom token
     reference (``drafter._weapon_plan_tail``), and the image-compare reference
-    (``inference.compare``) all bake from, so the three cannot disagree."""
+    (``interpret.compare``) all bake from, so the three cannot disagree."""
     if not HUD_ENABLED:
         return None
     scale = 320 // SCREEN_WIDTH  # 1 (320 wide) or 2 (160 wide) for the real configs

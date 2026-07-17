@@ -293,7 +293,7 @@ def test_narrow_slot_high_byte_is_constant_no_floor() -> None:
 def test_two_digit_boundary_sliver_snaps_to_one_step() -> None:
     """A continuous q landing INSIDE the hi-byte floor's ramp — a float64
     carrier value straddling a byte boundary, which is a per-carrier coin
-    flip (the swiglu-cutover segDcTmidMid case, flat oracle pos 7780) —
+    flip (observed on a segDcTmidMid carrier, flat oracle pos 7780) —
     must still emit within ~1 step. The integer snap on the high byte keeps
     the byte split consistent (lo compensates whichever side the snap
     lands), so a fractional hi cannot leak ×BASE into the low byte (the

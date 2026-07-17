@@ -1,4 +1,5 @@
-"""E(t) envelope model + synthetic rank replay for smooth_recency_rank derisking.
+"""E(t) envelope model + synthetic rank replay for the smoothed
+global-position derisking (session record; see scripts/README.md).
 
 Closed-form forward encoding (torchwright/ops/swiglu/global_recency.py):
     theta  = 5e5 ** (-(d_rot-2)/d_rot),  d_rot = 64

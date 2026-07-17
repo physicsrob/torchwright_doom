@@ -1,6 +1,8 @@
 """Bake DOOM's status bar as a list of masked patches the renderer composites
 last, into the reserved bottom rows of the screen.
 
+This module runs once at compile time: it builds part of the computation graph that torchwright lowers into the transformer's weights. Nothing here executes during inference — at render time, only the compiled transformer runs. Coined terms: see GLOSSARY.md.
+
 DOOM draws the status bar as a **sequence of ``V_DrawPatch`` calls**, not as one
 pre-composited image: the ``STBAR`` plate first (``ST_refreshBackground``,
 st_stuff.c:504), then each widget — the ammo/health/armor numbers, the ``STARMS``
@@ -15,7 +17,7 @@ hardcoded E1M1 pistol-start state.
 This is deliberately **not** the weapon's path. The player weapon is a scaled,
 lit psprite (``R_DrawPSprite`` -> ``R_DrawVisSprite`` -> the masked-column
 drawer); the bar is the raw ``V_DrawPatch`` blit. They are different DOOM
-operations and stay separate phases (see ``plan_status_bar.md`` §8d).
+operations and stay separate phases.
 
 The output is consumed two ways, from this one source of truth so they cannot
 disagree:
@@ -344,7 +346,8 @@ class HudBank:
 def bake_hud_bank(scale: int = 1, *, wad_path=DOOM1_WAD_PATH) -> HudBank:
     """Stack every E1M1 HUD patch (decimated to ``scale``) into one sentinel table.
 
-    The patch_id order is :data:`_HUD_PATCH_NAMES`; the draw-list (Step 6) keys
+    The patch_id order is :data:`_HUD_PATCH_NAMES`; the draw-list baked by
+    :func:`bake_hud_draw_list` (consumed by the statusbar renderer) keys
     patches by the same ``patch_ids`` map so the graph and the bake agree.
     """
     bank = load_hud_patches(wad_path=wad_path)

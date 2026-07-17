@@ -1,5 +1,10 @@
 """Dynamic traversal edges for BSP return handling.
 
+This module runs once at compile time: it builds part of the computation graph
+that torchwright lowers into the transformer's weights. Nothing here executes
+during inference — at render time, only the compiled transformer runs. Coined
+terms: see GLOSSARY.md.
+
 The AR protocol walks the BSP tree depth-first. `TRAVERSE_ENTER` and
 `TRAVERSE_BETWEEN` choose a child and descend one depth level; later
 `TRAVERSE_RETURN(entity_u, depth)` has to recover the active parent frame.
@@ -11,9 +16,9 @@ rollout descend from". This implementation records the edge actually taken,
 keyed by `(child entity, child depth)`, and stores the parent plus whether that
 child was visited as the first or second child.
 
-The only changes from the original are the import block (``Vec`` -> ``Node``;
-``Past`` -> ``GraphPast``; std helpers from the real-side shim; ``make_token``
--> ``emit_token``; ``add_const``/``DEPTH_NONZERO`` from ``render_ops``).
+The ``after_return`` emitter returns an emit *head* (``make_token_head``): the
+renderer's dispatch folds over heads and stamps one shared derived tail after
+selecting the winning branch.
 """
 
 from __future__ import annotations

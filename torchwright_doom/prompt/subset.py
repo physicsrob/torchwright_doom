@@ -112,6 +112,11 @@ def subset_by_bbox(
 ) -> MapData:
     """Renumber ``md`` to the subset of segs intersecting the given world-space box.
 
+    The box is the scene config's fixed ``region:`` rectangle — declared
+    once per scene, part of the bundle's identity, never derived from the
+    camera. Every pose within it reads the same prompt geometry; this is
+    input preparation (cropping the level file), not visibility work.
+
     Coordinates are world-space (raw WAD frame, before mean-centring).
     The returned :class:`MapData` carries the centroid in
     ``scene_origin`` so callers can shift world-frame inputs (player

@@ -10,9 +10,12 @@ sources of truth, and is kept in step with them:
 
 - **`protocol_registry.render_protocol_table()`** — every token type, its
   phase, owner, role, and dispatch wiring (the *static* table).
-- **`pydoom/drafter.py`** — the reference state machine that *produces*
-  the exact token order (the *dynamic* sequence). When this prose and the
-  drafter disagree, the drafter is right.
+- **`pydoom/drafter.py`** — the reference state machine that predicts the
+  exact token order (the *dynamic* sequence): the test-only conformance
+  oracle the rollout is diffed against in the graph gates (see *drafter*
+  in `GLOSSARY.md`). It never runs during inference — at inference the
+  transformer alone produces tokens. When this prose and the drafter
+  disagree, the drafter is right.
 
 Token names below are the **readable-surface** names emitted by
 `tokenizer/surface.py` — the same names the blog's "this is the real
@@ -35,14 +38,17 @@ value is, in which case they go **positional** (`R_AddLine(34)`,
 word itself (`oneSided`/`twoSided`, `floorMark`/`ceilMark`). The honesty guard
 keeps real DOOM calls (`R_*` / `ST_*`) literal — `R_CheckPlane`'s `kind` goes
 positional, never into the name. The full label rules live in
-`tokenizer/display.py` and `blog/pieces/doom/docs/surface_legend.md`; the
-rendered ground truth is the two figures.
+`tokenizer/display.py` (and, in the torchdoom umbrella checkout, the blog's
+`pieces/doom/docs/surface_legend.md`); the rendered ground truth is the two
+figures.
 
 **Carriers fold into their marker.** The stream carries wide numbers as a
 two-token pair: a **marker** token immediately followed by its **carrier**
 — a `value` token (a float squashed into the marker's `[-1, 1]` range) or
 an `angleValue` token (a signed BAM integer). The marker chooses the range
-(`marker_ranges.MARKER_RANGE`); the carrier never stores it. In the
+(`marker_ranges.MARKER_RANGE`); the carrier never stores it. The `R`-tags
+in comments below (`R0`, `R3`–`R9`) name those per-marker numeric ranges —
+their bounds live in `marker_ranges.py`. In the
 readable surface the carrier folds into the marker's parens as a trailing
 positional, so this doc writes the *de-quantized physical value* in angle
 brackets there:
@@ -67,8 +73,17 @@ the owner modules, not here.
 ## Prefill (the prompt)
 
 Before autoregression the model reads a flat prompt encoding the sliced
-scene (`prompt/build.py`). It is replayed verbatim, not predicted. Block
-order:
+scene (`prompt/build.py`). It is replayed verbatim, not predicted.
+
+**What the prompt may contain:** any **view-independent** static-scene
+fact — raw map records, and static per-seg classifications derived from
+them host-side before generation (e.g. `emptyLine`, `closedDoor`,
+`lightStatic` below, DOOM's `R_AddLine`-time facts about the *map*, not
+the *view*). All **view-dependent** work — visibility, ordering,
+projection, occlusion — happens inside the transformer. This is the
+input-side dumb-host boundary (see README).
+
+Block order:
 
 ```
 viewx(<x>) viewy(<y>) viewz(<z>) viewangle(<bam>)         # player state
@@ -101,7 +116,8 @@ for each subsector s with planes:
 begin                                                     # final prefill marker; seeds AR
 ```
 
-The render of E1M1's real prefill is `blog/pieces/doom/e1m1_prompt_surface.txt`.
+The render of E1M1's real prefill ships in the torchdoom umbrella checkout
+as the blog's `pieces/doom/e1m1_prompt_surface.txt`.
 
 ## AR entry
 
@@ -135,7 +151,11 @@ procedure side_bit_setup_pass():
 
 The BSP tree is walked depth-first from the root. Each internal node
 descends its front child unconditionally, then its back child only if the
-node's bounding box has an uncovered screen column.
+node's bounding box has an uncovered screen column. "Front"/"back" here
+are view-dependent: the walk tests which side of the node's static
+partition line the camera is on (`R_PointOnSide` — the side-bit setup
+pass above) — the prefill's `child1`/`child0` record the static children,
+and the side bit decides which one is "front" for this camera.
 
 ```
 procedure visit_node(n, d):
@@ -269,7 +289,7 @@ the per-plane visibility checks, then the column loop.
 ```
 procedure wall_range_setup(i, x1, x2):
     R_StoreWallRange(i)
-    segKpart(<part mask>)                        # decoded: none | mid | mid+upper | ... (4*mid+2*upper+lower)
+    segKpart(<part mask>)                        # slot `pat`; decoded: none | mid | mid+upper | ... (4*mid+2*upper+lower)
 
     segDcTmidMid(<middle dc_texturemid>)         # value, R3
     segDcTmidUpper(<upper dc_texturemid>)        # value, R4

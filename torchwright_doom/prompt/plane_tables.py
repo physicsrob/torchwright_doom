@@ -1,9 +1,14 @@
 """Canonical visplane tables for a :class:`MapData`.
 
-Deduplicates floors and ceilings into a stable plane list and tags
-each subsector with its floor/ceiling plane ID. Both the prompt's
-visplane section and the renderer's plane-marking stage read from
-this.
+Host-side prompt preparation (view-independent — the plane list depends
+only on map data; see the input-side boundary in README). Deduplicates
+floors and ceilings into a stable plane list and tags each subsector
+with its floor/ceiling plane ID. Sole consumer: the prompt builder
+(``build.py``), which emits these as the prefill's ``planeDef`` /
+``ssFloorPlane`` / ``ssCeilingPlane`` tokens — the in-model plane-marking
+stage then reads those *tokens*. The pydoom oracle keeps its own private
+``_build_plane_tables`` (``pydoom/renderer.py``) with the same dedup
+rule.
 """
 
 from __future__ import annotations
@@ -75,9 +80,10 @@ def _subsector_front_sector(md: MapData, s: int) -> Sector | None:
 def build_plane_tables(
     md: MapData, flat_ids: dict[str, int] | None = None
 ) -> PlaneTables:
-    # Global asset flat numbering (matches the original), so PLANE_DEF.flat_id
-    # *and* plane ordering (sorted by flat_id) align with get_prefill. Assumes
-    # the map's flats are compiled into asset_config.FLAT_ID_BY_NAME.
+    # Global asset flat numbering, so PLANE_DEF.flat_id *and* plane ordering
+    # (sorted by flat_id) match the PROTOCOL.md prefill spec and the pydoom
+    # oracle's numbering. Assumes the map's flats are compiled into
+    # asset_config.FLAT_ID_BY_NAME.
     flat_ids = FLAT_ID_BY_NAME if flat_ids is None else flat_ids
 
     keys: set[_PlaneKey] = set()

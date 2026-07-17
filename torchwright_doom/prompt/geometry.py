@@ -59,11 +59,8 @@ def bake_segments(md: MapData) -> list[Segment]:
             back_ceiling = None
             upper_name = "-"
             lower_name = "-"
-            mid_name = (
-                sd_front.middle
-                if sd_front.middle != "-"
-                else (sd_front.lower if sd_front.lower != "-" else sd_front.upper)
-            )
+            # One-sided lines use the midtexture only, as in R_StoreWallRange.
+            mid_name = sd_front.middle
 
         v1 = md.vertices[seg.v1]
         v2 = md.vertices[seg.v2]

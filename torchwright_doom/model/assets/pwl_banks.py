@@ -1,24 +1,31 @@
 """Module-level texture-coordinate wrap builders for the pixel pass.
 
+This module runs once at compile time: it builds part of the computation graph that torchwright lowers into the transformer's weights. Nothing here executes during inference — at render time, only the compiled transformer runs. Coined terms: see GLOSSARY.md.
+
 The two floor-then-wrap forms the wall texel pass and the flat span pass
 compute:
 
 * ``build_v_mod_bank`` — one ``v_floor mod H`` PWL per distinct wall-texture
   height (aligned to ``WALL_HEIGHT_BANK``); each wall bank reads its own
   height's entry directly (banks are single-height, see ``asset_banks``).
-  The closures consume the FLOORED coordinate (``uv_compute`` floors once,
-  shared): folding the wrap into per-height ``floor_int(output_map=…)`` ops
-  was measured and REVERTED — floor_int's bounded-step stage materializes
-  ~2046 residual columns, and four of them live at once exceed the d=4096
-  compile gate (the depth oracle doesn't model column capacity; the gate
-  does).  One shared floor + K single-FFN mod PWLs is the width-safe form
-  until torchwright grows a multi-``output_map`` floor_int that shares the
-  step stage (stage 2 is hidden lanes, not residual columns).
+  The closures consume the FLOORED coordinate: ``uv_compute`` floors once
+  and every height's mod PWL shares that result, so K heights cost one
+  shared floor plus K single-FFN PWLs.  Folding the wrap into per-height
+  ``floor_int(output_map=…)`` ops instead is rejected on residual width:
+  floor_int's bounded-step stage materializes ~2046 residual columns per
+  op, and one per height — four for the committed WAD, ~8k columns live at
+  once — is on the order of the entire production residual (``d: 8192`` in
+  the committed configs; column capacity is what the compile gate,
+  ``tests/scene/test_forward_compiles.py``, enforces).  A torchwright
+  ``floor_int`` accepting multiple ``output_map`` functions and sharing the
+  step stage would move that cost into FFN hidden units instead of residual
+  columns; until one exists, the shared-floor form is the width-safe one.
 * ``FLOOR_MOD64`` — the ``floor(frac) mod 64`` wrap for the 64×64 flat tiles,
   as ONE op via ``output_map`` (``g(floor(x))`` shares floor's integer
-  breakpoints; see torchwright ``arithmetic_ops.floor_int``).  A 1:1 swap for
-  the old floor→PWL pair — no duplication, so no width cost.  Consumes the
-  RAW native coordinate — callers must NOT pre-floor.
+  breakpoints; see torchwright ``arithmetic_ops.floor_int``).  Folding the
+  wrap into the floor duplicates nothing, so the 64-wrap adds no residual
+  columns beyond the floor's own.  Consumes the RAW native coordinate —
+  callers must NOT pre-floor.
 
 These are texture-coordinate wraps for the pixel pass — NOT the numeric
 digit-quadratic encoding PWL in ``emit.py`` (which splits an integer step
@@ -26,10 +33,9 @@ index into base-256 digits to address an embedding row).
 
 The builders return *closures* (they build no graph node until called), so
 module-level state is node-free at import — ``global_node_id`` stays ``0`` —
-exactly like ``assets._U_MOD_BY_BANK`` / ``lighting._COLORMAP_ROW_PWLS``.
-The original ``INV_COS_PWL`` is **not** ported: ``u_native`` rides the
-already-landed ``u_tan_by_column`` derived column, not an in-graph
-inverse-cosine.
+exactly like ``lighting._COLORMAP_ROW_PWLS``.  Wall U needs no in-graph
+inverse-cosine: ``u_native`` rides the ``u_tan_by_column`` derived column
+(precomputed per-screen-column data; see ``vocab.py``).
 """
 
 from __future__ import annotations

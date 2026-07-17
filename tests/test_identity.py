@@ -41,9 +41,8 @@ _RUN_VARIANT = RunConfig(
     pose=PoseConfig(x=1.0, y=2.0, angle=3, viewz=4.0),
 )
 
-# Computed with _git_sha pinned to "pinned-test-sha" (plan_cleanup_v2
-# Workstream 5 gate: cache keys for unchanged config content do not change
-# because code moved).  Re-pinned 2026-07-14 when the committed configs
+# Computed with _git_sha pinned to "pinned-test-sha" — the gate: cache keys
+# for unchanged config content do not change because code moved.  Re-pinned 2026-07-14 when the committed configs
 # gained model.n_heads: 32 — a deliberate content change that must move
 # the key exactly once.
 _PINNED_KEYS = {

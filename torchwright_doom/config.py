@@ -1,6 +1,6 @@
 """The render-job spec: YAML config loading, validation, run-knob resolution.
 
-Shared root authority (plan_cleanup_v2 Decision 5): ``bundle/`` and the run
+Shared root authority: ``bundle/`` and the run
 path both consume it, so it is owned by neither. Cache identity (compile
 payloads, cache keys, git/WAD hashing) lives in the sibling root
 ``identity.py``. Note ``torchwright_doom/identity.py`` (cache identity)
@@ -35,26 +35,30 @@ class ModelConfig:
     d: int = 4096
     d_head: int = 32
     # Partial-rotary width (vanilla HF partial_rotary_factor): the first d_rot
-    # dims of every head rotate, the last d_head - d_rot are the unrotated NoPE
-    # tail that content rides (exactly position-free).  None = full rotary
-    # (d_rot == d_head).  The two committed configs set 64 (with d_head 128) so
-    # the wide clip content fits the tail and the global position tiebreak rides
-    # a rotated plane.  Rides the compile-cache key via asdict(config.model).
+    # dims of every head rotate, the last d_head - d_rot are the unrotated
+    # "NoPE tail" — dims with no positional encoding, whose values read back
+    # identically from any query position.  None = full rotary
+    # (d_rot == d_head).  The two committed configs set 64 (with d_head 128)
+    # so the wide per-column clip values (the floor/ceiling clip arrays that
+    # attention must recover position-free) fit the tail, while the
+    # global-position recency tiebreak (see GLOSSARY.md: recency) rides a
+    # rotated plane.  Rides the compile-cache key via asdict(config.model).
     d_rot: int | None = None
     scale: int = 4
-    # Pixel paint detail: "high" = 1 screen column per rendered column (today),
+    # Pixel paint detail: "high" = 1 screen column per rendered column,
     # "low" = 2 (DOOM low-detail; the host blits W=2). The 3D view renders
-    # SCREEN_WIDTH // pixel_width columns either way. Default "high" preserves
-    # today's render for any config that doesn't opt in (a "low" default would
-    # silently halve the column count of the scale-2 config). Rides the
-    # compile-cache key via asdict(config.model) (busts every key once).
+    # SCREEN_WIDTH // pixel_width columns either way. Both committed configs
+    # set "low"; the "high" default exists so a config that omits the field
+    # keeps every column (a "low" default would silently halve its column
+    # count). Rides the compile-cache key via asdict(config.model).
     detail: str = "high"
     # Status bar / viewport split. When True, the 3D view shrinks to the top
     # VIEW_HEIGHT rows (the projection horizon moves to the view centre) and the
     # bottom BAR_HEIGHT rows are reserved for DOOM's status bar — DOOM's default
-    # screenblocks-10 layout. False (default) keeps today's full-screen view,
-    # bit-identical (VIEW_HEIGHT collapses to SCREEN_HEIGHT). Changes the graph
-    # geometry, so it rides the compile-cache key via asdict(config.model).
+    # screenblocks-10 layout. False (the default) renders a bar-less
+    # full-screen view (VIEW_HEIGHT collapses to SCREEN_HEIGHT); both
+    # committed configs set true. Changes the graph geometry, so it rides
+    # the compile-cache key via asdict(config.model).
     hud: bool = False
     d_hidden: int | None = None
     # Per-layer attention-head capacity cap (stock num_attention_heads is the
@@ -107,8 +111,8 @@ class RunConfig:
     """
 
     # 61440 covers a full 320x200 frame with ample headroom; the cap is the
-    # pos-encoding table (max_seq_len 65536), and an oversized demand makes
-    # empty_past() reject before prefill.
+    # pos-encoding table (max_seq_len 65536): infer.py rejects a prompt +
+    # generation demand beyond max_position_embeddings before generating.
     max_new_tokens: int = 61440
     pose: PoseConfig = PoseConfig()
 
@@ -332,8 +336,10 @@ def _known_keys(value: dict[str, Any], allowed: set[str], name: str) -> None:
 
 
 def _load_yaml_subset(path: Path) -> dict[str, Any]:
-    # Hand-rolled ON PURPOSE: pyyaml is not in the workspace lockfile and
-    # one render config does not justify the dependency.  The accepted
+    # Hand-rolled ON PURPOSE: no workspace package declares a YAML
+    # dependency (pyyaml reaches the lockfile only as another tool's
+    # transitive dependency) and one render config does not justify adding
+    # a runtime import surface.  The accepted
     # grammar is the subset the committed config uses — nested mappings by
     # two-space indentation, inline [list] / {mapping} literals, scalars
     # (int / float / bool / null / quoted or bare strings), '#' comments.
