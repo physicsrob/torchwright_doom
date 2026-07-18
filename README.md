@@ -1,6 +1,7 @@
 # torchwright_doom
 
-DOOM rendering and game graph compilation, built on [torchwright](https://github.com/physicsrob/torchwright). Flagship project of the [torchdoom](https://github.com/physicsrob/torchdoom) umbrella.
+DOOM rendering and game graph compilation, built on
+[torchwright](https://github.com/physicsrob/torchwright). 
 
 ## What this is
 
@@ -23,7 +24,9 @@ The **dumb-host principle** governs everything: all rendering logic — wall
 selection, visibility, distance, texture lookup, compositing — lives inside
 the transformer. During generation the host only feeds tokens and writes
 pixels; it does no geometry, no sorting, and no arithmetic on the values the
-model computes. Two boundary rules make that claim precise:
+model computes. Pure bitblitting.
+
+Two boundary rules make that claim precise:
 
 - **Input side (before generation):** the host builds the prompt — it crops
   the level file to a fixed world-space rectangle declared once in the scene
@@ -34,8 +37,8 @@ model computes. Two boundary rules make that claim precise:
   transformer. This is input preparation, like loading a level file.
 - **Output side (after generation):** the decode tools apply the cursor
   protocol the model itself emits — every cursor set, direction mark, and
-  run width is a model output token; the host just executes those
-  instructions and blits (see *Running* below).
+  run width is a model output token; the host just keeps track of the cursor
+  and blits.
 
 (See `CLAUDE.md` for the principle as enforced during development.)
 
