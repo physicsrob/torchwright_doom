@@ -22,12 +22,15 @@ _RENDER_VERBOSE_COMPILE := $(if $(filter-out 0,$(VERBOSE_COMPILE)),--verbose-com
 # the sampled schedule is saved to local /tmp instead (path printed).  Any
 # non-empty, non-0 value enables it.  `compile` only.
 _RENDER_DISABLE_CACHE := $(if $(filter-out 0,$(DISABLE_CACHE)),--disable-cache)
+_RENDER_FORCE_RESOLVE := $(if $(filter-out 0,$(FORCE_RESOLVE)),--force-resolve)
 _RENDER_PNG := $(if $(PNG),--png)
 _RENDER_COMPARE := $(if $(COMPARE),--compare)
 _RENDER_COMPILE_ARGS = $(strip \
 	--config $(CONFIG) \
 	$(_RENDER_VERBOSE_COMPILE) \
 	$(_RENDER_DISABLE_CACHE) \
+	$(if $(SOLVER_SEED),--solver-seed $(SOLVER_SEED)) \
+	$(_RENDER_FORCE_RESOLVE) \
 )
 _RENDER_RUN_ARGS = $(strip \
 	--config $(CONFIG) \

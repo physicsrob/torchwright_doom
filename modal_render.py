@@ -24,6 +24,8 @@ import there.
 
 from __future__ import annotations
 
+import json
+import os as _os
 import time
 from pathlib import Path
 
@@ -55,8 +57,6 @@ _COMPILE_CPUS = 64
 # here must match. B200 is the default: its 192 GB HBM fits the ~98 GB dense
 # fp32 model plus the growing stock generation cache, and its high bandwidth
 # makes autoregressive decode fast.
-import os as _os
-
 _RENDER_GPU = _os.environ.get("RENDER_GPU", "b200")
 
 
@@ -141,6 +141,8 @@ def compile_remote(
     compile_payload: dict,
     verbose_compile: bool,
     disable_cache: bool = False,
+    solver_seed: int | None = None,
+    force_resolve: bool = False,
 ) -> dict:
     import os
     import sys
@@ -183,6 +185,8 @@ def compile_remote(
         verbose_compile=verbose_compile,
         cache_dir=cache_dir,
         compile_payload=compile_payload,
+        solver_seed=solver_seed,
+        force_resolve=force_resolve,
     )
     if disable_cache:
         # Ship the sampled schedule back by VALUE so the local side can
@@ -267,7 +271,11 @@ def _save_nocache_schedules(result: dict) -> None:
 
 
 def _compile_on_modal(
-    config_path: Path, verbose_compile: bool, disable_cache: bool = False
+    config_path: Path,
+    verbose_compile: bool,
+    disable_cache: bool = False,
+    solver_seed: int | None = None,
+    force_resolve: bool = False,
 ) -> str:
     """Compute the compile-cache key LOCALLY and compile on Modal on a miss.
 
@@ -324,9 +332,13 @@ def _compile_on_modal(
             compile_payload,
             verbose_compile,
             True,
+            solver_seed,
+            force_resolve,
         )
         _save_nocache_schedules(result)
-    elif _bundle_cache_probe_remote.remote(cache_subdir, compile_payload):
+    elif not force_resolve and _bundle_cache_probe_remote.remote(
+        cache_subdir, compile_payload
+    ):
         print(f"[local] compile cache HIT HF_BUNDLE_VOLUME:/{cache_subdir}", flush=True)
     else:
         print(
@@ -340,6 +352,9 @@ def _compile_on_modal(
             cache_subdir,
             compile_payload,
             verbose_compile,
+            False,
+            solver_seed,
+            force_resolve,
         )
     return cache_subdir
 
@@ -349,6 +364,8 @@ def compile_only(
     config: str = "configs/e1m1.yaml",
     verbose_compile: bool = False,
     disable_cache: bool = False,
+    solver_seed: int | None = None,
+    force_resolve: bool = False,
 ):
     """``make compile`` — compile a config to the Modal cache volume, no render.
 
@@ -363,7 +380,13 @@ def compile_only(
     local /tmp instead of SCHEDULE_VOLUME (see _save_nocache_schedules).
     """
     config_path = Path(config)
-    cache_subdir = _compile_on_modal(config_path, verbose_compile, disable_cache)
+    cache_subdir = _compile_on_modal(
+        config_path,
+        verbose_compile,
+        disable_cache,
+        solver_seed,
+        force_resolve,
+    )
     if disable_cache:
         print(
             "[local] [nocache] compile complete — HF_BUNDLE_VOLUME/SCHEDULE_VOLUME "
@@ -375,6 +398,121 @@ def compile_only(
             f"[local] compile complete -> HF_BUNDLE_VOLUME:/{cache_subdir}",
             flush=True,
         )
+
+
+@app.function(
+    cpu=8,
+    memory=32768,
+    timeout=86400,
+    volumes={"/root/.cache/torchwright_doom/hf_phi3": HF_BUNDLE_VOLUME},
+    secrets=[modal.Secret.from_name("huggingface")],
+)
+def publish_private_remote(
+    cache_subdir: str,
+    compile_payload: dict,
+    repo_id: str,
+    expected_layers: int,
+    expected_solver_seed: int,
+) -> dict:
+    """Validate one cached release bundle and upload it to a private Hub repo."""
+    import sys
+
+    from huggingface_hub import HfApi
+
+    if "/root" not in sys.path:
+        sys.path.insert(0, "/root")
+
+    from torchwright_doom.bundle.manifest import (
+        MANIFEST_NAME,
+        validate_bundle_manifest,
+    )
+
+    HF_BUNDLE_VOLUME.reload()
+    bundle = Path("/root/.cache/torchwright_doom/hf_phi3") / cache_subdir
+    manifest = validate_bundle_manifest(bundle, expected_payload=compile_payload)
+    actual_layers = int(manifest["compile"]["n_layers"])
+    actual_seed = manifest["compile"].get("solver_seed")
+    if actual_layers != expected_layers:
+        raise RuntimeError(
+            f"refusing Hub upload: expected {expected_layers} layers, "
+            f"bundle has {actual_layers}"
+        )
+    if actual_seed != expected_solver_seed:
+        raise RuntimeError(
+            f"refusing Hub upload: expected solver seed {expected_solver_seed}, "
+            f"bundle records {actual_seed!r}"
+        )
+
+    api = HfApi()
+    api.create_repo(repo_id, repo_type="model", private=True, exist_ok=True)
+    if not api.model_info(repo_id).private:
+        raise RuntimeError(f"refusing upload because Hub repo is public: {repo_id}")
+
+    commit = api.upload_folder(
+        folder_path=str(bundle),
+        repo_id=repo_id,
+        repo_type="model",
+        commit_message=(
+            f"Publish E1M1 {actual_layers}-layer seed-{actual_seed} bundle"
+        ),
+        # If a retry emits fewer shards, do not leave stale model weights in
+        # the private staging repo.
+        delete_patterns=["model-*.safetensors"],
+    )
+    remote_files = set(api.list_repo_files(repo_id, repo_type="model"))
+    expected_files = {MANIFEST_NAME, *manifest["files"]}
+    missing = sorted(expected_files - remote_files)
+    if missing:
+        raise RuntimeError(f"Hub upload is missing files: {missing}")
+    info = api.model_info(repo_id)
+    if not info.private:
+        raise RuntimeError(f"Hub repo became public during upload: {repo_id}")
+    return {
+        "repo_id": repo_id,
+        "url": f"https://huggingface.co/{repo_id}",
+        "private": True,
+        "commit": str(commit.commit_url),
+        "revision": commit.oid,
+        "n_layers": actual_layers,
+        "solver_seed": actual_seed,
+        "n_files": len(remote_files),
+    }
+
+
+@app.local_entrypoint()
+def publish_private(
+    repo_id: str,
+    config: str = "configs/e1m1.yaml",
+    solver_seed: int = 0,
+    expected_layers: int = 38,
+    verbose_compile: bool = False,
+    force_resolve: bool = False,
+):
+    """Compile the selected release draw, validate it, and stage it privately."""
+    from torchwright_doom.config import load_render_config, resolve_wad_path
+    from torchwright_doom.identity import canonical_compile_payload
+
+    if "/" not in repo_id:
+        raise ValueError("repo_id must include its Hugging Face namespace")
+    config_path = Path(config)
+    cache_subdir = _compile_on_modal(
+        config_path,
+        verbose_compile,
+        False,
+        solver_seed,
+        force_resolve,
+    )
+    render_config = load_render_config(config_path)
+    wad_path = resolve_wad_path(render_config, base_dir=config_path.parent)
+    compile_payload = canonical_compile_payload(render_config, wad_path)
+    result = publish_private_remote.remote(
+        cache_subdir,
+        compile_payload,
+        repo_id,
+        expected_layers,
+        solver_seed,
+    )
+    print("PRIVATE_HUB_PUBLICATION " + json.dumps(result, sort_keys=True), flush=True)
 
 
 @app.function(

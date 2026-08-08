@@ -286,6 +286,8 @@ def test_direct_builder_passes_exact_graph_embedding_and_phi3_contract(
         wad_path=wad,
         destination=destination,
         compile_payload=payload,
+        solver_seed=0,
+        force_resolve=True,
     )
     assert captured["output"] is graph_output
     assert captured["embedding"] is exact_embedding
@@ -293,9 +295,11 @@ def test_direct_builder_passes_exact_graph_embedding_and_phi3_contract(
     assert captured["kwargs"]["bias"] is False
     assert captured["kwargs"]["write_tokenizer"] is False
     assert captured["kwargs"]["rms_norm_const_exp"] == 63
+    assert captured["kwargs"]["_solver_seed"] == 0
+    assert captured["kwargs"]["_force_resolve"] is True
     assert report.n_layers == 3
     model_config = json.loads((destination / "config.json").read_text())
     assert model_config["original_max_position_embeddings"] == config.model.max_seq_len
-    assert json.loads((destination / "doom_bundle_manifest.json").read_text())[
-        "validation"
-    ]["complete"]
+    manifest = json.loads((destination / "doom_bundle_manifest.json").read_text())
+    assert manifest["validation"]["complete"]
+    assert manifest["compile"]["solver_seed"] == 0

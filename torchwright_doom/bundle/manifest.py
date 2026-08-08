@@ -86,6 +86,7 @@ def candidate_manifest(
     bos_row: int,
     eos_row: int,
     origin: tuple[float, float],
+    solver_seed: int | None = None,
 ) -> dict[str, Any]:
     files = file_manifest(bundle)
     prompt_bytes = prompt_path.read_bytes()
@@ -137,7 +138,10 @@ def candidate_manifest(
         },
         "generation": {"max_new_tokens": int(config.run.max_new_tokens)},
         "schedule": report.schedule_provenance.to_dict(),
-        "compile": {"n_layers": int(report.n_layers)},
+        "compile": {
+            "n_layers": int(report.n_layers),
+            "solver_seed": solver_seed,
+        },
         "files": files,
         "validation": {"complete": False, "format_version": LAYOUT_VERSION},
     }

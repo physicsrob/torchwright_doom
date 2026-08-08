@@ -40,8 +40,7 @@ def _ignore(p: Path) -> bool:
 def _with_workspace_sources(image: modal.Image) -> modal.Image:
     """Attach local files last, after every dependency-building operation."""
     return (
-        image.add_local_file(str(_TORCHWRIGHT / "E8.8.1024.txt"), "/root/E8.8.1024.txt")
-        .add_local_file(str(_HERE / "doom1.wad"), "/root/doom1.wad")
+        image.add_local_file(str(_HERE / "doom1.wad"), "/root/doom1.wad")
         .add_local_python_source(
             "torchwright", "torchwright_doom", "tests", "scripts", "modal_image"
         )

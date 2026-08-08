@@ -45,6 +45,8 @@ def compile_config(
     verbose_compile: bool = False,
     cache_dir: str | Path | None = None,
     compile_payload: dict[str, Any] | None = None,
+    solver_seed: int | None = None,
+    force_resolve: bool = False,
 ) -> dict[str, Any]:
     """Compile ``config_path`` into a complete published bundle on a cache
     miss. ``cache_dir`` / ``compile_payload`` exist for the Modal path: the
@@ -60,16 +62,21 @@ def compile_config(
         if cache_dir is not None
         else hf_bundle_cache_dir(config, wad_path)
     )
-    if is_complete_hf_bundle(destination, expected_payload=payload):
+    if not force_resolve and is_complete_hf_bundle(
+        destination, expected_payload=payload
+    ):
         print(f"[compile] direct-HF cache hit {destination}", flush=True)
         return {"cache_dir": str(destination), "cache_hit": True}
-    print(f"[compile] direct-HF cache miss {destination}", flush=True)
+    reason = "forced resolve" if force_resolve else "cache miss"
+    print(f"[compile] direct-HF {reason} {destination}", flush=True)
     report = compile_phi3_bundle(
         config,
         wad_path=wad_path,
         destination=destination,
         compile_payload=payload,
         verbose=verbose_compile,
+        solver_seed=solver_seed,
+        force_resolve=force_resolve,
     )
     provenance = report.manifest["schedule"]
     # Schedule-provenance fields, defined by torchwright's ScheduleProvenance
@@ -298,6 +305,8 @@ def compile_phi3_bundle(
     destination: str | Path,
     compile_payload: dict[str, Any],
     verbose: bool = False,
+    solver_seed: int | None = None,
+    force_resolve: bool = False,
 ) -> BundleReport:
     """Compile and publish one complete production Doom bundle (with rollback)."""
     if config.map.upper() != "E1M1":
@@ -375,6 +384,8 @@ def compile_phi3_bundle(
             verbose=verbose,
             add_bos_token=False,
             write_tokenizer=False,
+            _solver_seed=solver_seed,
+            _force_resolve=force_resolve,
         )
         tokenizer.save_pretrained(stage)
         fingerprint = vocab_fingerprint()
@@ -409,6 +420,7 @@ def compile_phi3_bundle(
             bos_row=special.bos_row,
             eos_row=special.eos_row,
             origin=scene.origin,
+            solver_seed=solver_seed,
         )
         _write_json(stage / MANIFEST_NAME, manifest)
         _validate_complete_staged_bundle(stage, config, prompt_rows)
