@@ -28,7 +28,12 @@ import torch
 from torchwright.compiler.export import compile_headless
 from torchwright.ops.inout_nodes import create_rope_config
 
-from torchwright_doom.model.embedding import W_EMBED, build_doom_embedding
+from torchwright_doom.model.embedding import (
+    DOOM_UNK_TOKEN,
+    TOKEN_VOCAB,
+    W_EMBED,
+    build_doom_embedding,
+)
 from torchwright_doom.model.past import GraphPast
 from torchwright_doom.model.render_ops import add_const
 from torchwright_doom.model.std import make_token
@@ -37,6 +42,15 @@ from torchwright_doom.model.vocab import THINK_SIDE
 from ..prefill_fixture import row_index
 
 _STEPS = 5  # walk THINK_SIDE(0) -> ... -> THINK_SIDE(5); stays within node range
+
+
+def test_doom_embedding_appends_zero_unknown_without_shifting_rows() -> None:
+    emb = build_doom_embedding("token_ids")
+
+    assert emb.tokenizer.vocab[-1] == DOOM_UNK_TOKEN
+    assert len(emb.tokenizer.vocab) == TOKEN_VOCAB.n_rows + 1
+    assert torch.equal(emb.table[:-1], W_EMBED)
+    assert torch.equal(emb.table[-1], torch.zeros_like(emb.table[-1]))
 
 
 def test_in_graph_embedding_autoregressive_counter(device) -> None:

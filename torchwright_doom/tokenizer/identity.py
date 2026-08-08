@@ -7,7 +7,7 @@ import json
 from typing import Any
 
 from ..model.constants import COLUMN_COUNT, PIXEL_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH
-from ..model.embedding import TOKEN_VOCAB
+from ..model.embedding import MODEL_VOCAB_SIZE, TOKEN_VOCAB
 from ..model.tokens import FloatSlot, IntSlot
 from ..model.vocab import VOCAB_TYPES
 
@@ -31,5 +31,5 @@ def vocab_fingerprint() -> str:
             elif isinstance(slot, FloatSlot):
                 slots.append([name, "float", slot.lo, slot.hi, slot.levels])
         signature.append([ttype.name, slots])
-    payload = json.dumps([signature, TOKEN_VOCAB.n_rows], sort_keys=True)
+    payload = json.dumps([signature, MODEL_VOCAB_SIZE], sort_keys=True)
     return hashlib.sha256(payload.encode()).hexdigest()

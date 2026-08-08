@@ -7,7 +7,7 @@ pytest.importorskip("tokenizers")
 
 from transformers import AutoTokenizer
 
-from torchwright_doom.model.embedding import TOKEN_VOCAB
+from torchwright_doom.model.embedding import DOOM_UNK_TOKEN, TOKEN_VOCAB
 from torchwright_doom.tokenizer.rows import row_index
 from torchwright_doom.tokenizer import display
 from torchwright_doom.tokenizer.standard import (
@@ -28,7 +28,8 @@ def test_token_word_is_compact_label_from_same_fields() -> None:
 def test_standard_tokenizer_is_exhaustive_bijection(tmp_path) -> None:
     words = canonical_words()
     tokenizer = build_standard_tokenizer(words=words)
-    assert len(words) == TOKEN_VOCAB.n_rows
+    assert len(words) == TOKEN_VOCAB.n_rows + 1
+    assert words[-1] == DOOM_UNK_TOKEN
     assert tokenizer.get_vocab() == {word: row for row, word in enumerate(words)}
     assert tokenizer.convert_tokens_to_ids(words) == list(range(len(words)))
     assert tokenizer.bos_token_id == row_index(BOS, {})
@@ -50,7 +51,9 @@ def test_standard_tokenizer_is_exhaustive_bijection(tmp_path) -> None:
     assert loaded(text, add_special_tokens=False)["input_ids"] == sample
 
 
-def test_unknown_word_fails_instead_of_mapping_to_a_row() -> None:
+def test_unknown_word_maps_to_the_appended_zero_semantic_row() -> None:
     tokenizer = build_standard_tokenizer()
-    with pytest.raises(Exception, match="UNK"):
-        tokenizer("definitely-not-a-doom-row", add_special_tokens=False)
+    assert tokenizer.unk_token_id == TOKEN_VOCAB.n_rows
+    assert tokenizer("definitely-not-a-doom-row", add_special_tokens=False)[
+        "input_ids"
+    ] == [TOKEN_VOCAB.n_rows]

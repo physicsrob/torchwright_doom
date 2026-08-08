@@ -84,7 +84,7 @@ from typing import Any, Callable, Iterable, Mapping, cast
 import numpy as np
 import torch
 
-from torchwright.graph.embedding import Embedding
+from torchwright.graph.embedding import Embedding, unk_token
 from torchwright.graph.spherical_codes import index_to_vector
 
 from .tokens import Derived, FloatSlot, IntSlot, TokenType
@@ -674,22 +674,37 @@ def _digit_quad_block(indices: np.ndarray, n_cols: int) -> np.ndarray:
 TOKEN_VOCAB: TokenVocab = TokenVocab(VOCAB_TYPES)
 W_EMBED: torch.Tensor = _build_w_embed(TOKEN_VOCAB)
 assert W_EMBED.shape == (TOKEN_VOCAB.n_rows, TOKEN_VOCAB.layout.d_embed)
+DOOM_UNK_TOKEN: str = unk_token
+MODEL_VOCAB_SIZE: int = TOKEN_VOCAB.n_rows + 1
 
 
 def build_doom_embedding(input_name: str = "token_ids") -> Embedding:
     """Factory for the DOOM ``Embedding`` graph node.
+
+    The semantic ``TOKEN_VOCAB`` rows retain their exact ids. A final
+    zero-vector ``<unk>`` row satisfies the stock tokenizer/compiler contract
+    without adding a token the renderer can accidentally prefer over a valid
+    positive-scoring semantic row.
 
     ``input_name`` is the slot ``Embedding.compute`` reads from
     ``input_values`` — wired to the 1-wide integer ``token_ids`` input
     declared on the DOOM graph.
     """
     # ``Embedding`` carries a vocabulary list for introspection; build
-    # one-name-per-row entries from the (type, slot_values) table.
-    vocab_names = [_row_label(t, values) for t, values in TOKEN_VOCAB.row_to_token]
+    # one-name-per-row entries from the (type, slot_values) table, followed by
+    # the zero-semantic unknown row.
+    vocab_names = [
+        *(_row_label(t, values) for t, values in TOKEN_VOCAB.row_to_token),
+        DOOM_UNK_TOKEN,
+    ]
+    table = torch.cat(
+        [W_EMBED, torch.zeros((1, TOKEN_VOCAB.layout.d_embed), dtype=W_EMBED.dtype)],
+        dim=0,
+    )
     return Embedding(
         vocab=vocab_names,
         d_embed=TOKEN_VOCAB.layout.d_embed,
-        table=W_EMBED,
+        table=table,
         input_name=input_name,
         special_tokens=[],
     )

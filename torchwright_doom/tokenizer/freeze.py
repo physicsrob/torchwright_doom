@@ -7,7 +7,8 @@ by the stock tokenizer and the standalone bundle tools:
   names + decoded enums/bools/BSP-child-ids/bbox-codes baked into the label
   strings via :func:`display.token_label`) plus an identity card (screen config,
   fingerprint, n_rows). The display knobs are baked into the labels here so the
-  shipped kernel never ships the display layer.
+  shipped kernel never ships the display layer. The final row is the
+  zero-semantic ``<unk>`` token; all renderer row ids remain unchanged.
 * ``doom_tables.json`` — the one thing that combines two ids and so can't be
   pre-baked: the **carrier-fold rule** data (each marker's value-range bounds,
   the angle markers, the back-height sentinel, the carrier id ranges, the x/y
@@ -26,7 +27,7 @@ from pathlib import Path
 from typing import Sequence
 
 from ..model.asset_config import DEFAULT_ASSET_CONFIG, AssetConfig
-from ..model.embedding import TOKEN_VOCAB
+from ..model.embedding import DOOM_UNK_TOKEN, MODEL_VOCAB_SIZE, TOKEN_VOCAB
 from ..model.marker_ranges import ANGLE_MARKERS, MARKER_RANGE
 from ..model.tokens import FloatSlot, IntSlot
 from ..model.value_ranges import VALUE_RANGES
@@ -60,7 +61,8 @@ def build_vocab(wall_names: Sequence[str], flat_names: Sequence[str]) -> dict[st
                 "labels — see tokenizer.display.token_label."
             )
         vocab[label] = row
-    assert len(vocab) == TOKEN_VOCAB.n_rows
+    vocab[DOOM_UNK_TOKEN] = TOKEN_VOCAB.n_rows
+    assert len(vocab) == MODEL_VOCAB_SIZE
     return vocab
 
 
@@ -136,12 +138,14 @@ def build_vocab_blob(wall_names: Sequence[str], flat_names: Sequence[str]) -> di
         token_word(ttype, values, wall_names=wall_names, flat_names=flat_names)
         for ttype, values in TOKEN_VOCAB.row_to_token
     ]
+    labels.append(DOOM_UNK_TOKEN)
+    words.append(DOOM_UNK_TOKEN)
     if len(set(labels)) != len(labels) or len(set(words)) != len(words):
         raise ValueError("frozen Doom vocabulary labels and words must be injective")
     return {
         "format": "torchwright_doom.vocab.v2",
         "screen": screen_config(),
-        "n_rows": int(TOKEN_VOCAB.n_rows),
+        "n_rows": MODEL_VOCAB_SIZE,
         "fingerprint": vocab_fingerprint(),
         "vocab": {label: row for row, label in enumerate(labels)},
         "canonical_vocab": {word: row for row, word in enumerate(words)},
@@ -156,6 +160,15 @@ def build_vocab_blob(wall_names: Sequence[str], flat_names: Sequence[str]) -> di
                 "label": labels[row],
             }
             for row, (ttype, values) in enumerate(TOKEN_VOCAB.row_to_token)
+        ]
+        + [
+            {
+                "row": TOKEN_VOCAB.n_rows,
+                "type": DOOM_UNK_TOKEN,
+                "values": {},
+                "word": DOOM_UNK_TOKEN,
+                "label": DOOM_UNK_TOKEN,
+            }
         ],
     }
 

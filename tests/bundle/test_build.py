@@ -239,7 +239,7 @@ def test_direct_builder_passes_exact_graph_embedding_and_phi3_contract(
     compiler_vocab = [
         embedding_mod._row_label(ttype, values)
         for ttype, values in embedding_mod.TOKEN_VOCAB.row_to_token
-    ]
+    ] + [embedding_mod.DOOM_UNK_TOKEN]
     exact_embedding = SimpleNamespace(tokenizer=SimpleNamespace(vocab=compiler_vocab))
     graph_output = object()
     banks = SimpleNamespace(playpal=PLAYPAL)

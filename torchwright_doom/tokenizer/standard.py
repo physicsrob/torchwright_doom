@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Sequence
 
 from ..model.asset_config import DEFAULT_ASSET_CONFIG, AssetConfig
-from ..model.embedding import TOKEN_VOCAB
+from ..model.embedding import DOOM_UNK_TOKEN, MODEL_VOCAB_SIZE, TOKEN_VOCAB
 from .rows import row_index
 from ..model.vocab import BOS, DONE
 from .display import token_word
@@ -51,7 +51,7 @@ def doom_special_tokens(compiler_vocab: Sequence[str]) -> DoomSpecialTokens:
 
 
 def canonical_words(asset_config: AssetConfig | None = None) -> list[str]:
-    """Return the ordered, asset-aware canonical word for every model row."""
+    """Return every semantic row word plus the appended ``<unk>`` word."""
     config = asset_config or DEFAULT_ASSET_CONFIG
     words = [
         token_word(
@@ -62,6 +62,7 @@ def canonical_words(asset_config: AssetConfig | None = None) -> list[str]:
         )
         for ttype, values in TOKEN_VOCAB.row_to_token
     ]
+    words.append(DOOM_UNK_TOKEN)
     if any(any(ch.isspace() for ch in word) for word in words):
         raise ValueError("canonical Doom tokenizer words must not contain whitespace")
     if len(set(words)) != len(words):
@@ -73,7 +74,7 @@ def canonical_words(asset_config: AssetConfig | None = None) -> list[str]:
                     f"{row} both use {word!r}"
                 )
             seen[word] = row
-    if len(words) != TOKEN_VOCAB.n_rows:
+    if len(words) != MODEL_VOCAB_SIZE:
         raise AssertionError("canonical tokenizer width differs from model vocabulary")
     return words
 
@@ -91,7 +92,7 @@ def build_standard_tokenizer(
     *,
     words: Sequence[str] | None = None,
 ):
-    """Build the stock fast WordLevel tokenizer without adding any row ids."""
+    """Build WordLevel without shifting any semantic Doom row id."""
     from tokenizers import Tokenizer, pre_tokenizers
     from tokenizers.models import WordLevel
     from transformers import PreTrainedTokenizerFast
@@ -103,14 +104,16 @@ def build_standard_tokenizer(
 
     bos_row = row_index(BOS, {})
     eos_row = row_index(DONE, {})
-    raw = Tokenizer(WordLevel(vocab=vocab, unk_token=None))
+    if vocab.get(DOOM_UNK_TOKEN) != TOKEN_VOCAB.n_rows:
+        raise ValueError("standard tokenizer must append <unk> after every Doom row")
+    raw = Tokenizer(WordLevel(vocab=vocab, unk_token=DOOM_UNK_TOKEN))
     raw.pre_tokenizer = pre_tokenizers.WhitespaceSplit()
     tokenizer = PreTrainedTokenizerFast(
         tokenizer_object=raw,
         bos_token=ordered[bos_row],
         eos_token=ordered[eos_row],
         pad_token=ordered[eos_row],
-        unk_token=None,
+        unk_token=DOOM_UNK_TOKEN,
         clean_up_tokenization_spaces=False,
         model_input_names=["input_ids", "attention_mask"],
     )
