@@ -76,12 +76,15 @@ def write_model_card(
     )
     weights_gib = weight_bytes / gib
     if config.model.scale == 4:
+        repo_id = "physicsrob/torchwright-doom-e1m1-80x50"
         heads = config.model.n_heads or config.model.d // config.model.d_head
         cap_positions = prompt_rows + config.run.max_new_tokens
         kv_gib = cap_positions * 2 * n_layers * heads * config.model.d_head * 4 / gib
         growth_gib = cap_positions * 2 * heads * config.model.d_head * 4 / gib
         runtime_note = f"""**What running it takes:** the fp32 weight shards total
-{weights_gib:.2f} GiB. At the configured generation cap, the stock KV cache is
+{weights_gib:.2f} GiB ({weight_bytes / 1e9:.2f} GB). A complete 7,007-token
+pipeline render peaked at 43.48 GiB reserved on one A100-80GB. At the
+configured generation cap, the stock KV cache is
 bounded at {kv_gib:.2f} GiB; one full layer's cache-growth copy adds
 {growth_gib:.2f} GiB. This targets 64 GiB of total accelerator memory: one
 64-GiB-class device, or two 32-GiB consumer GPUs with `device_map="auto"`.
@@ -89,10 +92,11 @@ The shipped `infer.py` records the allocator's measured peak in
 `output.ids.json`.
 """
     else:
+        repo_id = "physicsrob/torchwright-doom-e1m1"
         runtime_note = f"""**What running it takes:** the fp32 weight shards total
 {weights_gib:.2f} GiB ({weight_bytes / 1e9:.2f} GB), needing a B200-class GPU
-or multi-GPU `device_map`. The flagship render
-measured 39.7 minutes of greedy decode on one B200 for its 53,747-token rollout
+or multi-GPU `device_map`. The flagship pipeline render peaked at 151.00 GiB
+reserved; greedy decode took 39.7 minutes on one B200 for its 53,747-token rollout
 from a 3,614-token prompt, scoring 99.9% within-option color against the
 reference renderer.
 """
@@ -122,10 +126,12 @@ remote model code:
 
 ```python
 from pathlib import Path
+from huggingface_hub import hf_hub_download
 from transformers import pipeline
 
-generate = pipeline("text-generation", model=".", device_map="auto")
-prompt = Path("examples/e1m1_prompt.txt").read_text()
+repo = "{repo_id}"
+prompt = Path(hf_hub_download(repo, "examples/e1m1_prompt.txt")).read_text()
+generate = pipeline("text-generation", model=repo, device_map="auto")
 generated_text = generate(prompt, return_full_text=False)[0]["generated_text"]
 ```
 

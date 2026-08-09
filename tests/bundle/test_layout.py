@@ -106,7 +106,10 @@ def test_consumer_model_card_states_pipeline_and_memory_contract(
     write_model_card(tmp_path, config, n_layers=70, prompt_rows=3614)
 
     card = (tmp_path / "README.md").read_text()
-    assert 'pipeline("text-generation", model=".", device_map="auto")' in card
+    assert 'repo = "physicsrob/torchwright-doom-e1m1-80x50"' in card
+    assert 'hf_hub_download(repo, "examples/e1m1_prompt.txt")' in card
+    assert 'pipeline("text-generation", model=repo, device_map="auto")' in card
+    assert "43.48 GiB reserved on one A100-80GB" in card
     assert "12.41 GiB" in card
     assert "two 32-GiB consumer GPUs" in card
 
