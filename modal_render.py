@@ -31,7 +31,17 @@ from pathlib import Path
 
 import modal
 
-from modal_image import ASSETS_IMAGE, HF_BUNDLE_VOLUME, STOCK_HF_IMAGE
+try:
+    from modal_image import ASSETS_IMAGE, HF_BUNDLE_VOLUME, STOCK_HF_IMAGE
+except ModuleNotFoundError as exc:
+    if exc.name != "modal_image":
+        raise
+    # A dependency-only Hub smoke deliberately mounts no workspace modules.
+    # Modal still imports this file to locate the serialized function, so give
+    # that remote bootstrap import inert handles; the function already runs in
+    # the locally defined STOCK_HF_IMAGE and never uses the other handles.
+    ASSETS_IMAGE = STOCK_HF_IMAGE = modal.Image.debian_slim(python_version="3.12")
+    HF_BUNDLE_VOLUME = modal.Volume.from_name("torchwright-doom-hf-phi3")
 
 _HERE = Path(__file__).resolve().parent
 
