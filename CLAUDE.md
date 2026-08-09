@@ -164,7 +164,7 @@ renderer. The trade-offs were accepted deliberately:
 
 - **greedy only** (no speculative decode),
 - a stock Transformers generation cache (no Doom-owned cache implementation),
-- **~98 GB dense fp32 checkpoint**,
+- **85.87 GB / 79.97 GiB dense fp32 checkpoint**,
 
 in exchange for the large complexity reduction and the narrative win.
 

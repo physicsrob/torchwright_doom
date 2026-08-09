@@ -5,7 +5,7 @@
 
 Two remote stages: ``compile_remote`` (CPU-only, 64 cores so CP-SAT's parallel
 search gets real width; writes a complete direct-HF bundle into its volume) and
-``render_remote`` (a big GPU — the dense native HF checkpoint is ~98 GB fp32
+``render_remote`` (a big GPU — the dense native HF checkpoint is ~86 GB fp32
 plus the generation cache over the full frame). The render executes the
 artifact's isolated stock-Transformers bundle-root ``infer.py``. The compile
 cache key is computed on the LOCAL machine because it embeds submodule git SHAs
@@ -54,7 +54,7 @@ _COMPILE_CPUS = 64
 # Render GPU — an env var (NOT a config field) because it parameterizes the
 # ``@app.function(gpu=...)`` decorator at module-import time, before --config
 # is parsed.  The Makefile exports it (``RENDER_GPU ?= b200``); the fallback
-# here must match. B200 is the default: its 192 GB HBM fits the ~98 GB dense
+# here must match. B200 is the default: its 192 GB HBM fits the ~86 GB dense
 # fp32 model plus the growing stock generation cache, and its high bandwidth
 # makes autoregressive decode fast.
 _RENDER_GPU = _os.environ.get("RENDER_GPU", "b200")

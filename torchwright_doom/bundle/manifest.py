@@ -4,7 +4,7 @@ The publication contract's schema side. A normal completeness probe
 (:func:`validate_bundle_manifest` / :func:`is_complete_hf_bundle`) verifies
 the layout version, every declared file's size, and the hash of every
 hash-bearing file. Safetensor shards are the only hash-exempt files — a
-deliberate cost trade-off against a ~98 GB checkpoint: for shards, only
+deliberate cost trade-off against an 85.87 GB checkpoint: for shards, only
 their sizes and the index's declared name->shard map are checked; shard
 *contents* are not hashed by these probes.
 """
@@ -59,7 +59,7 @@ def file_manifest(bundle: Path) -> dict[str, dict[str, Any]]:
             facts: dict[str, Any] = {"size": path.stat().st_size}
             # Shards are size-checked but not content-hashed (the index maps
             # tensor names to shards; it carries no content digest) — a
-            # deliberate trade-off to keep probes cheap against ~98 GB. Hash
+            # deliberate trade-off to keep probes cheap against ~86 GB. Hash
             # all Doom-owned data, configs, tools, and the index itself.
             if path.suffix != ".safetensors":
                 facts["sha256"] = sha256_file(path)

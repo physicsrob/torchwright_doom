@@ -97,7 +97,16 @@ while `configs/e1m1_lowres.yaml` builds a separate 80×50 checkpoint sized for
 64 GiB of total accelerator memory—one 64-GiB-class device, or two 32-GiB
 consumer GPUs through `device_map="auto"`. The full 320×200 checkpoint still
 needs a B200-class machine; the practical checkpoint trades resolution for a
-7,007-token frame and an 8,000-token generation cap.
+7,007-token frame and an 8,000-token generation cap. Its full A100-80GB render
+peaked at 43.48 GiB reserved, so it also fits two 32-GiB consumer GPUs through
+automatic device mapping.
+
+Published checkpoints:
+
+- [320×200 flagship](https://huggingface.co/physicsrob/torchwright-doom-e1m1)
+  — 38 layers, 85.87 GB of fp32 weight shards.
+- [80×50 practical](https://huggingface.co/physicsrob/torchwright-doom-e1m1-80x50)
+  — 70 layers, 34.09 GB of fp32 weight shards.
 
 **Correctness gate:** `make run COMPARE=1` scores every rendered frame
 pixel-by-pixel against the vendored plain-Python reference renderer

@@ -70,12 +70,12 @@ def write_model_card(
     n_layers: int,
     prompt_rows: int,
 ) -> None:
+    gib = 1024**3
+    weight_bytes = sum(
+        path.stat().st_size for path in bundle.glob("model-*.safetensors")
+    )
+    weights_gib = weight_bytes / gib
     if config.model.scale == 4:
-        gib = 1024**3
-        weights_gib = (
-            sum(path.stat().st_size for path in bundle.glob("model-*.safetensors"))
-            / gib
-        )
         heads = config.model.n_heads or config.model.d // config.model.d_head
         cap_positions = prompt_rows + config.run.max_new_tokens
         kv_gib = cap_positions * 2 * n_layers * heads * config.model.d_head * 4 / gib
@@ -89,11 +89,11 @@ The shipped `infer.py` records the allocator's measured peak in
 `output.ids.json`.
 """
     else:
-        runtime_note = """**What running it takes:** the weights load in full fp32
-(total size = the sum of the shards; the flagship 320×200 bundle is ~98 GB,
-needing a B200-class GPU or multi-GPU `device_map`). The flagship render
-measured ~42 minutes of greedy decode on one B200 for its 53,747-token rollout
-from a 3,614-token prompt, scoring ~99.99% within-option color against the
+        runtime_note = f"""**What running it takes:** the fp32 weight shards total
+{weights_gib:.2f} GiB ({weight_bytes / 1e9:.2f} GB), needing a B200-class GPU
+or multi-GPU `device_map`. The flagship render
+measured 39.7 minutes of greedy decode on one B200 for its 53,747-token rollout
+from a 3,614-token prompt, scoring 99.9% within-option color against the
 reference renderer.
 """
     text = f"""---

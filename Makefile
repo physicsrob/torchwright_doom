@@ -8,7 +8,7 @@
 CONFIG ?= configs/e1m1.yaml
 OUT_DIR ?= out/render
 # Modal GPU for render_remote (read at modal_render.py import as an env
-# var). B200 is the default: the dense checkpoint is ~98 GB fp32 plus a growing
+# var). B200 is the default: the dense checkpoint is ~86 GB fp32 plus a growing
 # generation cache, and B200's 192 GB HBM fits it.
 RENDER_GPU ?= b200
 PNG_ZOOM ?= 8
