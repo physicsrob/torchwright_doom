@@ -8,9 +8,9 @@ model.
 What they enforce, lifecycle-stage by stage:
 
 * exactly two production ``pipeline()`` callers — the canonical portable
-  runtime and its narrative-sized companion;
-* both runtimes import only stdlib + torch + transformers, and no production
-  module imports either runtime (they are executed, never imported);
+  runtime and the minimal end-to-end example;
+* both programs keep narrow dependency boundaries, and no production module
+  imports either one (they are executed, never imported);
 * portable tool sources are stdlib-only and imported only by the formatter
   wrapper, staged bundle validation, and tests;
 * ONNX / ONNX Runtime imports are confined to the diagnostics side;
@@ -45,8 +45,8 @@ PACKAGE = ROOT / "torchwright_doom"
 # root and executed by production as a subprocess.
 RUNTIME_PATH = "torchwright_doom/infer.py"
 
-# The deliberately tiny pipeline example copied beside the canonical runtime.
-BARE_RUNTIME_PATH = "torchwright_doom/infer_bare.py"
+# The deliberately tiny end-to-end example copied beside the canonical runtime.
+EXAMPLE_PATH = "torchwright_doom/example.py"
 
 # Pure-stdlib standalone tool sources copied byte-for-byte into bundle tools/.
 PORTABLE_SOURCES = (
@@ -234,7 +234,7 @@ def _dir_files(name: str) -> list[Path]:
 def test_production_pipeline_callers_are_the_two_bundle_runtimes() -> None:
     """AST-keyed, not a text substring: comments and docs cannot trip it."""
     callers = [path for path in _production_files() if _has_pipeline_call(path)]
-    assert callers == [ROOT / RUNTIME_PATH, ROOT / BARE_RUNTIME_PATH]
+    assert callers == [ROOT / EXAMPLE_PATH, ROOT / RUNTIME_PATH]
 
 
 def test_production_has_no_direct_generate_caller() -> None:
@@ -243,13 +243,14 @@ def test_production_has_no_direct_generate_caller() -> None:
 
 
 def test_runtimes_import_only_stdlib_torch_transformers() -> None:
-    for rel in (RUNTIME_PATH, BARE_RUNTIME_PATH):
-        names = _top_level_names(ROOT / rel)
-        assert names <= _STDLIB | {"torch", "transformers"}, (rel, names - _STDLIB)
+    runtime_names = _top_level_names(ROOT / RUNTIME_PATH)
+    assert runtime_names <= _STDLIB | {"torch", "transformers"}
+    example_names = _top_level_names(ROOT / EXAMPLE_PATH)
+    assert example_names <= _STDLIB | {"PIL", "huggingface_hub", "transformers"}
 
 
 def test_runtime_programs_are_never_imported() -> None:
-    for rel in (RUNTIME_PATH, BARE_RUNTIME_PATH):
+    for rel in (RUNTIME_PATH, EXAMPLE_PATH):
         runtime_path = ROOT / rel
         runtime_module = _module_of(runtime_path)
         offenders = [

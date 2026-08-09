@@ -18,6 +18,7 @@ dependencies = [
     "numpy",
     "transformers>=5.0",
     "accelerate",
+    "Pillow",
     "safetensors",
     "tokenizers",
 ]

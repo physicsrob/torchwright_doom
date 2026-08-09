@@ -1,11 +1,13 @@
-"""Write a Doom bundle's executable layout: root ``infer.py``, ``tools/``, prompt.
+"""Write a Doom bundle's executable layout: root programs, ``tools/``, prompt.
 
 The bundle root carries a byte-identical copy of the canonical inference program
-(``torchwright_doom/infer.py``), alongside a narrative-sized
-``infer_bare.py``; the standalone artifact consumers ship under ``tools/``
-from their ``portable/`` sources; ``examples/`` contains data only (the
-executable prompt). Byte-identity of every copied file against its source is
-enforced by the bundle layout gate (``tests/bundle/test_layout.py``).
+(``torchwright_doom/infer.py``), alongside a minimal end-to-end ``example.py``.
+The example's model id and screen size are stamped for its checkpoint; its
+executable body is otherwise identical to the 80x50 blog source. Standalone
+artifact consumers ship under ``tools/`` from their ``portable/`` sources;
+``examples/`` contains data only (the executable prompt). Byte-identity of the
+canonical runtime and tools is enforced by the bundle layout gate
+(``tests/bundle/test_layout.py``).
 """
 
 from __future__ import annotations
@@ -39,7 +41,28 @@ The cursor/pixel token protocol these tools decode is specified in
 """
 
 
-def write_bundle_layout(destination: str | Path, *, prompt_text: str) -> list[Path]:
+def _repo_id(config: RenderConfig) -> str:
+    if config.model.scale == 4:
+        return "physicsrob/torchwright-doom-e1m1-80x50"
+    return "physicsrob/torchwright-doom-e1m1"
+
+
+def _example_text(package: Path, config: RenderConfig) -> str:
+    """Stamp the two checkpoint-specific constants in the runnable blog source."""
+    source = (package / "example.py").read_text(encoding="utf-8")
+    source_model = 'MODEL = "physicsrob/torchwright-doom-e1m1-80x50"'
+    source_screen = "SCREEN = (80, 50)"
+    if source.count(source_model) != 1 or source.count(source_screen) != 1:
+        raise ValueError("example.py checkpoint constants are not uniquely stampable")
+    width, height = config.screen
+    return source.replace(source_model, f'MODEL = "{_repo_id(config)}"').replace(
+        source_screen, f"SCREEN = ({width}, {height})"
+    )
+
+
+def write_bundle_layout(
+    destination: str | Path, *, config: RenderConfig, prompt_text: str
+) -> list[Path]:
     """Copy the inference program and tools into ``destination``; write the
     executable prompt and the tools README. Returns every written path."""
     bundle = Path(destination)
@@ -47,7 +70,6 @@ def write_bundle_layout(destination: str | Path, *, prompt_text: str) -> list[Pa
     package = Path(__file__).resolve().parents[1]
     sources = {
         "infer.py": package / "infer.py",
-        "infer_bare.py": package / "infer_bare.py",
         "tools/pretty_text.py": package / "portable" / "pretty_text.py",
         "tools/txt_to_png.py": package / "portable" / "txt_to_png.py",
     }
@@ -57,6 +79,9 @@ def write_bundle_layout(destination: str | Path, *, prompt_text: str) -> list[Pa
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
         written.append(target)
+    example = bundle / "example.py"
+    example.write_text(_example_text(package, config), encoding="utf-8")
+    written.append(example)
     prompt = bundle / "examples" / "e1m1_prompt.txt"
     prompt.parent.mkdir(parents=True, exist_ok=True)
     prompt.write_text(prompt_text.rstrip() + "\n", encoding="utf-8")
@@ -77,8 +102,8 @@ def write_model_card(
         path.stat().st_size for path in bundle.glob("model-*.safetensors")
     )
     weights_gib = weight_bytes / gib
+    repo_id = _repo_id(config)
     if config.model.scale == 4:
-        repo_id = "physicsrob/torchwright-doom-e1m1-80x50"
         heads = config.model.n_heads or config.model.d // config.model.d_head
         cap_positions = prompt_rows + config.run.max_new_tokens
         kv_gib = cap_positions * 2 * n_layers * heads * config.model.d_head * 4 / gib
@@ -115,13 +140,18 @@ load through the ordinary Transformers text-generation pipeline without
 remote code.
 
 The bundled `examples/e1m1_prompt.txt` is the executable prompt. Run
-`infer.py` (at the bundle root) to produce canonical emitted row ids and raw
-tokenizer text. `tools/pretty_text.py` formats that text for reading, while
-`tools/txt_to_png.py` independently decodes its cursor/pixel protocol into a
-PNG — every cursor move and pixel in that protocol is a model-emitted token.
-The protocol is specified in `PROTOCOL.md` in the source repo. Neither
-post-processing tool participates in inference or performs geometry,
-visibility, lighting, texture selection, or sorting.
+`python example.py` for the smallest complete path from the stock pipeline to
+`frame.png`. Its visible host loop only follows cursor/pixel commands emitted
+by the model; it contains no TorchWright or DOOM implementation. The example
+uses Pillow to serialize the image.
+
+For canonical reproduction, run `infer.py` (at the bundle root) to preserve
+emitted row ids and raw tokenizer text. `tools/pretty_text.py` formats that text
+for reading, while `tools/txt_to_png.py` independently decodes its cursor/pixel
+protocol into a PNG — every cursor move and pixel in that protocol is a
+model-emitted token. The protocol is specified in `PROTOCOL.md` in the source
+repo. Neither post-processing tool participates in inference or performs
+geometry, visibility, lighting, texture selection, or sorting.
 
 Ordinary Transformers pipeline inference works directly, with no custom or
 remote model code:
@@ -133,13 +163,17 @@ from transformers import pipeline
 
 repo = "{repo_id}"
 prompt = Path(hf_hub_download(repo, "examples/e1m1_prompt.txt")).read_text()
-generate = pipeline("text-generation", model=repo, device_map="auto")
+generate = pipeline(
+    "text-generation", model=repo, device_map="auto", trust_remote_code=False
+)
 generated_text = generate(prompt, return_full_text=False)[0]["generated_text"]
 ```
 
-The saved generation defaults are greedy and cover the complete frame. Use
-the shipped `infer.py` when canonical integer row IDs, progress reporting, and
-the exact terminal-token-preserving raw text are required.
+The saved generation defaults are greedy and cover the complete frame. The
+complete minimal host loop is in `example.py`. Use the shipped `infer.py` plus
+`tools/txt_to_png.py` when canonical integer row IDs, progress reporting, the
+exact terminal-token-preserving raw text, and validated decoder inputs are
+required.
 
 Published checkpoints: [320×200](https://huggingface.co/physicsrob/torchwright-doom-e1m1)
 and [80×50](https://huggingface.co/physicsrob/torchwright-doom-e1m1-80x50).

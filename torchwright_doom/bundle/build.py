@@ -437,7 +437,9 @@ def compile_phi3_bundle(
             vocab_fingerprint=fingerprint,
             eos_row=special.eos_row,
         )
-        written_layout = write_bundle_layout(stage, prompt_text=prompt_text)
+        written_layout = write_bundle_layout(
+            stage, config=config, prompt_text=prompt_text
+        )
         write_model_card(
             stage,
             config,

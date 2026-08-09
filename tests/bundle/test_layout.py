@@ -1,6 +1,5 @@
-"""Bundle layout gate: root ``infer.py`` + ``tools/`` byte-identical to their
-sources, dependency boundaries intact, and the copied inference program's
-placement-derived defaults working from a real bundle root."""
+"""Bundle layout gate: root programs + ``tools/``, dependency boundaries
+intact, and both inference paths working in their published form."""
 
 from __future__ import annotations
 
@@ -35,7 +34,7 @@ from torchwright_doom.model.vocab import (
 
 ROOT = Path(__file__).resolve().parents[2]
 INFER_SOURCE = ROOT / "torchwright_doom" / "infer.py"
-BARE_INFER_SOURCE = ROOT / "torchwright_doom" / "infer_bare.py"
+EXAMPLE_SOURCE = ROOT / "torchwright_doom" / "example.py"
 PORTABLE_DIR = ROOT / "torchwright_doom" / "portable"
 
 
@@ -64,7 +63,8 @@ def _imports(path: Path) -> set[str]:
 def test_bundle_layout_has_the_required_dependency_boundaries(
     tmp_path: Path,
 ) -> None:
-    write_bundle_layout(tmp_path, prompt_text="begin")
+    config = load_render_config(ROOT / "configs/e1m1_lowres.yaml")
+    write_bundle_layout(tmp_path, config=config, prompt_text="begin")
     infer_imports = _imports(tmp_path / "infer.py")
     assert "torchwright" not in infer_imports
     assert "torchwright_doom" not in infer_imports
@@ -73,8 +73,10 @@ def test_bundle_layout_has_the_required_dependency_boundaries(
         "torch",
         "transformers",
     }
-    assert _imports(tmp_path / "infer_bare.py") <= set(sys.stdlib_module_names) | {
-        "transformers"
+    assert _imports(tmp_path / "example.py") <= set(sys.stdlib_module_names) | {
+        "PIL",
+        "huggingface_hub",
+        "transformers",
     }
     for name in ("tools/pretty_text.py", "tools/txt_to_png.py"):
         assert _imports(tmp_path / name) <= set(sys.stdlib_module_names) | {
@@ -83,10 +85,11 @@ def test_bundle_layout_has_the_required_dependency_boundaries(
 
 
 def test_bundle_layout_is_byte_identical_to_sources(tmp_path: Path) -> None:
-    written = write_bundle_layout(tmp_path, prompt_text="begin")
+    config = load_render_config(ROOT / "configs/e1m1_lowres.yaml")
+    written = write_bundle_layout(tmp_path, config=config, prompt_text="begin")
     expected = {
         tmp_path / "infer.py": INFER_SOURCE,
-        tmp_path / "infer_bare.py": BARE_INFER_SOURCE,
+        tmp_path / "example.py": EXAMPLE_SOURCE,
         tmp_path / "tools/pretty_text.py": PORTABLE_DIR / "pretty_text.py",
         tmp_path / "tools/txt_to_png.py": PORTABLE_DIR / "txt_to_png.py",
     }
@@ -101,43 +104,103 @@ def test_bundle_layout_is_byte_identical_to_sources(tmp_path: Path) -> None:
     }
     # The old layout must not reappear.
     assert not (tmp_path / "examples" / "infer.py").exists()
+    assert not (tmp_path / "infer_bare.py").exists()
 
 
-def test_bare_infer_uses_bundle_defaults_and_writes_generated_text(
+def test_example_runs_pipeline_and_executes_the_complete_host_loop(
     tmp_path: Path, monkeypatch
 ) -> None:
-    bundle = tmp_path / "bundle"
-    prompt = bundle / "examples" / "e1m1_prompt.txt"
-    prompt.parent.mkdir(parents=True)
+    prompt = tmp_path / "prompt.txt"
     prompt.write_text("begin scene\n")
-    script = bundle / "infer_bare.py"
-    script.write_bytes(BARE_INFER_SOURCE.read_bytes())
+    palette = tmp_path / "palette.json"
+    palette.write_text(json.dumps({"colors": [[0, 0, 0], [10, 20, 30], [40, 50, 60]]}))
     calls: dict[str, Any] = {}
 
-    def fake_pipeline(task, *, model, device_map):
-        calls.update(task=task, model=model, device_map=device_map)
+    def fake_download(repo, filename):
+        calls.setdefault("downloads", []).append((repo, filename))
+        if filename == "examples/e1m1_prompt.txt":
+            return str(prompt)
+        if filename == "doom_palette.json":
+            return str(palette)
+        raise AssertionError(filename)
+
+    def fake_pipeline(task, *, model, device_map, trust_remote_code):
+        calls.update(
+            task=task,
+            model=model,
+            device_map=device_map,
+            trust_remote_code=trust_remote_code,
+        )
 
         def generate(text, **kwargs):
             calls.update(prompt=text, generation=kwargs)
-            return [{"generated_text": "pixel rows"}]
+            return [
+                {
+                    "generated_text": (
+                        "setCursorDirectionY setCursorX(2) setCursorY(3) "
+                        "pixel(1,2) pixel(2,1) "
+                        "setCursorDirectionX setCursorX(0) setCursorY(4) "
+                        "pixel(1,2) pixel(2,1)"
+                    )
+                }
+            ]
 
         return generate
 
+    hub = ModuleType("huggingface_hub")
+    setattr(hub, "hf_hub_download", fake_download)
     transformers = ModuleType("transformers")
     setattr(transformers, "pipeline", fake_pipeline)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
     monkeypatch.setitem(sys.modules, "transformers", transformers)
     monkeypatch.chdir(tmp_path)
 
-    runpy.run_path(str(script))
+    runpy.run_path(str(EXAMPLE_SOURCE))
 
     assert calls == {
+        "downloads": [
+            (
+                "physicsrob/torchwright-doom-e1m1-80x50",
+                "examples/e1m1_prompt.txt",
+            ),
+            ("physicsrob/torchwright-doom-e1m1-80x50", "doom_palette.json"),
+        ],
         "task": "text-generation",
-        "model": str(bundle),
+        "model": "physicsrob/torchwright-doom-e1m1-80x50",
         "device_map": "auto",
+        "trust_remote_code": False,
         "prompt": "begin scene\n",
         "generation": {"return_full_text": False},
     }
-    assert (tmp_path / "output.txt").read_text() == "pixel rows"
+    from PIL import Image
+
+    with Image.open(tmp_path / "frame.png") as frame:
+        assert frame.size == (80, 50)
+        assert frame.getpixel((2, 3)) == (10, 20, 30)
+        assert frame.getpixel((3, 3)) == (10, 20, 30)
+        assert frame.getpixel((0, 4)) == (10, 20, 30)
+        assert frame.getpixel((1, 4)) == (10, 20, 30)
+        assert frame.getpixel((2, 4)) == (40, 50, 60)
+        assert frame.getpixel((3, 4)) == (0, 0, 0)
+
+
+def test_flagship_example_stamps_only_checkpoint_constants(tmp_path: Path) -> None:
+    config = load_render_config(ROOT / "configs/e1m1.yaml")
+    written = write_bundle_layout(tmp_path, config=config, prompt_text="begin")
+    example = (tmp_path / "example.py").read_text()
+
+    assert 'MODEL = "physicsrob/torchwright-doom-e1m1"' in example
+    assert "SCREEN = (320, 200)" in example
+    expected = (
+        EXAMPLE_SOURCE.read_text()
+        .replace(
+            'MODEL = "physicsrob/torchwright-doom-e1m1-80x50"',
+            'MODEL = "physicsrob/torchwright-doom-e1m1"',
+        )
+        .replace("SCREEN = (80, 50)", "SCREEN = (320, 200)")
+    )
+    assert example == expected
+    assert tmp_path / "example.py" in written
 
 
 def test_consumer_model_card_states_pipeline_and_memory_contract(
@@ -151,7 +214,9 @@ def test_consumer_model_card_states_pipeline_and_memory_contract(
     card = (tmp_path / "README.md").read_text()
     assert 'repo = "physicsrob/torchwright-doom-e1m1-80x50"' in card
     assert 'hf_hub_download(repo, "examples/e1m1_prompt.txt")' in card
-    assert 'pipeline("text-generation", model=repo, device_map="auto")' in card
+    assert "python example.py" in card
+    assert "trust_remote_code=False" in card
+    assert "complete minimal host loop is in `example.py`" in card
     assert "43.48 GiB reserved on one A100-80GB" in card
     assert "12.41 GiB" in card
     assert "two 32-GiB consumer GPUs" in card
@@ -322,7 +387,11 @@ def _tiny_phi3_bundle(model_dir: Path, *, original_max: int = 16) -> list[int]:
     model.generation_config.max_new_tokens = 2
     model.save_pretrained(model_dir)
 
-    write_bundle_layout(model_dir, prompt_text="begin scene")
+    write_bundle_layout(
+        model_dir,
+        config=load_render_config(ROOT / "configs/e1m1_lowres.yaml"),
+        prompt_text="begin scene",
+    )
     prompt_bytes = (model_dir / "examples/e1m1_prompt.txt").read_bytes()
     prompt_rows = [0, 1]
     manifest = {
