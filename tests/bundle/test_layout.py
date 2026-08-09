@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import runpy
 import subprocess
 import sys
 from functools import lru_cache
@@ -34,6 +35,7 @@ from torchwright_doom.model.vocab import (
 
 ROOT = Path(__file__).resolve().parents[2]
 INFER_SOURCE = ROOT / "torchwright_doom" / "infer.py"
+BARE_INFER_SOURCE = ROOT / "torchwright_doom" / "infer_bare.py"
 PORTABLE_DIR = ROOT / "torchwright_doom" / "portable"
 
 
@@ -71,6 +73,9 @@ def test_bundle_layout_has_the_required_dependency_boundaries(
         "torch",
         "transformers",
     }
+    assert _imports(tmp_path / "infer_bare.py") <= set(sys.stdlib_module_names) | {
+        "transformers"
+    }
     for name in ("tools/pretty_text.py", "tools/txt_to_png.py"):
         assert _imports(tmp_path / name) <= set(sys.stdlib_module_names) | {
             "__future__"
@@ -81,6 +86,7 @@ def test_bundle_layout_is_byte_identical_to_sources(tmp_path: Path) -> None:
     written = write_bundle_layout(tmp_path, prompt_text="begin")
     expected = {
         tmp_path / "infer.py": INFER_SOURCE,
+        tmp_path / "infer_bare.py": BARE_INFER_SOURCE,
         tmp_path / "tools/pretty_text.py": PORTABLE_DIR / "pretty_text.py",
         tmp_path / "tools/txt_to_png.py": PORTABLE_DIR / "txt_to_png.py",
     }
@@ -95,6 +101,43 @@ def test_bundle_layout_is_byte_identical_to_sources(tmp_path: Path) -> None:
     }
     # The old layout must not reappear.
     assert not (tmp_path / "examples" / "infer.py").exists()
+
+
+def test_bare_infer_uses_bundle_defaults_and_writes_generated_text(
+    tmp_path: Path, monkeypatch
+) -> None:
+    bundle = tmp_path / "bundle"
+    prompt = bundle / "examples" / "e1m1_prompt.txt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("begin scene\n")
+    script = bundle / "infer_bare.py"
+    script.write_bytes(BARE_INFER_SOURCE.read_bytes())
+    calls: dict[str, Any] = {}
+
+    def fake_pipeline(task, *, model, device_map):
+        calls.update(task=task, model=model, device_map=device_map)
+
+        def generate(text, **kwargs):
+            calls.update(prompt=text, generation=kwargs)
+            return [{"generated_text": "pixel rows"}]
+
+        return generate
+
+    transformers = ModuleType("transformers")
+    setattr(transformers, "pipeline", fake_pipeline)
+    monkeypatch.setitem(sys.modules, "transformers", transformers)
+    monkeypatch.chdir(tmp_path)
+
+    runpy.run_path(str(script))
+
+    assert calls == {
+        "task": "text-generation",
+        "model": str(bundle),
+        "device_map": "auto",
+        "prompt": "begin scene\n",
+        "generation": {"return_full_text": False},
+    }
+    assert (tmp_path / "output.txt").read_text() == "pixel rows"
 
 
 def test_consumer_model_card_states_pipeline_and_memory_contract(

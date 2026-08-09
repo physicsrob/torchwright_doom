@@ -7,9 +7,10 @@ model.
 
 What they enforce, lifecycle-stage by stage:
 
-* exactly one production ``pipeline()`` caller — the portable runtime file;
-* the runtime imports only stdlib + torch + transformers, and no production
-  module imports the runtime (it is executed, never imported);
+* exactly two production ``pipeline()`` callers — the canonical portable
+  runtime and its narrative-sized companion;
+* both runtimes import only stdlib + torch + transformers, and no production
+  module imports either runtime (they are executed, never imported);
 * portable tool sources are stdlib-only and imported only by the formatter
   wrapper, staged bundle validation, and tests;
 * ONNX / ONNX Runtime imports are confined to the diagnostics side;
@@ -40,9 +41,12 @@ PACKAGE = ROOT / "torchwright_doom"
 # Path constants — each cleanup move flips one of these.
 # ---------------------------------------------------------------------------
 
-# The sole portable inference program: the one pipeline() caller, copied
-# byte-identical to the bundle root and executed by production as a subprocess.
+# The canonical portable inference program, copied byte-identical to the bundle
+# root and executed by production as a subprocess.
 RUNTIME_PATH = "torchwright_doom/infer.py"
+
+# The deliberately tiny pipeline example copied beside the canonical runtime.
+BARE_RUNTIME_PATH = "torchwright_doom/infer_bare.py"
 
 # Pure-stdlib standalone tool sources copied byte-for-byte into bundle tools/.
 PORTABLE_SOURCES = (
@@ -227,10 +231,10 @@ def _dir_files(name: str) -> list[Path]:
 # ---------------------------------------------------------------------------
 
 
-def test_exactly_one_production_pipeline_caller() -> None:
+def test_production_pipeline_callers_are_the_two_bundle_runtimes() -> None:
     """AST-keyed, not a text substring: comments and docs cannot trip it."""
     callers = [path for path in _production_files() if _has_pipeline_call(path)]
-    assert callers == [ROOT / RUNTIME_PATH]
+    assert callers == [ROOT / RUNTIME_PATH, ROOT / BARE_RUNTIME_PATH]
 
 
 def test_production_has_no_direct_generate_caller() -> None:
@@ -238,19 +242,22 @@ def test_production_has_no_direct_generate_caller() -> None:
     assert callers == []
 
 
-def test_runtime_imports_only_stdlib_torch_transformers() -> None:
-    names = _top_level_names(ROOT / RUNTIME_PATH)
-    assert names <= _STDLIB | {"torch", "transformers"}, names - _STDLIB
+def test_runtimes_import_only_stdlib_torch_transformers() -> None:
+    for rel in (RUNTIME_PATH, BARE_RUNTIME_PATH):
+        names = _top_level_names(ROOT / rel)
+        assert names <= _STDLIB | {"torch", "transformers"}, (rel, names - _STDLIB)
 
 
-def test_runtime_program_is_never_imported() -> None:
-    runtime_module = _module_of(ROOT / RUNTIME_PATH)
-    offenders = [
-        path
-        for path in _production_files()
-        if path != ROOT / RUNTIME_PATH and _imports_module(path, runtime_module)
-    ]
-    assert not offenders, offenders
+def test_runtime_programs_are_never_imported() -> None:
+    for rel in (RUNTIME_PATH, BARE_RUNTIME_PATH):
+        runtime_path = ROOT / rel
+        runtime_module = _module_of(runtime_path)
+        offenders = [
+            path
+            for path in _production_files()
+            if path != runtime_path and _imports_module(path, runtime_module)
+        ]
+        assert not offenders, (rel, offenders)
 
 
 # ---------------------------------------------------------------------------

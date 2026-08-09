@@ -1,10 +1,11 @@
 """Write a Doom bundle's executable layout: root ``infer.py``, ``tools/``, prompt.
 
-The bundle root carries a byte-identical copy of the sole inference program
-(``torchwright_doom/infer.py``); the standalone artifact consumers ship under
-``tools/`` from their ``portable/`` sources; ``examples/`` contains data only
-(the executable prompt). Byte-identity of every copied file against its
-source is enforced by the bundle layout gate (``tests/bundle/test_layout.py``).
+The bundle root carries a byte-identical copy of the canonical inference program
+(``torchwright_doom/infer.py``), alongside a narrative-sized
+``infer_bare.py``; the standalone artifact consumers ship under ``tools/``
+from their ``portable/`` sources; ``examples/`` contains data only (the
+executable prompt). Byte-identity of every copied file against its source is
+enforced by the bundle layout gate (``tests/bundle/test_layout.py``).
 """
 
 from __future__ import annotations
@@ -46,6 +47,7 @@ def write_bundle_layout(destination: str | Path, *, prompt_text: str) -> list[Pa
     package = Path(__file__).resolve().parents[1]
     sources = {
         "infer.py": package / "infer.py",
+        "infer_bare.py": package / "infer_bare.py",
         "tools/pretty_text.py": package / "portable" / "pretty_text.py",
         "tools/txt_to_png.py": package / "portable" / "txt_to_png.py",
     }
