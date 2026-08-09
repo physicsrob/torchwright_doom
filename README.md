@@ -78,8 +78,12 @@ Two boundary rules make that claim precise:
   the graph-debugging tool sequence.
 - **`GLOSSARY.md`** — plain-English definitions of the coined vocabulary
   (carrier, head, marker, owner, subcontext, visplane, flat, …).
+- **`TOKENIZATION.md`** — the row vocabulary, raw and pretty text formats,
+  stock tokenizer/detokenizer, carrier folding, and worked examples.
 - **`PROTOCOL.md`** — the pixel protocol: the exact per-frame token
   sequence (prefill + every AR phase), in the readable-surface token names.
+- **`BSP_TRAVERSAL.md`** — how near-first BSP traversal, occlusion, and the
+  attention-backed return stack determine wall order.
 - **`protocol_registry.render_protocol_table()`** — the generated table of
   the token protocol (every token type, its phase, role, and dispatch
   wiring), for a top-down view of the AR protocol.
