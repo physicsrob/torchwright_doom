@@ -10,8 +10,8 @@ numeric value; the *digit-quad* is that value's 2-or-4-number byte encoding; an
 emit *head* is a token's own columns without the shared constant derived tail.
 
 The graph's ``forward()`` produces a token at each AR step by writing
-a residual row matching one row of ``W_EMBED`` — the stock tied LM head
-inside ``model.generate()`` (``W_EMBED`` doubles as the readout under
+a residual row matching one row of ``W_EMBED`` — the stock pipeline's tied
+LM-head generation loop (``W_EMBED`` doubles as the readout under
 token.v6; see ``GLOSSARY.md``) then scores that row and greedy decode
 picks the next token ID. No host code is involved in the selection. The
 helpers here build that residual:

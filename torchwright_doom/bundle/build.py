@@ -47,6 +47,7 @@ def compile_config(
     compile_payload: dict[str, Any] | None = None,
     solver_seed: int | None = None,
     force_resolve: bool = False,
+    solver_workers: int | None = None,
 ) -> dict[str, Any]:
     """Compile ``config_path`` into a complete published bundle on a cache
     miss. ``cache_dir`` / ``compile_payload`` exist for the Modal path: the
@@ -69,15 +70,28 @@ def compile_config(
         return {"cache_dir": str(destination), "cache_hit": True}
     reason = "forced resolve" if force_resolve else "cache miss"
     print(f"[compile] direct-HF {reason} {destination}", flush=True)
-    report = compile_phi3_bundle(
-        config,
-        wad_path=wad_path,
-        destination=destination,
-        compile_payload=payload,
-        verbose=verbose_compile,
-        solver_seed=solver_seed,
-        force_resolve=force_resolve,
-    )
+    if solver_workers is not None and solver_workers < 1:
+        raise ValueError(f"solver_workers must be >= 1, got {solver_workers}")
+    previous_workers = os.environ.get("TW_CPSAT_WORKERS")
+    if solver_workers is not None:
+        os.environ["TW_CPSAT_WORKERS"] = str(solver_workers)
+    try:
+        report = compile_phi3_bundle(
+            config,
+            wad_path=wad_path,
+            destination=destination,
+            compile_payload=payload,
+            verbose=verbose_compile,
+            solver_seed=solver_seed,
+            force_resolve=force_resolve,
+            solver_workers=solver_workers,
+        )
+    finally:
+        if solver_workers is not None:
+            if previous_workers is None:
+                os.environ.pop("TW_CPSAT_WORKERS", None)
+            else:
+                os.environ["TW_CPSAT_WORKERS"] = previous_workers
     provenance = report.manifest["schedule"]
     # Schedule-provenance fields, defined by torchwright's ScheduleProvenance
     # (torchwright/compiler/token_model.py): selected_origin = where the
@@ -168,6 +182,9 @@ def _stamp_model_config(
     path = bundle / "config.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["pad_token_id"] = int(eos_row)
+    # Make the ordinary pipeline(model=...) path select the numerics used by
+    # publication, without requiring callers to know a model-loader option.
+    payload["attn_implementation"] = "eager"
     # Phi3's GenerationMixin resets its cache at this field even for default
     # RoPE, where no short/long-RoPE switch exists.  The compiled model has one
     # position regime spanning the full configured context.
@@ -180,7 +197,25 @@ def _stamp_model_config(
         "hud": config.model.hud,
     }
     payload["doom_vocab_fingerprint"] = vocab_fingerprint
+    # TextGenerationPipeline has its own generic 256-token default, applied
+    # ahead of generation_config.json.  The standard task-specific override
+    # is therefore also required for pipeline(model=...) to render a frame.
+    payload["task_specific_params"] = {
+        "text-generation": {
+            "do_sample": False,
+            "max_new_tokens": int(config.run.max_new_tokens),
+        }
+    }
     _write_json(path, payload)
+
+    generation_path = bundle / "generation_config.json"
+    generation = json.loads(generation_path.read_text(encoding="utf-8"))
+    # A bare text-generation pipeline otherwise inherits Transformers'
+    # short generic generation limit.  This bundle has an executable prompt
+    # and a content-bearing full-frame cap, so publish those greedy defaults.
+    generation["do_sample"] = False
+    generation["max_new_tokens"] = int(config.run.max_new_tokens)
+    _write_json(generation_path, generation)
 
 
 def _validate_complete_staged_bundle(
@@ -307,6 +342,7 @@ def compile_phi3_bundle(
     verbose: bool = False,
     solver_seed: int | None = None,
     force_resolve: bool = False,
+    solver_workers: int | None = None,
 ) -> BundleReport:
     """Compile and publish one complete production Doom bundle (with rollback)."""
     if config.map.upper() != "E1M1":
@@ -402,7 +438,12 @@ def compile_phi3_bundle(
             eos_row=special.eos_row,
         )
         written_layout = write_bundle_layout(stage, prompt_text=prompt_text)
-        write_model_card(stage, config)
+        write_model_card(
+            stage,
+            config,
+            n_layers=int(report.n_layers),
+            prompt_rows=len(prompt_rows),
+        )
         prompt_path = next(
             path for path in written_layout if path.name == "e1m1_prompt.txt"
         )
@@ -421,6 +462,7 @@ def compile_phi3_bundle(
             eos_row=special.eos_row,
             origin=scene.origin,
             solver_seed=solver_seed,
+            solver_workers=solver_workers,
         )
         _write_json(stage / MANIFEST_NAME, manifest)
         _validate_complete_staged_bundle(stage, config, prompt_rows)

@@ -7,7 +7,7 @@ model.
 
 What they enforce, lifecycle-stage by stage:
 
-* exactly one production ``.generate()`` caller — the portable runtime file;
+* exactly one production ``pipeline()`` caller — the portable runtime file;
 * the runtime imports only stdlib + torch + transformers, and no production
   module imports the runtime (it is executed, never imported);
 * portable tool sources are stdlib-only and imported only by the formatter
@@ -40,7 +40,7 @@ PACKAGE = ROOT / "torchwright_doom"
 # Path constants — each cleanup move flips one of these.
 # ---------------------------------------------------------------------------
 
-# The sole portable inference program: the one .generate() caller, copied
+# The sole portable inference program: the one pipeline() caller, copied
 # byte-identical to the bundle root and executed by production as a subprocess.
 RUNTIME_PATH = "torchwright_doom/infer.py"
 
@@ -200,6 +200,15 @@ def _top_level_names(path: Path) -> set[str]:
     return {name.split(".", 1)[0] for name in _resolved_imports(path)}
 
 
+def _has_pipeline_call(path: Path) -> bool:
+    return any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "pipeline"
+        for node in ast.walk(_tree(path))
+    )
+
+
 def _has_generate_call(path: Path) -> bool:
     return any(
         isinstance(node, ast.Call)
@@ -218,10 +227,15 @@ def _dir_files(name: str) -> list[Path]:
 # ---------------------------------------------------------------------------
 
 
-def test_exactly_one_production_generate_caller() -> None:
+def test_exactly_one_production_pipeline_caller() -> None:
     """AST-keyed, not a text substring: comments and docs cannot trip it."""
-    callers = [path for path in _production_files() if _has_generate_call(path)]
+    callers = [path for path in _production_files() if _has_pipeline_call(path)]
     assert callers == [ROOT / RUNTIME_PATH]
+
+
+def test_production_has_no_direct_generate_caller() -> None:
+    callers = [path for path in _production_files() if _has_generate_call(path)]
+    assert callers == []
 
 
 def test_runtime_imports_only_stdlib_torch_transformers() -> None:

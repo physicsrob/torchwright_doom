@@ -93,31 +93,34 @@ resolves that same bundle and executes its exact bundle-root `infer.py` on
 the configured GPU (portable inference) — the only generation path in the
 project. Everything after the subprocess is interpretation (`interpret/`).
 `configs/e1m1.yaml` is the sole full-resolution publication configuration,
-while `configs/e1m1_lowres.yaml` is retained for preview and validation.
+while `configs/e1m1_lowres.yaml` builds a separate 80×50 checkpoint sized for
+64 GiB of total accelerator memory—one 64-GiB-class device, or two 32-GiB
+consumer GPUs through `device_map="auto"`. The full 320×200 checkpoint still
+needs a B200-class machine; the practical checkpoint trades resolution for a
+7,007-token frame and an 8,000-token generation cap.
 
 **Correctness gate:** `make run COMPARE=1` scores every rendered frame
 pixel-by-pixel against the vendored plain-Python reference renderer
 (`pydoom/`), reporting coverage and within-option color (see `GLOSSARY.md`)
 and writing a diff PNG. The production render's scores are in `FACTS.md`.
 
-The load path that backs the "stock transformer" claim is ordinary
-Transformers:
+The load path that backs the "stock transformer" claim is the ordinary
+Transformers text-generation pipeline:
 
 ```python
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from pathlib import Path
+from transformers import pipeline
 
-tokenizer = AutoTokenizer.from_pretrained(bundle)
-model = AutoModelForCausalLM.from_pretrained(
-    bundle,
-    attn_implementation="eager",
-    device_map="cuda",
-)
+generate = pipeline("text-generation", model=bundle, device_map="auto")
+prompt = Path(bundle, "examples/e1m1_prompt.txt").read_text()
+generated_text = generate(prompt, return_full_text=False)[0]["generated_text"]
 ```
 
 The bundle contains its executable E1M1 text prompt (`examples/e1m1_prompt.txt`)
-and `infer.py` at the bundle root. That isolated script is the only inference
-program used by both downloaded and production renders. It writes canonical
-integer row ids and their raw standard-tokenizer text. `tools/pretty_text.py`
+and `infer.py` at the bundle root. That isolated script drives the same
+pipeline with progress and identity checks, and is the inference program used
+by production renders. It writes canonical integer row ids and their raw
+standard-tokenizer text. `tools/pretty_text.py`
 formats that text for reading, and `tools/txt_to_png.py` independently turns
 the same text into a frame by executing the cursor protocol the model
 emitted — every cursor set, direction mark, and run width in the stream is a

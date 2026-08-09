@@ -63,10 +63,10 @@ class ModelConfig:
     d_hidden: int | None = None
     # Per-layer attention-head capacity cap (stock num_attention_heads is the
     # max ACTUAL head count over layers, so this bounds the published global
-    # head width).  None = d // d_head.  The committed configs set 32 (with
-    # d_head 128): attention width 4096 halves the per-token KV footprint vs
-    # the 64-head schedule and is what fits the full 320x200 frame's cache on
-    # one render GPU.  Rides the compile-cache key via asdict(config.model).
+    # head width). None = d // d_head. Production sets 32 with d_head 128;
+    # the consumer config sets 16. This is what makes their respective KV
+    # caches fit one render GPU. Rides the compile-cache key via
+    # asdict(config.model).
     n_heads: int | None = None
     max_layers: int = 200
     trim_heads: bool = True

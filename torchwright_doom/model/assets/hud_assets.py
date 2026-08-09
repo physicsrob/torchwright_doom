@@ -35,9 +35,9 @@ no face state machine, no prefill scalars**: the draw-list is a constant.
 
 Resolution: the bar is emitted at native screen resolution, one host pixel per
 screen column (``w = 1``, unlike the doubled 3D view). At ``scale`` 1 that is
-DOOM's exact 320x200 bar; at ``scale`` 2 every patch is decimated and every
-position halved for the 160x100 preview. Both the reference and the graph
-consume the decimated bank, so they match by construction.
+DOOM's exact 320x200 bar; at larger supported scales every patch and position
+is decimated by that factor. Both the reference and the graph consume the
+decimated bank, so they match by construction.
 """
 
 from __future__ import annotations

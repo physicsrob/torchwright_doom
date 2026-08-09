@@ -9,6 +9,7 @@ concern; grep with paths.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import subprocess
 from dataclasses import asdict
@@ -41,11 +42,17 @@ def cache_key_from_payload(payload: dict[str, Any]) -> str:
 def canonical_compile_payload(
     config: RenderConfig, wad_path: str | Path
 ) -> dict[str, Any]:
-    # This file sits at the package root: parents[1] is the Doom repository,
-    # parents[2] the torchdoom umbrella that carries the torchwright checkout.
+    # Resolve Torchwright through the active import path. Release builds may
+    # deliberately select a detached compiler worktree through PYTHONPATH;
+    # deriving this as a fixed umbrella sibling would then stamp one checkout
+    # while Modal mounted another.
+    torchwright_spec = importlib.util.find_spec("torchwright")
+    if torchwright_spec is None or torchwright_spec.origin is None:
+        raise RuntimeError("torchwright is not importable for compile identity")
+    torchwright_repo = Path(torchwright_spec.origin).resolve().parents[1]
     git_shas = {
         "torchwright_doom": _git_sha(Path(__file__).resolve().parents[1]),
-        "torchwright": _git_sha(Path(__file__).resolve().parents[2] / "torchwright"),
+        "torchwright": _git_sha(torchwright_repo),
     }
     # Enforce "the container must never derive its own key": a git-less caller
     # would mint a fixed

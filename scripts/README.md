@@ -13,6 +13,9 @@ locally where the docstring says CPU is fine. Three populations:
 - `lane_census.py` — residual lane usage census.
 - `compile_report.py` — compile summary (layers, width, schedule
   provenance).
+- `consumer_profile.py` — conservative dense-fp32 weights + terminal-KV
+  memory gate for a candidate consumer config; `--full-replay` measures exact
+  trimmed layer shapes after the solve.
 
 **Bundle and schedule debugging** (current, situational):
 

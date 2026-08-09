@@ -28,6 +28,15 @@ _BASE_IMAGE = modal.Image.debian_slim(python_version="3.12").uv_sync(
     groups=["dev"], extra_options="--no-install-project"
 )
 
+# Dependencies only: no local source, configs, or WAD. Hub smoke tests use
+# this image so a downloaded bundle cannot accidentally import the workspace.
+STOCK_HF_IMAGE = _BASE_IMAGE.env(
+    {
+        "HF_ENABLE_PARALLEL_LOADING": "true",
+        "HF_PARALLEL_LOADING_WORKERS": "8",
+    }
+)
+
 _CONFIGS = _HERE / "configs"
 
 _IGNORE_PARTS = {"__pycache__", "token_dumps", "specs", "scripts", ".git", ".venv"}
@@ -39,11 +48,20 @@ def _ignore(p: Path) -> bool:
 
 def _with_workspace_sources(image: modal.Image) -> modal.Image:
     """Attach local files last, after every dependency-building operation."""
-    return (
-        image.add_local_file(str(_HERE / "doom1.wad"), "/root/doom1.wad")
-        .add_local_python_source(
-            "torchwright", "torchwright_doom", "tests", "scripts", "modal_image"
+    image = image.add_local_file(str(_HERE / "doom1.wad"), "/root/doom1.wad")
+    # add_local_python_source mounts only Python. Newer Torchwright revisions
+    # ship a data schema beside the compiler and need it mounted explicitly;
+    # the pinned Doom release revision predates that schema.
+    truth_schema = (
+        _TORCHWRIGHT / "torchwright/compiler/torchwright_truth_v1.schema.json"
+    )
+    if truth_schema.is_file():
+        image = image.add_local_file(
+            str(truth_schema),
+            "/root/torchwright/compiler/torchwright_truth_v1.schema.json",
         )
+    return image.add_local_python_source(
+        "torchwright", "torchwright_doom", "tests", "scripts", "modal_image"
     )
 
 
@@ -57,14 +75,7 @@ def _with_assets(image: modal.Image) -> modal.Image:
 
 # Generic script image; production assets add numba but not ONNX Runtime.
 IMAGE = _with_workspace_sources(_BASE_IMAGE)
-ASSETS_IMAGE = _with_assets(
-    _BASE_IMAGE.uv_pip_install("numba").env(
-        {
-            "HF_ENABLE_PARALLEL_LOADING": "true",
-            "HF_PARALLEL_LOADING_WORKERS": "8",
-        }
-    )
-)
+ASSETS_IMAGE = _with_assets(STOCK_HF_IMAGE.uv_pip_install("numba"))
 
 # ONNX Runtime exists only in the diagnostic/full-test image. The production
 # compile/render image above has no ORT dependency or import path.

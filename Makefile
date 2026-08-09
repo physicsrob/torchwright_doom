@@ -1,5 +1,5 @@
-# THE production config. The only other maintained YAML is the low-resolution
-# validation config; experiments copy one to /tmp and override CONFIG=.
+# THE production config. The only other maintained YAML is the 80x50 consumer
+# config; experiments copy one to /tmp and override CONFIG=.
 #
 # Render-job defaults (pose and max new tokens) live in the
 # config's `run:` section — NOT here.  The Makefile passes a flag only when
@@ -30,6 +30,7 @@ _RENDER_COMPILE_ARGS = $(strip \
 	$(_RENDER_VERBOSE_COMPILE) \
 	$(_RENDER_DISABLE_CACHE) \
 	$(if $(SOLVER_SEED),--solver-seed $(SOLVER_SEED)) \
+	$(if $(SOLVER_WORKERS),--solver-workers $(SOLVER_WORKERS)) \
 	$(_RENDER_FORCE_RESOLVE) \
 )
 _RENDER_RUN_ARGS = $(strip \
@@ -52,7 +53,11 @@ _RENDER_MODAL_ARGS = $(strip \
 
 .PHONY: lint
 lint:
-	uv run black --check .
+	# The workspace currently resolves Python 3.12 while Black targets syntax
+	# through 3.14. Formatting itself works; only Black's post-format AST
+	# equivalence parse is unavailable on the older interpreter.
+	git ls-files --cached --others --exclude-standard -z -- '*.py' | \
+		xargs -0 uv run black --fast --check
 	uv run mypy .
 	uv run ruff check --select F .
 

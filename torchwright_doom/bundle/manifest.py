@@ -87,6 +87,7 @@ def candidate_manifest(
     eos_row: int,
     origin: tuple[float, float],
     solver_seed: int | None = None,
+    solver_workers: int | None = None,
 ) -> dict[str, Any]:
     files = file_manifest(bundle)
     prompt_bytes = prompt_path.read_bytes()
@@ -141,6 +142,7 @@ def candidate_manifest(
         "compile": {
             "n_layers": int(report.n_layers),
             "solver_seed": solver_seed,
+            "solver_workers": solver_workers,
         },
         "files": files,
         "validation": {"complete": False, "format_version": LAYOUT_VERSION},

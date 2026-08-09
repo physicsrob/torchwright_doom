@@ -347,8 +347,8 @@ the graph by `table_lookup_2d`.
 
 The production runtime executes the validated bundle's isolated bundle-root
 `infer.py`. That one script loads the stock model/tokenizer, accepts a
-text prompt, calls stock `model.generate()`, and writes canonical ids plus raw
-text.
+text prompt, calls the stock Transformers text-generation pipeline, and
+writes canonical ids plus raw text.
 Everything Doom-specific after generation consumes those artifacts
 (interpretation, `interpret/`).
 
@@ -358,15 +358,15 @@ Everything Doom-specific after generation consumes those artifacts
   path.
 
 - **KV cache** — Transformers' stock generation cache, wholly owned by
-  stock `Phi3ForCausalLM.generate()`. Doom has no second host-side inference
-  implementation.
+  stock `pipeline("text-generation", ...)`. Doom has no second host-side
+  inference implementation.
 
 - **drafter** — pydoom's reference state machine (`pydoom/drafter.py`)
   that predicts the exact token order of a render: the **test-only
   conformance oracle** the rollout is diffed against in the graph gates.
   It is never on the generation path — at inference the transformer alone
-  produces tokens (production is stock `generate()`; see *Portable
-  inference*). The name survives from a retired speculative-decode
+  produces tokens (production is the stock text-generation pipeline; see
+  *Portable inference*). The name survives from a retired speculative-decode
   runtime, where it once drafted tokens; today it only checks them.
 
 - **within-option color** — the lenient half of the pixel score in

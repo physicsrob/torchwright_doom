@@ -1,20 +1,22 @@
-# FAST preview config — 160x100 low-detail (the 3D view is computed at 80
-# columns; the host paints each column 2 screen pixels wide).  One of the
-# two committed, maintained configs (see CLAUDE.md, "Configurations");
-# the PRODUCTION default is configs/e1m1.yaml (320x200).  Run with:
+# CONSUMER config — 80x50 low-detail (the 3D view is computed at 40 columns;
+# the host paints each column 2 screen pixels wide). One of the two committed,
+# maintained configs (see CLAUDE.md, "Configurations"); the PRODUCTION default
+# is configs/e1m1.yaml (320x200). Run with:
 #
 #     make run CONFIG=configs/e1m1_lowres.yaml
 #
-# Half the columns of production (80 vs 160) -> fewer tokens -> faster
-# rollout, at coarser horizontal resolution.  Same low-detail code path as
-# the 320x200 production (just SCREEN_WIDTH=160); keep the shared model /
-# scene / run fields in lockstep with e1m1.yaml.  Only `scale` differs.
+# One quarter the columns of production (40 vs 160) gives a 7,007-token
+# reference rollout. The smaller physical Phi-3 contract is dense fp32 and
+# targets 64 GiB of total accelerator memory: one 64-GiB-class device or two
+# 32-GiB consumer GPUs. This is a separate checkpoint, not a resize of the
+# 320x200 weights. Scene assets and pose stay identical.
 wad: doom1.wad
-model: {d: 8192, d_head: 128, d_rot: 64, n_heads: 32, scale: 2, detail: low, hud: true, d_hidden: 16384, optimize: 3}
+model: {d: 4096, d_head: 128, d_rot: 64, n_heads: 16, scale: 4, detail: low, hud: true, d_hidden: 8192, max_seq_len: 16384, optimize: 3}
 region: {x1: 627.2, y1: -3760.0, x2: 1395.2, y2: -2800.0}
 textures:
   wall: [BROWN1, BROWN144, COMPUTE2, DOOR3, DOORSTOP, LITE3, STARTAN3, STEP6, SUPPORT2]
   flat: [CEIL3_5, FLAT14, FLAT5_5, FLOOR4_8, FLOOR7_1, F_SKY1]
 run:
-  max_new_tokens: 61440
+  # Exact reference rollout is 7,007 rows; 8,000 leaves 993 rows of headroom.
+  max_new_tokens: 8000
   pose: {x: 1056.0, y: -3616.0, angle: 64, viewz: 41.0}

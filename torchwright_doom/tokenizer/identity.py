@@ -7,7 +7,7 @@ import json
 from typing import Any
 
 from ..model.constants import COLUMN_COUNT, PIXEL_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH
-from ..model.embedding import MODEL_VOCAB_SIZE, TOKEN_VOCAB
+from ..model.embedding import MODEL_VOCAB_SIZE
 from ..model.tokens import FloatSlot, IntSlot
 from ..model.vocab import VOCAB_TYPES
 

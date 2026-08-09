@@ -5,7 +5,8 @@ Load-bearing guarantees:
 1. **Flag-over-config resolution is correct in both directions.**  A
    ``None`` flag must fall back to the config's ``run:`` value, and an
    explicit flag (e.g. ``--max-new-tokens``) must win over the config.
-2. **The two committed configs stay in lockstep** — only ``scale`` differs.
+2. **The two committed configs pin their publication contracts**, while
+   scene assets and pose stay in lockstep.
 3. **The repository-root WAD fallback survives the module's move to the
    package root** (``__file__``-relative depth), including from a working
    directory outside the repository.
@@ -94,18 +95,33 @@ def test_default_pose_world_reads_config_run_pose() -> None:
     assert default_pose_world(cfg) == (1.0, 2.0, 3, 4.0)
 
 
-def test_committed_configs_differ_only_in_scale() -> None:
-    from dataclasses import replace
-
+def test_committed_configs_pin_production_and_consumer_contracts() -> None:
     production = load_render_config(ROOT / "configs" / "e1m1.yaml")
-    lowres = load_render_config(ROOT / "configs" / "e1m1_lowres.yaml")
-    assert production.model.scale == 1
-    assert lowres.model.scale == 2
-    # Lockstep rule (CLAUDE.md "Configurations"): everything except scale is
-    # identical between the two committed configs.
+    consumer = load_render_config(ROOT / "configs" / "e1m1_lowres.yaml")
+    assert production.screen == (320, 200)
+    assert consumer.screen == (80, 50)
     assert (
-        replace(production, model=replace(production.model, scale=lowres.model.scale))
-        == lowres
+        consumer.model.d,
+        consumer.model.d_head,
+        consumer.model.d_rot,
+        consumer.model.n_heads,
+        consumer.model.d_hidden,
+        consumer.model.max_seq_len,
+        consumer.model.optimize,
+        consumer.run.max_new_tokens,
+    ) == (4096, 128, 64, 16, 8192, 16384, 3, 8000)
+    assert (
+        production.wad,
+        production.map,
+        production.region,
+        production.textures,
+        production.run.pose,
+    ) == (
+        consumer.wad,
+        consumer.map,
+        consumer.region,
+        consumer.textures,
+        consumer.run.pose,
     )
 
 

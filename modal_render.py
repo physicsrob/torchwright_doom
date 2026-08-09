@@ -31,7 +31,7 @@ from pathlib import Path
 
 import modal
 
-from modal_image import ASSETS_IMAGE, HF_BUNDLE_VOLUME
+from modal_image import ASSETS_IMAGE, HF_BUNDLE_VOLUME, STOCK_HF_IMAGE
 
 _HERE = Path(__file__).resolve().parent
 
@@ -143,6 +143,7 @@ def compile_remote(
     disable_cache: bool = False,
     solver_seed: int | None = None,
     force_resolve: bool = False,
+    solver_workers: int | None = None,
 ) -> dict:
     import os
     import sys
@@ -152,9 +153,18 @@ def compile_remote(
 
     config_path = _write_shipped_config(config_name, config_text)
 
-    # CP-SAT reads this at solve time (torchwright cpsat_scheduler); point it
-    # at the container's full CPU allocation instead of the 16-worker default.
-    os.environ["TW_CPSAT_WORKERS"] = str(_COMPILE_CPUS)
+    # CP-SAT reads this at solve time (torchwright cpsat_scheduler). Production
+    # normally uses the full allocation; release draws may explicitly retain
+    # a narrower worker portfolio, which is recorded in the bundle manifest.
+    effective_solver_workers = (
+        _COMPILE_CPUS if solver_workers is None else solver_workers
+    )
+    if not 1 <= effective_solver_workers <= _COMPILE_CPUS:
+        raise ValueError(
+            f"solver_workers must be between 1 and {_COMPILE_CPUS}, "
+            f"got {effective_solver_workers}"
+        )
+    os.environ["TW_CPSAT_WORKERS"] = str(effective_solver_workers)
     if disable_cache:
         # DISABLE_CACHE: neither durable cache is read or written.  Both the
         # HF bundle and the schedule entry go to a per-call scratch dir
@@ -187,6 +197,7 @@ def compile_remote(
         compile_payload=compile_payload,
         solver_seed=solver_seed,
         force_resolve=force_resolve,
+        solver_workers=effective_solver_workers,
     )
     if disable_cache:
         # Ship the sampled schedule back by VALUE so the local side can
@@ -207,6 +218,198 @@ def compile_remote(
         HF_BUNDLE_VOLUME.commit()
         SCHEDULE_VOLUME.commit()
     return result
+
+
+@app.function(
+    cpu=_COMPILE_CPUS,
+    memory=262144,
+    timeout=10800,
+)
+def consumer_schedule_draw_remote(
+    config_name: str,
+    config_text: str,
+    solver_seed: int,
+    solver_workers: int,
+    target_layers: int,
+) -> dict:
+    """Take one target-bounded consumer schedule draw and return it by value.
+
+    The lower bound is search-only: the selected assignment is serialized in
+    the clean compiler's ordinary cache format and later passes its unmodified
+    directed-replay validation. This lets a release select an exact narrative
+    depth without hand-editing or padding an assignment.
+    """
+    import importlib
+    import os
+    import sys
+    from pathlib import Path as _P
+
+    if "/root" not in sys.path:
+        sys.path.insert(0, "/root")
+    if not 1 <= solver_workers <= _COMPILE_CPUS:
+        raise ValueError(
+            f"solver_workers must be between 1 and {_COMPILE_CPUS}, "
+            f"got {solver_workers}"
+        )
+
+    os.environ.pop("TW_SCHEDULE_CACHE_DIR", None)
+    config_path = _write_shipped_config(config_name, config_text)
+
+    from scripts.consumer_profile import _profile
+
+    scheduler = importlib.import_module("torchwright.compiler.forward.cpsat_scheduler")
+    original_build = getattr(scheduler, "build_cpsat_model")
+
+    def build_with_target_floor(*args, **kwargs):
+        built = original_build(*args, **kwargs)
+        built.model.add(built.n_layers_var >= target_layers)
+        return built
+
+    setattr(scheduler, "build_cpsat_model", build_with_target_floor)
+    try:
+        report = _profile(
+            _P(config_path),
+            solver_seed=solver_seed,
+            solver_workers=solver_workers,
+            force_resolve=True,
+            export_schedule=True,
+        )
+    finally:
+        setattr(scheduler, "build_cpsat_model", original_build)
+    exported = report.pop("schedule_export")
+    schedule_payload = json.loads(exported["schedule_text"])
+    meta = schedule_payload["meta"]
+    constrained_result = {
+        "status_name": meta.get("status_name"),
+        "best_objective_bound": meta.get("best_objective_bound"),
+        "is_optimal": meta.get("is_optimal"),
+    }
+    meta["selection_constraint"] = {"minimum_n_layers": target_layers}
+    meta["constrained_solver_result"] = constrained_result
+    # The proof applies only to the explicitly bounded search. The assignment
+    # remains sound for ordinary replay, but must not claim global optimality
+    # in the unconstrained production cache.
+    meta["status_name"] = "FEASIBLE"
+    meta["best_objective_bound"] = -1
+    meta["is_optimal"] = False
+    meta["selected"]["is_optimal"] = False
+    meta["solver_attempt"]["status_name"] = "FEASIBLE"
+    meta["solver_attempt"]["best_objective_bound"] = -1
+    meta["solver_attempt"]["is_optimal"] = False
+    exported["schedule_text"] = json.dumps(schedule_payload)
+    return {
+        "filename": exported["filename"],
+        "schedule_text": exported["schedule_text"],
+        "report": report,
+    }
+
+
+@app.function(
+    cpu=1,
+    volumes={"/root/.cache/torchwright_doom/schedules": SCHEDULE_VOLUME},
+)
+def install_consumer_schedule_remote(filename: str, schedule_text: str) -> dict:
+    """Ratchet one selected schedule into the durable cache."""
+    import json
+    from pathlib import Path as _P
+
+    if _P(filename).name != filename or not filename.endswith(".json"):
+        raise ValueError(f"invalid schedule filename: {filename!r}")
+    candidate = json.loads(schedule_text)
+    candidate_layers = int(candidate["n_layers"])
+    cache_dir = _P("/root/.cache/torchwright_doom/schedules")
+    SCHEDULE_VOLUME.reload()
+    dest = cache_dir / filename
+    prior_layers = None
+    if dest.exists():
+        prior_layers = int(json.loads(dest.read_text(encoding="utf-8"))["n_layers"])
+        if prior_layers <= candidate_layers:
+            return {
+                "installed": False,
+                "n_layers": prior_layers,
+                "candidate_layers": candidate_layers,
+                "filename": filename,
+            }
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(schedule_text, encoding="utf-8")
+    SCHEDULE_VOLUME.commit()
+    return {
+        "installed": True,
+        "n_layers": candidate_layers,
+        "prior_layers": prior_layers,
+        "filename": filename,
+    }
+
+
+@app.local_entrypoint()
+def search_consumer_schedule(
+    config: str = "configs/e1m1_lowres.yaml",
+    draws: int = 4,
+    solver_seed: int = 3,
+    solver_workers: int = 16,
+    target_layers: int = 70,
+):
+    """Run independent solve-only draws, then durably install only the best."""
+    if draws < 1:
+        raise ValueError("draws must be positive")
+    config_path = Path(config)
+    config_text = config_path.read_text()
+    calls = [
+        consumer_schedule_draw_remote.spawn(
+            config_path.name,
+            config_text,
+            solver_seed,
+            solver_workers,
+            target_layers,
+        )
+        for _ in range(draws)
+    ]
+    results = [call.get() for call in calls]
+    for index, result in enumerate(results, 1):
+        n_layers = result["report"]["compile"]["n_layers"]
+        print(f"[schedule-search] draw {index}/{draws}: {n_layers} layers")
+    filenames = {result["filename"] for result in results}
+    if len(filenames) != 1:
+        raise RuntimeError(
+            f"schedule draws produced different fingerprints: {sorted(filenames)}"
+        )
+    for result in results:
+        schedule_layers = int(json.loads(result["schedule_text"])["n_layers"])
+        report_layers = int(result["report"]["compile"]["n_layers"])
+        if schedule_layers != report_layers:
+            raise RuntimeError(
+                "schedule draw report disagrees with its serialized assignment"
+            )
+    exact = [
+        result
+        for result in results
+        if int(result["report"]["compile"]["n_layers"]) == target_layers
+    ]
+    best = min(results, key=lambda row: row["report"]["compile"]["n_layers"])
+    best_layers = int(best["report"]["compile"]["n_layers"])
+    print(f"[schedule-search] best draw: {best_layers} layers")
+    if exact:
+        selected = exact[0]
+    elif best_layers > target_layers:
+        # A better-but-still-high incumbent helps the next search. Never
+        # install a below-target draw: the cache ratchet would then reject the
+        # narratively selected target as a regression.
+        selected = best
+    else:
+        raise RuntimeError(
+            f"best schedule used {best_layers} layers, below the exact "
+            f"{target_layers}-layer release target; durable cache unchanged"
+        )
+    installed = install_consumer_schedule_remote.remote(
+        selected["filename"], selected["schedule_text"]
+    )
+    print(f"[schedule-search] durable cache: {json.dumps(installed, sort_keys=True)}")
+    selected_layers = int(selected["report"]["compile"]["n_layers"])
+    if selected_layers != target_layers:
+        raise RuntimeError(
+            f"best schedule used {best_layers} layers; exact target is "
+            f"{target_layers}"
+        )
 
 
 def _write_shipped_config(config_name: str, config_text: str) -> str:
@@ -276,6 +479,8 @@ def _compile_on_modal(
     disable_cache: bool = False,
     solver_seed: int | None = None,
     force_resolve: bool = False,
+    spawn: bool = False,
+    solver_workers: int | None = None,
 ) -> str:
     """Compute the compile-cache key LOCALLY and compile on Modal on a miss.
 
@@ -318,6 +523,8 @@ def _compile_on_modal(
     compile_payload = canonical_compile_payload(render_config, wad_path)
     cache_subdir = cache_key_from_payload(compile_payload)
 
+    if disable_cache and spawn:
+        raise ValueError("spawned compile is incompatible with --disable-cache")
     if disable_cache:
         print(
             f"[local] [nocache] DISABLE_CACHE — cache probe skipped; compiling "
@@ -334,6 +541,7 @@ def _compile_on_modal(
             True,
             solver_seed,
             force_resolve,
+            solver_workers,
         )
         _save_nocache_schedules(result)
     elif not force_resolve and _bundle_cache_probe_remote.remote(
@@ -346,7 +554,7 @@ def _compile_on_modal(
             f"({_COMPILE_CPUS} CPUs) -> HF_BUNDLE_VOLUME:/{cache_subdir}",
             flush=True,
         )
-        compile_remote.remote(
+        compile_args = (
             config_path.name,
             config_text,
             cache_subdir,
@@ -355,7 +563,17 @@ def _compile_on_modal(
             False,
             solver_seed,
             force_resolve,
+            solver_workers,
         )
+        if spawn:
+            call = compile_remote.spawn(*compile_args)
+            print(
+                f"[local] spawned compile function call {call.object_id} "
+                f"for HF_BUNDLE_VOLUME:/{cache_subdir}",
+                flush=True,
+            )
+        else:
+            compile_remote.remote(*compile_args)
     return cache_subdir
 
 
@@ -366,6 +584,8 @@ def compile_only(
     disable_cache: bool = False,
     solver_seed: int | None = None,
     force_resolve: bool = False,
+    spawn: bool = False,
+    solver_workers: int | None = None,
 ):
     """``make compile`` — compile a config to the Modal cache volume, no render.
 
@@ -374,6 +594,8 @@ def compile_only(
     and a later ``make run`` is a cache hit. The complete Phi-3 bundle lives in
     HF_BUNDLE_VOLUME (durable), exactly where ``render_remote`` reads it.
 
+    ``--spawn`` submits the compile without tying its lifetime to the local
+    Modal client; use it with ``modal run --detach`` and inspect app logs.
     ``--disable-cache`` (``DISABLE_CACHE=1 make compile``) runs the same
     production compile but touches neither durable cache: no HIT probe, the
     bundle dies with the container, and the sampled schedule is mirrored to
@@ -386,11 +608,18 @@ def compile_only(
         disable_cache,
         solver_seed,
         force_resolve,
+        spawn,
+        solver_workers,
     )
     if disable_cache:
         print(
             "[local] [nocache] compile complete — HF_BUNDLE_VOLUME/SCHEDULE_VOLUME "
             "untouched (artifact discarded with the container)",
+            flush=True,
+        )
+    elif spawn:
+        print(
+            f"[local] compile submitted -> HF_BUNDLE_VOLUME:/{cache_subdir}",
             flush=True,
         )
     else:
@@ -413,6 +642,7 @@ def publish_private_remote(
     repo_id: str,
     expected_layers: int,
     expected_solver_seed: int,
+    expected_solver_workers: int,
 ) -> dict:
     """Validate one cached release bundle and upload it to a private Hub repo."""
     import sys
@@ -432,6 +662,7 @@ def publish_private_remote(
     manifest = validate_bundle_manifest(bundle, expected_payload=compile_payload)
     actual_layers = int(manifest["compile"]["n_layers"])
     actual_seed = manifest["compile"].get("solver_seed")
+    actual_workers = manifest["compile"].get("solver_workers")
     if actual_layers != expected_layers:
         raise RuntimeError(
             f"refusing Hub upload: expected {expected_layers} layers, "
@@ -441,6 +672,11 @@ def publish_private_remote(
         raise RuntimeError(
             f"refusing Hub upload: expected solver seed {expected_solver_seed}, "
             f"bundle records {actual_seed!r}"
+        )
+    if actual_workers != expected_solver_workers:
+        raise RuntimeError(
+            f"refusing Hub upload: expected {expected_solver_workers} solver workers, "
+            f"bundle records {actual_workers!r}"
         )
 
     api = HfApi()
@@ -464,6 +700,14 @@ def publish_private_remote(
     missing = sorted(expected_files - remote_files)
     if missing:
         raise RuntimeError(f"Hub upload is missing files: {missing}")
+    unexpected = sorted(remote_files - expected_files - {".gitattributes"})
+    if unexpected:
+        raise RuntimeError(f"Hub upload has unexpected files: {unexpected}")
+    wad_files = sorted(name for name in remote_files if name.lower().endswith(".wad"))
+    if wad_files:
+        raise RuntimeError(
+            f"refusing Hub publication containing WAD files: {wad_files}"
+        )
     info = api.model_info(repo_id)
     if not info.private:
         raise RuntimeError(f"Hub repo became public during upload: {repo_id}")
@@ -475,6 +719,7 @@ def publish_private_remote(
         "revision": commit.oid,
         "n_layers": actual_layers,
         "solver_seed": actual_seed,
+        "solver_workers": actual_workers,
         "n_files": len(remote_files),
     }
 
@@ -485,6 +730,7 @@ def publish_private(
     config: str = "configs/e1m1.yaml",
     solver_seed: int = 0,
     expected_layers: int = 38,
+    solver_workers: int = _COMPILE_CPUS,
     verbose_compile: bool = False,
     force_resolve: bool = False,
 ):
@@ -501,6 +747,8 @@ def publish_private(
         False,
         solver_seed,
         force_resolve,
+        False,
+        solver_workers,
     )
     render_config = load_render_config(config_path)
     wad_path = resolve_wad_path(render_config, base_dir=config_path.parent)
@@ -511,8 +759,119 @@ def publish_private(
         repo_id,
         expected_layers,
         solver_seed,
+        solver_workers,
     )
     print("PRIVATE_HUB_PUBLICATION " + json.dumps(result, sort_keys=True), flush=True)
+
+
+@app.function(
+    gpu=_RENDER_GPU,
+    cpu=8,
+    memory=65536,
+    timeout=5400,
+    image=STOCK_HF_IMAGE,
+    secrets=[modal.Secret.from_name("huggingface")],
+)
+def smoke_hub_remote(
+    repo_id: str,
+    revision: str,
+    expected_layers: int,
+    max_new_tokens: int = 1,
+) -> dict:
+    """Download a Hub revision into a clean container and run its infer.py."""
+    import hashlib
+    import importlib.util
+    import subprocess
+    import sys
+    import tempfile
+
+    from huggingface_hub import HfApi, snapshot_download
+
+    leaked = [
+        name
+        for name in ("torchwright", "torchwright_doom")
+        if importlib.util.find_spec(name) is not None
+    ]
+    if leaked:
+        raise RuntimeError(f"Hub smoke image contains workspace packages: {leaked}")
+
+    scratch = Path(tempfile.mkdtemp(prefix="hub-smoke-", dir="/tmp"))
+    snapshot = Path(
+        snapshot_download(
+            repo_id=repo_id,
+            revision=revision,
+            local_dir=scratch / "bundle",
+        )
+    )
+    resolved_revision = HfApi().model_info(repo_id, revision=revision).sha
+    manifest_path = snapshot / "doom_bundle_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not manifest.get("validation", {}).get("complete"):
+        raise RuntimeError("Hub smoke downloaded an incomplete Doom bundle")
+    for name, expected in manifest["files"].items():
+        path = snapshot / name
+        if not path.is_file() or path.stat().st_size != int(expected["size"]):
+            raise RuntimeError(f"Hub smoke file size mismatch: {name}")
+        expected_sha = expected.get("sha256")
+        if expected_sha:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            if digest != expected_sha:
+                raise RuntimeError(f"Hub smoke file digest mismatch: {name}")
+    actual_layers = int(manifest["compile"]["n_layers"])
+    if actual_layers != expected_layers:
+        raise RuntimeError(
+            f"Hub smoke expected {expected_layers} layers, found {actual_layers}"
+        )
+    output = scratch / "output"
+    subprocess.run(
+        [
+            sys.executable,
+            str(snapshot / "infer.py"),
+            "--model",
+            str(snapshot),
+            "--prompt",
+            str(snapshot / "examples/e1m1_prompt.txt"),
+            "--output",
+            str(output),
+            "--device",
+            "cuda",
+            "--max-new-tokens",
+            str(max_new_tokens),
+        ],
+        check=True,
+    )
+    payload = json.loads((output / "output.ids.json").read_text(encoding="utf-8"))
+    return {
+        "repo_id": repo_id,
+        "requested_revision": revision,
+        "resolved_revision": resolved_revision,
+        "bundle_identity": manifest["bundle_identity"],
+        "n_layers": actual_layers,
+        "solver_seed": manifest["compile"].get("solver_seed"),
+        "solver_workers": manifest["compile"].get("solver_workers"),
+        "generated_rows": len(payload["emitted_row_ids"]),
+        "termination_reason": payload["generation"]["termination_reason"],
+        "timing_seconds": payload["timing_seconds"],
+        "cuda_memory": payload["cuda_memory"],
+        "workspace_imports_absent": True,
+    }
+
+
+@app.local_entrypoint()
+def smoke_hub(
+    repo_id: str,
+    revision: str = "main",
+    expected_layers: int = 38,
+    max_new_tokens: int = 1,
+):
+    """Clean-room load and short pipeline generation for one Hub revision."""
+    result = smoke_hub_remote.remote(
+        repo_id,
+        revision,
+        expected_layers,
+        max_new_tokens,
+    )
+    print("HUB_PIPELINE_SMOKE " + json.dumps(result, sort_keys=True), flush=True)
 
 
 @app.function(

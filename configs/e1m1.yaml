@@ -5,7 +5,8 @@
 #
 # TWO configs are committed and maintained (see CLAUDE.md,
 # "Configurations"): this PRODUCTION one and configs/e1m1_lowres.yaml (a
-# faster 160x100 low-detail preview).  Everything else is a /tmp variant.
+# practical 80x50 low-detail consumer checkpoint). Everything else is a /tmp
+# variant.
 #
 # State: scale 1 = 320x200 low-detail, d=8192 / decoupled 16k MLP,
 # with the production CP-SAT optimization budget (`optimize: 3`).

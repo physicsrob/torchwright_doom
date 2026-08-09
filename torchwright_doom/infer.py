@@ -31,7 +31,7 @@ os.environ.setdefault("HF_PARALLEL_LOADING_WORKERS", "8")
 
 import torch
 import transformers
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import TextGenerationPipeline, pipeline
 
 _PROGRESS_INTERVAL_SECONDS = 15.0
 
@@ -42,6 +42,13 @@ def _canonical_json(value) -> bytes:
 
 def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _cuda_devices(model) -> list[torch.device]:
+    return sorted(
+        {parameter.device for parameter in model.parameters() if parameter.is_cuda},
+        key=str,
+    )
 
 
 class _ProgressStreamer:
@@ -118,23 +125,43 @@ def main(argv: list[str] | None = None) -> int:
     bundled_prompt = prompt_sha256 == manifest["prompt"]["sha256"]
 
     load_t0 = time.monotonic()
-    tokenizer = AutoTokenizer.from_pretrained(model_dir)
-    load_kwargs = {}
+    model_kwargs = {
+        "attn_implementation": "eager",
+        # Read each shard's bytes eagerly: deferring them to mmap page faults
+        # stalls badly on network filesystems, and eager reads are harmless on
+        # local disks.
+        "disable_mmap": True,
+    }
+    generate: TextGenerationPipeline
     if args.device != "cpu":
         # Accelerate builds the skeleton on meta and dispatches each shard
         # directly to the target device.  This avoids a second full-model
         # ``model.to(cuda)`` pass through CPU-backed mmap pages.
-        load_kwargs["device_map"] = args.device
-    model = AutoModelForCausalLM.from_pretrained(
-        model_dir,
-        attn_implementation="eager",
-        dtype=torch.float32,
-        # Read each shard's bytes eagerly: deferring them to mmap page
-        # faults stalls badly on network filesystems, and eager reads are
-        # harmless on local disks.
-        disable_mmap=True,
-        **load_kwargs,
-    ).eval()
+        generate = pipeline(
+            "text-generation",
+            model=str(model_dir),
+            dtype=torch.float32,
+            model_kwargs=model_kwargs,
+            device_map=args.device,
+        )
+    else:
+        generate = pipeline(
+            "text-generation",
+            model=str(model_dir),
+            dtype=torch.float32,
+            model_kwargs=model_kwargs,
+        )
+    tokenizer = generate.tokenizer
+    if tokenizer is None:
+        raise RuntimeError("text-generation pipeline loaded without a tokenizer")
+    model = generate.model
+    model.eval()
+    cuda_devices = _cuda_devices(model)
+    for cuda_device in cuda_devices:
+        # Reset after loading: the current allocation still includes all
+        # weights, while the peak will additionally capture generation cache
+        # and runtime workspace. This is the consumer-fit measurement.
+        torch.cuda.reset_peak_memory_stats(cuda_device)
     attention_implementation = getattr(model.config, "_attn_implementation", None)
     if attention_implementation != "eager":
         # Eager is the implementation the published render was validated
@@ -154,14 +181,14 @@ def main(argv: list[str] | None = None) -> int:
         )
     load_seconds = time.monotonic() - load_t0
 
-    inputs = tokenizer(
-        prompt_bytes.decode("utf-8"),
+    prompt_text = prompt_bytes.decode("utf-8")
+    encoded_prompt = tokenizer(
+        prompt_text,
         return_tensors="pt",
         add_special_tokens=False,
     )
     input_device = next(model.parameters()).device
-    inputs = inputs.to(input_device)
-    prompt_ids = [int(row) for row in inputs.input_ids[0].tolist()]
+    prompt_ids = [int(row) for row in encoded_prompt.input_ids[0].tolist()]
     prompt_ids_sha256 = _sha(_canonical_json(prompt_ids))
     # Only the bundled prompt has a manifest row-id expectation; a custom
     # prompt is permitted, never verified, and recorded in the payload as
@@ -185,8 +212,10 @@ def main(argv: list[str] | None = None) -> int:
     progress = _ProgressStreamer(len(prompt_ids), max_new)
     print(f"[infer] generation started; max_new_tokens={max_new}", flush=True)
     with torch.inference_mode():
-        sequences = model.generate(
-            **inputs,
+        records = generate(
+            prompt_text,
+            add_special_tokens=False,
+            return_tensors=True,
             do_sample=False,
             use_cache=True,
             max_new_tokens=max_new,
@@ -195,7 +224,18 @@ def main(argv: list[str] | None = None) -> int:
             streamer=progress,
         )
     generate_seconds = time.monotonic() - generate_t0
-    generated = [int(row) for row in sequences[0, inputs.input_ids.shape[1] :].tolist()]
+    sequence = records[0]["generated_token_ids"]
+    generated = [int(row) for row in sequence[len(prompt_ids) :]]
+    for cuda_device in cuda_devices:
+        torch.cuda.synchronize(cuda_device)
+    cuda_memory = [
+        {
+            "device": str(cuda_device),
+            "peak_allocated_bytes": torch.cuda.max_memory_allocated(cuda_device),
+            "peak_reserved_bytes": torch.cuda.max_memory_reserved(cuda_device),
+        }
+        for cuda_device in cuda_devices
+    ]
     prefill_seconds = progress.prefill_seconds or generate_seconds
     decode_seconds = progress.decode_seconds
     raw_text = tokenizer.decode(
@@ -223,7 +263,7 @@ def main(argv: list[str] | None = None) -> int:
         "emitted_row_ids": generated,
         "emitted_row_ids_sha256": emitted_ids_sha256,
         "generation": {
-            "mode": "transformers_generate",
+            "mode": "transformers_pipeline",
             "max_new_tokens": max_new,
             "termination_reason": "terminal" if stopped else "cap",
         },
@@ -234,6 +274,7 @@ def main(argv: list[str] | None = None) -> int:
             "generate": generate_seconds,
         },
         "attention_implementation": attention_implementation,
+        "cuda_memory": cuda_memory,
         "transformers_version": transformers.__version__,
     }
     (args.output / "output.ids.json").write_text(
@@ -245,6 +286,15 @@ def main(argv: list[str] | None = None) -> int:
         f"stopped={payload['generation']['termination_reason']}",
         flush=True,
     )
+    for memory in cuda_memory:
+        peak_allocated = int(memory["peak_allocated_bytes"])
+        peak_reserved = int(memory["peak_reserved_bytes"])
+        print(
+            f"[infer] {memory['device']} peak allocated="
+            f"{peak_allocated / 1024**3:.2f} GiB "
+            f"reserved={peak_reserved / 1024**3:.2f} GiB",
+            flush=True,
+        )
     return 0
 
 

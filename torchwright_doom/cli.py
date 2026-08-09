@@ -27,6 +27,7 @@ def main(argv: list[str] | None = None) -> int:
     pc.add_argument("--config", required=True, dest="config_path")
     pc.add_argument("--verbose-compile", action="store_true", dest="verbose_compile")
     pc.add_argument("--solver-seed", type=int, dest="solver_seed")
+    pc.add_argument("--solver-workers", type=int, dest="solver_workers")
     pc.add_argument("--force-resolve", action="store_true", dest="force_resolve")
 
     pod = sub.add_parser(

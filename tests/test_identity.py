@@ -9,13 +9,14 @@ Load-bearing guarantees:
    both committed configs (with the git identity pinned) are pinned to the
    values the pre-move ``inference/config.py`` produced.
 3. **Both git repository roots resolve from a foreign working directory** —
-   ``_git_sha`` addresses the repos by ``__file__``-derived absolute paths.
+   Doom resolves from ``__file__`` and Torchwright from its active import.
 """
 
 from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -42,13 +43,13 @@ _RUN_VARIANT = RunConfig(
 )
 
 # Computed with _git_sha pinned to "pinned-test-sha" — the gate: cache keys
-# for unchanged config content do not change because code moved.  Re-pinned 2026-07-14 when the committed configs
-# gained model.n_heads: 32 — a deliberate content change that must move
-# the key exactly once.
+# for unchanged config content do not change because code moved. Re-pinned the
+# low-res key 2026-08-08 when that config became the distinct 80x50 consumer
+# contract; the production key did not move.
 _PINNED_KEYS = {
     "e1m1.yaml": "bfc3cfa363e4d069785acb6139e6c16c52cc9b44dfc4b0317c2c5c1a0e8b1b1a",
     "e1m1_lowres.yaml": (
-        "0b080be38300f32be3828f25829cb6af74cc8e5be1cdc5d784b8a179e07e72e5"
+        "8117f2c3cf40fcbd026cb935c55a67735efeac095ecd8d528720352ae21e0e07"
     ),
 }
 
@@ -112,9 +113,7 @@ def test_canonical_cache_keys_survived_the_move_to_root(monkeypatch) -> None:
 
 
 def test_git_roots_resolve_from_outside_the_repo(tmp_path: Path, monkeypatch) -> None:
-    """_git_sha addresses the Doom repo (parents[1] of identity.py) and the
-    umbrella's torchwright checkout (parents[2]) by absolute path, so a
-    foreign working directory must not degrade the payload to "unknown"."""
+    """Absolute Doom/import-resolved Torchwright roots survive cwd changes."""
     if identity_mod._git_sha(ROOT) == "unknown":
         pytest.skip("no .git available here (e.g. a Modal test container)")
     monkeypatch.chdir(tmp_path)
@@ -130,6 +129,30 @@ def test_git_roots_resolve_from_outside_the_repo(tmp_path: Path, monkeypatch) ->
         ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True
     ).strip()
     assert git_shas["torchwright_doom"].startswith(head)
+
+
+def test_torchwright_identity_follows_the_active_import(
+    tmp_path: Path, monkeypatch
+) -> None:
+    package = tmp_path / "release-compiler" / "torchwright" / "__init__.py"
+    package.parent.mkdir(parents=True)
+    package.write_text("")
+    roots: list[Path] = []
+
+    monkeypatch.setattr(
+        identity_mod.importlib.util,
+        "find_spec",
+        lambda name: SimpleNamespace(origin=str(package)),
+    )
+
+    def record_git_root(root: Path) -> str:
+        roots.append(Path(root))
+        return "pinned-test-sha"
+
+    monkeypatch.setattr(identity_mod, "_git_sha", record_git_root)
+    config = RenderConfig()
+    canonical_compile_payload(config, resolve_wad_path(config))
+    assert roots[1] == tmp_path / "release-compiler"
 
 
 def test_handed_payload_is_revalidated_against_config_and_wad(monkeypatch) -> None:

@@ -14,8 +14,8 @@ needs ``SCREEN_WIDTH`` for its resolution-scaled ranges (R5 wall scale, R7
 drawseg width). Keep this module dependency-free.
 
 Porting scale: the production config renders at 320×200
-(``configs/e1m1.yaml``, ``model.scale: 1``); the 160×100 preview is
-``configs/e1m1_lowres.yaml`` (``model.scale: 2``). ``apply_screen_env``
+(``configs/e1m1.yaml``, ``model.scale: 1``); the 80×50 consumer checkpoint is
+``configs/e1m1_lowres.yaml`` (``model.scale: 4``). ``apply_screen_env``
 (root ``config.py``) exports the screen dims via the env vars read
 below before graph modules import. The 60×50 defaults here are the
 bare-import fallback — the reference renderer (pydoom) fixture scale,

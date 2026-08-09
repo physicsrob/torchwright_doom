@@ -119,12 +119,14 @@ There are exactly TWO committed render configs, both maintained:
 
 - `configs/e1m1.yaml` — PRODUCTION, full-resolution 320x200 low-detail.
   `make run`, the Makefile default, and every doc reference point here.
-- `configs/e1m1_lowres.yaml` — a faster 160x100 low-detail preview (80
-  rendered columns), run with `make run CONFIG=configs/e1m1_lowres.yaml`.
+- `configs/e1m1_lowres.yaml` — the practical consumer checkpoint: 80x50
+  low-detail (40 rendered columns), a smaller dense-fp32 Phi-3 contract sized
+  for 64 GiB total accelerator memory (one 64-GiB-class device or two 32-GiB
+  consumer GPUs), run with `make run CONFIG=configs/e1m1_lowres.yaml`.
 
-When parameters change, **update these files in place** and keep their
-shared model / scene / run fields in lockstep — only `scale` differs.
-Do NOT add a third committed config.
+When parameters change, **update these files in place**. Keep their WAD, map,
+region, texture set, and pose in lockstep; model geometry, context, generation
+cap, and scale intentionally differ. Do NOT add a third committed config.
 
 Extra committed configs invite wrong-config runs and stale variants.
 The rule: an experiment or gate that needs a variant **copies a config
@@ -141,7 +143,8 @@ or the stale copy causes wrong-config runs.
 The complete direct-compiled bundle is rendered by executing its exact
 bundle-root `infer.py` (a byte-identical copy of `torchwright_doom/infer.py`;
 executed as a subprocess, never imported): text prompt -> stock tokenizer ->
-stock `Phi3ForCausalLM.generate()` -> `output.ids.json` plus raw `output.txt`.
+stock Transformers `pipeline("text-generation", ...)` -> `output.ids.json`
+plus raw `output.txt`.
 The script imports only standard Python, PyTorch, and Transformers. Production
 has no second model loader or generation loop; it resumes only after those two
 artifacts exist, then decodes/compares them as explicit post-processing
@@ -179,7 +182,7 @@ coverage / within-option color — the accepted-color-set metric, see
 `GLOSSARY.md` — and writes the diff PNG), ~42 min of decode on Modal
 (measured; see `FACTS.md`), too heavy for per-commit pytest. Run manually
 at both `configs/e1m1.yaml` (320×200) and `configs/e1m1_lowres.yaml`
-(160×100).
+(80×50).
 
 **Known ceiling.** The unbounded cache is why ~42-min single frames fit
 a big GPU today; a much larger frame or a multi-frame / video rollout

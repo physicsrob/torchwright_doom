@@ -9,9 +9,9 @@ dispatchers (``cli.py``, the Modal entrypoints) import it. Its phases:
     -> validate output.ids.json / output.txt
     -> interpret: decode / compare / write optional artifacts
 
-It never loads a model or tokenizer through Transformers, never calls
-``.generate()``, never compiles, never imports diagnostics, and never
-modifies the canonical inference artifacts after the subprocess returns.
+It never loads a model or tokenizer through Transformers, never constructs or
+calls a Transformers pipeline, never compiles, never imports diagnostics, and
+never modifies the canonical inference artifacts after the subprocess returns.
 Prompt text, ``output.ids.json``, and ``output.txt`` are the retained
 artifacts; everything else is reproducible downstream.
 
@@ -215,7 +215,7 @@ def run_config(
         pose=pose_payload,
         prefill_rows=prefill_ids,
         emitted_rows=emitted_rows,
-        mode="transformers_generate",
+        mode="transformers_pipeline",
         label=f"{config.map.lower()}__{config.screen[0]}x{config.screen[1]}",
         config={
             "path": str(config_path),
@@ -238,9 +238,10 @@ def run_config(
         "report": asdict(report) if report is not None else None,
         "report_text": report.format_short() if report is not None else None,
         "inference": {
-            "mode": "transformers_generate",
+            "mode": "transformers_pipeline",
             "n_tokens": len(emitted_rows),
             "timing_seconds": inference.get("timing_seconds"),
+            "cuda_memory": inference.get("cuda_memory"),
             "stopped": termination,
         },
         "cache_dir": str(cache_dir),

@@ -9,6 +9,11 @@ Usage (via Makefile):
 Direct:
     uv run modal run modal_run.py --module scripts.compile_report
 
+For a solve that must outlive the local client, spawn the remote call and run
+the Modal app detached. Its stdout remains available through ``modal app logs``::
+
+    uv run modal run --detach modal_run.py --spawn --module scripts.compile_report
+
 The GPU container mounts the compile cache volume (read-mostly) plus
 ``configs/`` and the WAD, so the artifact-debugging scripts run against the real
 diagnostic ONNX — the cache key must be computed LOCALLY (it embeds git SHAs the
@@ -154,6 +159,7 @@ def main(
     script: str = "",
     args: str = "",
     cpu_only: bool = False,
+    spawn: bool = False,
 ):
     if not module and not script:
         print(
@@ -165,4 +171,13 @@ def main(
         print("error: pass --module OR --script, not both", file=sys.stderr)
         sys.exit(2)
     fn = run_cpu if cpu_only else run_gpu
+    if spawn:
+        call = fn.spawn(
+            module=module,
+            script=script,
+            args=args,
+            env=_forwarded_env(),
+        )
+        print(f"[modal-run] spawned function call {call.object_id}")
+        return
     sys.exit(fn.remote(module=module, script=script, args=args, env=_forwarded_env()))

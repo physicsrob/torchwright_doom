@@ -12,13 +12,15 @@ import sys
 from functools import lru_cache
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 import torch
 
 from torchwright_doom.model.assets.asset_banks import PLAYPAL
 from torchwright_doom.model.asset_config import DEFAULT_ASSET_CONFIG
-from torchwright_doom.bundle.layout import write_bundle_layout
+from torchwright_doom.bundle.layout import write_bundle_layout, write_model_card
+from torchwright_doom.config import load_render_config
 from torchwright_doom.interpret.decode import decode_rows_to_pixels
 from torchwright_doom.tokenizer.rows import row_index
 from torchwright_doom.portable.txt_to_png import _pixels, _write_png
@@ -95,6 +97,20 @@ def test_bundle_layout_is_byte_identical_to_sources(tmp_path: Path) -> None:
     assert not (tmp_path / "examples" / "infer.py").exists()
 
 
+def test_consumer_model_card_states_pipeline_and_memory_contract(
+    tmp_path: Path,
+) -> None:
+    config = load_render_config(ROOT / "configs/e1m1_lowres.yaml")
+    (tmp_path / "model-00001.safetensors").write_bytes(b"weights")
+
+    write_model_card(tmp_path, config, n_layers=70, prompt_rows=3614)
+
+    card = (tmp_path / "README.md").read_text()
+    assert 'pipeline("text-generation", model=".", device_map="auto")' in card
+    assert "12.41 GiB" in card
+    assert "two 32-GiB consumer GPUs" in card
+
+
 def test_portable_infer_accepts_text_and_writes_ids_plus_raw_text(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -158,27 +174,33 @@ def test_portable_infer_accepts_text_and_writes_ids_plus_raw_text(
         def eval(self):
             return self
 
-        def generate(self, **kwargs):
+    class Generator:
+        tokenizer = Tokenizer()
+
+        def __init__(self):
+            self.model = Model()
+
+        def __call__(self, text, **kwargs):
+            assert text.strip() == "foo bar"
             assert kwargs["do_sample"] is False
             assert kwargs["use_cache"] is True
             assert kwargs["max_new_tokens"] == 5
+            assert kwargs["add_special_tokens"] is False
+            assert kwargs["return_tensors"] is True
             streamer = kwargs["streamer"]
-            streamer.put(kwargs["input_ids"])
+            streamer.put(torch.tensor([[1, 2]]))
             streamer.put(torch.tensor([3]))
             streamer.put(torch.tensor([4]))
             streamer.end()
-            return torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
+            return [{"generated_token_ids": [1, 2, 3, 4]}]
 
-    captured = {}
+    captured: dict[str, Any] = {}
 
-    def fake_model_load(path, **kwargs):
-        captured.update(kwargs)
-        return Model()
+    def fake_pipeline(task, **kwargs):
+        captured.update(task=task, **kwargs)
+        return Generator()
 
-    monkeypatch.setattr(
-        infer.AutoTokenizer, "from_pretrained", lambda path: Tokenizer()
-    )
-    monkeypatch.setattr(infer.AutoModelForCausalLM, "from_pretrained", fake_model_load)
+    monkeypatch.setattr(infer, "pipeline", fake_pipeline)
     assert (
         infer.main(
             [
@@ -194,15 +216,19 @@ def test_portable_infer_accepts_text_and_writes_ids_plus_raw_text(
         )
         == 0
     )
-    assert captured["disable_mmap"] is True
+    assert captured["task"] == "text-generation"
+    assert captured["model"] == str(model_dir.resolve())
+    assert captured["model_kwargs"]["attn_implementation"] == "eager"
+    assert captured["model_kwargs"]["disable_mmap"] is True
     assert captured["device_map"] == "cuda"
     payload = json.loads((output / "output.ids.json").read_text())
     assert payload["prompt"]["row_ids"] == [1, 2]
     assert payload["prompt"]["matches_bundled_prompt"] is False
     assert payload["attention_implementation"] == "eager"
+    assert payload["cuda_memory"] == []
     assert payload["emitted_row_ids"] == [3, 4]
     assert payload["generation"] == {
-        "mode": "transformers_generate",
+        "mode": "transformers_pipeline",
         "max_new_tokens": 5,
         "termination_reason": "terminal",
     }
@@ -229,21 +255,25 @@ def _tiny_phi3_bundle(model_dir: Path, *, original_max: int = 16) -> list[int]:
         clean_up_tokenization_spaces=False,
     )
     tokenizer.save_pretrained(model_dir)
-    model = Phi3ForCausalLM(
-        Phi3Config(
-            vocab_size=len(vocab),
-            hidden_size=8,
-            intermediate_size=16,
-            num_hidden_layers=1,
-            num_attention_heads=2,
-            num_key_value_heads=2,
-            max_position_embeddings=16,
-            original_max_position_embeddings=original_max,
-            bos_token_id=0,
-            eos_token_id=2,
-            pad_token_id=2,
-        )
+    config = Phi3Config(
+        vocab_size=len(vocab),
+        hidden_size=8,
+        intermediate_size=16,
+        num_hidden_layers=1,
+        num_attention_heads=2,
+        num_key_value_heads=2,
+        max_position_embeddings=16,
+        original_max_position_embeddings=original_max,
+        bos_token_id=0,
+        eos_token_id=2,
+        pad_token_id=2,
     )
+    setattr(config, "attn_implementation", "eager")
+    config.task_specific_params = {
+        "text-generation": {"do_sample": False, "max_new_tokens": 2}
+    }
+    model = Phi3ForCausalLM(config)
+    model.generation_config.max_new_tokens = 2
     model.save_pretrained(model_dir)
 
     write_bundle_layout(model_dir, prompt_text="begin scene")
@@ -264,6 +294,25 @@ def _tiny_phi3_bundle(model_dir: Path, *, original_max: int = 16) -> list[int]:
     }
     (model_dir / "doom_bundle_manifest.json").write_text(json.dumps(manifest))
     return prompt_rows
+
+
+def test_stock_text_generation_pipeline_runs_bundle_defaults(tmp_path: Path) -> None:
+    """The ordinary user-facing pipeline call needs no custom code or Doom
+    loader options, and inherits eager attention plus the bundle's frame cap."""
+    from transformers import pipeline
+
+    model_dir = tmp_path / "tiny-pipeline-bundle"
+    _tiny_phi3_bundle(model_dir)
+
+    generate = pipeline("text-generation", model=str(model_dir))
+    result = generate(
+        (model_dir / "examples/e1m1_prompt.txt").read_text(),
+        return_full_text=False,
+    )
+
+    assert generate.model.config._attn_implementation == "eager"
+    assert generate.generation_config.max_new_tokens == 2
+    assert isinstance(result[0]["generated_text"], str)
 
 
 def test_copied_bundle_root_infer_resolves_its_own_defaults(tmp_path: Path) -> None:
