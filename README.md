@@ -3,6 +3,10 @@
 DOOM rendering and game graph compilation, built on
 [torchwright](https://github.com/physicsrob/torchwright). 
 
+**Read the full article: [Doom, compiled into a transformer](https://ood.dev/posts/doom)**
+
+![Doom, ported to run inside an LLM: level data and player state go in; pixel-level drawing commands and a rendered E1M1 frame come out.](docs/assets/doom-demo.gif)
+
 ## What this is
 
 This package builds a **computation graph** that the `torchwright` compiler
